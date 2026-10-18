@@ -25,7 +25,7 @@
   exact Philips TV; no playback controls/media/port scanning. Companion parser
   and output/URL-boundary tests: `tests/discovery.test.mjs`.
 - `docs/agent/{philips-tv,mobile-target}.md`: actual TV evidence and final
-  phone-powered-off retrieval requirement; no mobile app implemented yet.
+  phone-powered-off retrieval requirement; physical mobile acceptance pending.
 - `docs/agent/{luma-receiver-options,receiver-apps}.md`: manufacturer DLNA claims,
   existing Android receiver apps, Kodi/VLC control interfaces and proposed tests;
   Kodi public/actual HLS and Portuguese subtitle acceptance is in `tests/manual-kodi.md`.
@@ -38,5 +38,28 @@
   setup/discovery, Kodi 21.2 public MP4 and frameXTV HLS/subtitle evidence, including
   the unresolved rapid-seek stop and remaining phone-off acceptance.
 - `docs/agent/`: concise evidence, decisions, and reproducible handoffs.
+- `scripts/luma-{protocol,discovery,controller}.mjs`: archived-APK-derived native
+  LUMA transport, bounded UDP discovery and loopback HTTP bridge. Persistent TCP
+  controls are separate from Kodi; no fileserver or auth advertisement.
+- `src/luma/remote.html`: responsive projector remote, explicit short discovery/
+  direct IP, app inventory/Kodi launch, navigation, text and volume refresh.
+- `tests/luma-*.test.mjs`, `tests/browser/luma.spec.js`: fake TCP/UDP/HTTP
+  boundaries and actual browser flows. `docs/agent/luma-remote.md` records REA
+  provenance, physical acceptance and remaining startup/phone work.
+- `src/handoff/coordinator.mjs`: bounded receiver launch/readiness/media/subtitle
+  orchestration, observed-index bindings, cancellation and conservative retry.
+- `src/mobile/{index.html,app.js,capture.js}`: no-scroll combined phone remote,
+  native RPC adapters, same-origin declared source/track capture and matched pause.
+- `android/`: phone APK shell and native networking; browser WebView has no
+  native bridge. MainActivity owns capture/job lifecycle and visible-app retries;
+  ConnectionService owns background TCP/UDP/Kodi, MediaSession/notification and
+  cached state. NativeBackend implements transport; SettingsStore encrypts
+  validated credentials and caches the receiver. Generated assets/APKs ignored.
+- `scripts/build-mobile.mjs`, `scripts/test-android-*.mjs`: mobile assets and
+  explicit emulator-only native backend, UI, service/persistence and Keystore tests.
+- `tests/handoff.test.mjs`, `tests/browser/mobile*.spec.js`,
+  `android/app/src/androidTest/`: coordinator, capture, layouts and Android tests.
+- `docs/agent/{phone-app,luma-review-findings}.md`: phone architecture/acceptance
+  and bounded public review sample, specific complaints and implementation limits.
 - `artifacts/`, `.local/`: ignored local evidence; never commit credentials/media.
 - `README.md`: build/load instructions; `package-lock.json`: pinned npm tools.

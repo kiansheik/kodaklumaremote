@@ -12,14 +12,16 @@
    DevTools-open and Anti Anti Debug fingerprinting reports not reproduced.
 5. All 19 declared subtitles are registered in Kodi; Portuguese rendering and
    dialogue timing are user-confirmed. Other languages are not render-tested.
-   Can batch import/metadata binding become a normal UI flow? Current Mac UI adds
-   one link at a time; the batch test used the local API. No audio selector.
+   Phone batch import/metadata binding is implemented and fixture-tested; does
+   it pass from the actual Samsung phone? Current Mac UI adds one link at a
+   time; its physical batch test used the local API. No audio selector.
 6. Are cross-origin backup players needed? They are outside current host scope.
 7. Does wrapper/full-video fullscreen and BFCache work on real Chrome? Wrapper
    handling and simulated BFCache are covered; native video fullscreen cannot
    display the extension overlay outside the replaced video element.
 8. Full mobile acceptance is phone fully OFF, receiver still fetching media.
-   Which direct receiver transport will be supported by the Android controller?
+   Android now implements LUMA launch plus Kodi HTTP; does the actual Samsung
+   sender pass live capture, independent playback and reconnection?
    Miracast-only targets need another player and cannot satisfy this alone.
 9. Which Kodak LUMA model/Android/CPU does the user own? Kodi is installed and
    public MP4 and actual HLS/subtitles worked on version 21.2. Does built-in DLNA expose a usable
@@ -39,3 +41,8 @@ confirmed on LUMA Kodi. Phone sender and full phone shutdown remain open.
 Why did the rapid pause/seek60/resume sequence stop this HLS? MP4 seek worked;
 target HLS seek reliability has not passed. Retest deliberately with settled
 commands before changing transport or introducing a relay.
+
+LUMA native remote now has confirmed app inventory, Kodi launch, navigation and
+ready-device discovery. Remaining: text/volume changes, reverse-screen view and
+touchpad, PIN pairing, actual Samsung acceptance, projector packaging, cold-boot timing and startup
+launcher support on the exact Android/model. See [remote evidence](luma-remote.md).

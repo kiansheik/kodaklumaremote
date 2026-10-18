@@ -1,0 +1,410 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#0d171b">
+  <title>LUMA remote</title>
+  <style>
+    :root { font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #edf5f5; background: #0d171b; line-height: 1.5; font-synthesis: none; }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 40px 24px max(32px, env(safe-area-inset-bottom)); background: radial-gradient(ellipse at 85% 0%, #17383a 0%, transparent 50%); min-height: 100vh; }
+    button, input, textarea { font: inherit; }
+    button { min-height: 48px; border: 1px solid #355057; border-radius: 13px; background: #203239; color: #edf5f5; padding: 11px 17px; font-weight: 650; cursor: pointer; touch-action: manipulation; transition: background .14s, border-color .14s, transform .14s; }
+    button:hover:enabled { background: #2b454c; border-color: #6d9597; }
+    button:active:enabled { transform: translateY(1px); }
+    button:disabled { opacity: .42; cursor: default; }
+    button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 3px solid #9fe7d5; outline-offset: 4px; }
+    input, textarea, select { width: 100%; border: 1px solid #47626a; border-radius: 11px; background: #0f2026; color: #edf5f5; padding: 13px 14px; font: inherit; }
+    input::placeholder, textarea::placeholder { color: #8fa7ad; }
+    input:disabled, textarea:disabled { opacity: .55; }
+    textarea { resize: vertical; min-height: 102px; }
+    label { display: block; font-size: .88rem; font-weight: 600; margin-bottom: 8px; }
+    h1, h2, p { margin: 0; }
+    h1 { font-size: clamp(2rem, 5vw, 2.8rem); letter-spacing: -.055em; line-height: 1.15; font-weight: 700; }
+    h2 { font-size: 1.06rem; letter-spacing: -.015em; }
+    main { max-width: 1040px; margin: auto; }
+    .eyebrow { color: #94d8c9; letter-spacing: .15em; text-transform: uppercase; font-size: .7rem; font-weight: 750; margin-bottom: 10px; }
+    .top { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-bottom: 27px; }
+    .intro { color: #a5bbc0; margin-top: 11px; font-size: .98rem; }
+    .mark { display: grid; place-items: center; width: 56px; height: 56px; border: 1px solid #476561; border-radius: 17px; color: #a4e6d5; background: #19312f; flex: none; }
+    .mark svg { width: 29px; height: 29px; }
+    .card { border: 1px solid #30464e; background: #15262ce8; border-radius: 22px; padding: 24px; }
+    .connection { margin-bottom: 20px; }
+    .section-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
+    .badge { display: inline-flex; align-items: center; gap: 7px; font-size: .75rem; font-weight: 650; color: #adc0c4; background: #203138; border: 1px solid #3a5057; border-radius: 99px; padding: 5px 10px; white-space: nowrap; }
+    .badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: #829a9f; }
+    .badge[data-connected="true"] { color: #b7f4df; background: #173b32; border-color: #397b62; }
+    .badge[data-connected="true"]::before { background: #8ae1ba; }
+    .connect-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 10px; align-items: end; }
+    .connect-field { min-width: 0; }
+    .discovery-row { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 16px; margin-top: 12px; }
+    .discovery-row .hint { margin: 0; flex: 1 1 180px; }
+    .discovery-choice { margin-top: 14px; }
+    .discovery-choice[hidden] { display: none; }
+    .primary { background: #a7e4d2; border-color: #a7e4d2; color: #102c27; }
+    .primary:hover:enabled { background: #c3f2e3; border-color: #c3f2e3; }
+    .quiet { background: transparent; color: #bfd1d4; }
+    .hint { color: #a1b6bd; font-size: .8rem; margin-top: 12px; }
+    #connection-message { min-height: 1.5em; font-size: .88rem; color: #c6d8dc; margin-top: 13px; overflow-wrap: anywhere; }
+    #connection-message[data-error="true"], #command-message[data-error="true"] { color: #ffbdad; }
+    .workspace { display: grid; grid-template-columns: minmax(0, 1.02fr) minmax(0, 1fr); gap: 20px; align-items: start; }
+    .stack { display: grid; gap: 20px; min-width: 0; }
+    .remote { overflow: hidden; }
+    .remote-heading { margin-bottom: 0; }
+    .key-hint { color: #9bb3b9; font-size: .75rem; }
+    .dpad { display: grid; grid-template-columns: repeat(3, 76px); grid-template-rows: repeat(3, 70px); gap: 7px; width: fit-content; margin: 23px auto 22px; padding: 13px; border-radius: 30px; background: #0e1d23; border: 1px solid #2a414a; }
+    .dpad button { padding: 0; font-size: 1.45rem; border-radius: 15px; border-color: #355059; background: #20353e; }
+    .dpad .up { grid-area: 1 / 2; border-radius: 15px 15px 10px 10px; }
+    .dpad .left { grid-area: 2 / 1; }
+    .dpad .select { grid-area: 2 / 2; background: #345b5a; border-color: #508480; font-size: .95rem; color: #d7f7ec; border-radius: 50%; }
+    .dpad .right { grid-area: 2 / 3; }
+    .dpad .down { grid-area: 3 / 2; border-radius: 10px 10px 15px 15px; }
+    .utility { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+    .utility button { display: flex; justify-content: center; align-items: center; gap: 8px; font-size: .83rem; padding: 12px 8px; }
+    svg { width: 18px; height: 18px; vertical-align: middle; flex: none; }
+    .volume { border-top: 1px solid #30464e; margin-top: 22px; padding-top: 19px; }
+    .volume-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 11px; }
+    .volume-reading { display: flex; align-items: center; gap: 8px; }
+    .small-title { font-size: .85rem; color: #c1d3d7; font-weight: 600; }
+    #volume-level { color: #a8c8c5; font-size: .8rem; font-variant-numeric: tabular-nums; }
+    .volume-controls { display: grid; grid-template-columns: minmax(0, 1fr) 1.3fr minmax(0, 1fr); gap: 8px; }
+    .volume-controls button { padding: 10px 8px; }
+    #command-message { min-height: 3em; margin-top: 19px; color: #acbec4; font-size: .8rem; overflow-wrap: anywhere; }
+    .kodi { width: 100%; display: flex; text-align: left; align-items: center; gap: 14px; padding: 20px; border-color: #4d8278; background: #20453f; border-radius: 17px; }
+    .kodi:hover:enabled { background: #2a5b50; border-color: #8bcbb3; }
+    .kodi-icon { display: grid; place-items: center; width: 42px; height: 42px; border: 1px solid #71ad9c; border-radius: 12px; color: #c0efe0; font-size: 1.55rem; }
+    .kodi strong { display: block; font-size: 1rem; }
+    .kodi small { display: block; color: #c0d8d1; font-weight: 450; margin-top: 2px; font-size: .78rem; }
+    .kodi .forward { margin-left: auto; font-size: 1.25rem; color: #b6e0d0; }
+    .apps-top { margin-top: 25px; margin-bottom: 11px; }
+    .text-button { background: transparent; border-color: transparent; padding: 5px 8px; min-height: 38px; color: #a3d9cc; font-size: .78rem; }
+    .app-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+    .app { min-height: 64px; background: #1b2e35; font-size: .83rem; font-weight: 550; text-align: left; display: flex; gap: 10px; align-items: center; padding: 11px 12px; min-width: 0; }
+    .app-symbol { color: #9bc9c5; background: #2b434a; border-radius: 8px; width: 29px; height: 29px; display: grid; place-items: center; flex: none; font-size: .8rem; }
+    .app-label { overflow-wrap: anywhere; min-width: 0; }
+    .empty { color: #9db3ba; font-size: .84rem; padding: 11px 0 2px; grid-column: 1 / -1; }
+    .typing h2 { margin-bottom: 6px; }
+    .typing .hint { margin-top: 0; margin-bottom: 17px; }
+    .typing-row { display: flex; justify-content: flex-end; gap: 9px; margin-top: 11px; }
+    .footer { color: #89a3ac; font-size: .75rem; margin-top: 23px; text-align: center; }
+    @media (max-width: 720px) { body { padding: 25px 16px max(25px, env(safe-area-inset-bottom)); } .workspace { grid-template-columns: minmax(0, 1fr); } main { max-width: 480px; } .card { padding: 21px; } .top { margin-bottom: 22px; } .key-hint { display: none; } }
+    @media (max-width: 390px) { body { padding-left: 12px; padding-right: 12px; } .card { padding: 18px; border-radius: 19px; } .mark { width: 47px; height: 47px; } .connect-row { grid-template-columns: minmax(0, 1fr) auto; } #disconnect { grid-column: 1 / -1; } #disconnect[hidden] { display: none; } .dpad { grid-template-columns: repeat(3, 70px); grid-template-rows: repeat(3, 66px); padding: 11px; } .kodi { padding: 16px; } .app-grid { gap: 7px; } }
+    @media (prefers-reduced-motion: reduce) { button { transition: none; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header class="top">
+      <div><p class="eyebrow">Make yourself comfortable</p><h1>LUMA remote</h1><p class="intro">Less tapping. More watching.</p></div>
+      <span class="mark" aria-hidden="true"><svg viewBox="0 0 32 32" fill="none"><rect x="3" y="8" width="26" height="17" rx="5" stroke="currentColor" stroke-width="1.6"/><circle cx="20.5" cy="16.5" r="4.5" stroke="currentColor" stroke-width="1.6"/><path d="M7 13h3M7 17h3M10 28h12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></span>
+    </header>
+
+    <section class="card connection" aria-labelledby="connection-heading">
+      <div class="section-top"><h2 id="connection-heading">Your projector</h2><span id="connection-badge" class="badge" data-connected="false">Not connected</span></div>
+      <form id="connect-form" autocomplete="off" novalidate>
+        <div class="connect-row">
+          <div class="connect-field"><label for="host">Projector IP address</label><input id="host" name="host" inputmode="decimal" type="text" placeholder="192.168.x.x" maxlength="15" autocomplete="off" spellcheck="false" required aria-describedby="address-hint"></div>
+          <button id="connect" class="primary" type="submit">Connect</button>
+          <button id="disconnect" class="quiet" type="button" hidden>Disconnect</button>
+        </div>
+        <div class="discovery-row"><button id="discover" class="quiet" type="button">Find projector</button><p id="address-hint" class="hint">Turn on your LUMA and use the same Wi-Fi network.</p></div>
+        <div id="discovery-choice" class="discovery-choice" hidden><label for="projector-select">Choose a projector</label><select id="projector-select"></select></div>
+      </form>
+      <p id="connection-message" role="status" aria-live="polite">Enter its IP address to get started. It is not saved.</p>
+    </section>
+
+    <div class="workspace">
+      <section class="card remote" aria-labelledby="remote-heading">
+        <div class="section-top remote-heading"><h2 id="remote-heading">Remote</h2><span class="key-hint">Arrow keys work here, too</span></div>
+        <div class="dpad" role="group" aria-label="Navigation">
+          <button class="up" type="button" data-key="up" aria-label="Up" disabled>↑</button>
+          <button class="left" type="button" data-key="left" aria-label="Left" disabled>←</button>
+          <button class="select" type="button" data-key="enter" aria-label="Select" disabled>OK</button>
+          <button class="right" type="button" data-key="right" aria-label="Right" disabled>→</button>
+          <button class="down" type="button" data-key="down" aria-label="Down" disabled>↓</button>
+        </div>
+        <div class="utility" role="group" aria-label="Projector navigation">
+          <button type="button" data-key="back" disabled><svg aria-hidden="true" viewBox="0 0 24 24" fill="none"><path d="m10 6-6 6 6 6M5 12h15" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>Back</button>
+          <button type="button" data-key="home" disabled><svg aria-hidden="true" viewBox="0 0 24 24" fill="none"><path d="m3 10 9-7 9 7v10H7V10m3 10v-7h4v7" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>Home</button>
+          <button type="button" data-key="menu" disabled><svg aria-hidden="true" viewBox="0 0 24 24" fill="none"><path d="M5 6h14M5 12h14M5 18h14" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>Menu</button>
+        </div>
+        <div class="volume">
+          <div class="volume-heading"><p class="small-title">Volume</p><div class="volume-reading"><span id="volume-level">—</span><button id="refresh-volume" class="text-button" type="button" disabled>Refresh volume</button></div></div>
+          <div class="volume-controls" role="group" aria-label="Volume">
+            <button type="button" data-key="volume-down" aria-label="Volume down" disabled>−</button>
+            <button type="button" data-key="mute" disabled>Mute</button>
+            <button type="button" data-key="volume-up" aria-label="Volume up" disabled>+</button>
+          </div>
+        </div>
+        <p id="command-message" role="status" aria-live="polite">Connect to use the remote.</p>
+      </section>
+
+      <div class="stack">
+        <section class="card" aria-labelledby="apps-heading">
+          <button id="launch-kodi" class="kodi" type="button" aria-label="Open Kodi" disabled><span class="kodi-icon" aria-hidden="true">◇</span><span><strong>Open Kodi</strong><small>Your films, ready on the big screen</small></span><span class="forward" aria-hidden="true">↗</span></button>
+          <div class="section-top apps-top"><h2 id="apps-heading">Your apps</h2><button id="refresh-apps" class="text-button" type="button" disabled>Refresh apps</button></div>
+          <div id="app-grid" class="app-grid"><p class="empty">Connect to see your projector’s apps.</p></div>
+        </section>
+        <section class="card typing" aria-labelledby="typing-heading">
+          <h2 id="typing-heading">Skip the on-screen keyboard</h2>
+          <p id="typing-hint" class="hint">Select a text field on the projector, then send what you type here.</p>
+          <form id="text-form" autocomplete="off">
+            <label for="text">Text to send</label><textarea id="text" rows="2" maxlength="1000" placeholder="A film title, a search, anything…" autocomplete="off" spellcheck="false" aria-describedby="typing-hint" disabled></textarea>
+            <div class="typing-row"><button id="clear-text" class="quiet" type="button" disabled>Clear</button><button id="send-text" class="primary" type="submit" disabled>Send text</button></div>
+          </form>
+        </section>
+      </div>
+    </div>
+    <p class="footer">A local remote. Commands go to your projector; check the screen for the result.</p>
+  </main>
+
+  <script type="module">
+    const hostInput = document.querySelector('#host');
+    const connectButton = document.querySelector('#connect');
+    const disconnectButton = document.querySelector('#disconnect');
+    const discoverButton = document.querySelector('#discover');
+    const discoveryChoice = document.querySelector('#discovery-choice');
+    const projectorSelect = document.querySelector('#projector-select');
+    const connectionMessage = document.querySelector('#connection-message');
+    const commandMessage = document.querySelector('#command-message');
+    const badge = document.querySelector('#connection-badge');
+    const appGrid = document.querySelector('#app-grid');
+    const textInput = document.querySelector('#text');
+    const volumeLevel = document.querySelector('#volume-level');
+    const controls = [...document.querySelectorAll('[data-key], #launch-kodi, #refresh-apps, #refresh-volume, #send-text, #clear-text')];
+    let connectedHost = '';
+    let busy = false;
+    let pendingAction = '';
+    let lastKeyTime = -Infinity;
+
+    function message(element, text, error = false) {
+      element.textContent = text;
+      element.dataset.error = String(error);
+    }
+
+    function updateControls() {
+      const connected = Boolean(connectedHost);
+      hostInput.disabled = busy || connected;
+      connectButton.disabled = busy || connected;
+      connectButton.textContent = busy && pendingAction === 'connect' ? 'Connecting…' : 'Connect';
+      discoverButton.disabled = busy || connected;
+      discoverButton.textContent = busy && pendingAction === 'discover' ? 'Searching…' : 'Find projector';
+      projectorSelect.disabled = busy || connected;
+      disconnectButton.hidden = !connected;
+      disconnectButton.disabled = busy;
+      controls.forEach(button => { button.disabled = busy || !connected; });
+      appGrid.querySelectorAll('button').forEach(button => { button.disabled = busy || !connected; });
+      textInput.disabled = busy || !connected;
+      document.querySelector('#send-text').disabled = busy || !connected || !textInput.value.trim();
+      document.querySelector('#clear-text').disabled = busy || !connected || !textInput.value;
+      badge.dataset.connected = String(connected);
+      badge.textContent = connected ? 'Connected' : 'Not connected';
+    }
+
+    function privateAddress(value) {
+      const parts = value.split('.');
+      if (parts.length !== 4 || parts.some(part => !/^\d{1,3}$/.test(part) || String(Number(part)) !== part || Number(part) > 255)) return false;
+      const numbers = parts.map(Number);
+      return numbers[0] === 10 || (numbers[0] === 172 && numbers[1] >= 16 && numbers[1] <= 31) || (numbers[0] === 192 && numbers[1] === 168);
+    }
+
+    function showVolume(value) {
+      if (!value || !Number.isFinite(value.current) || !Number.isFinite(value.max) || value.max <= 0) return;
+      volumeLevel.textContent = `${Math.max(0, value.current)} / ${value.max}`;
+    }
+
+    function renderApps(apps) {
+      appGrid.replaceChildren();
+      const list = Array.isArray(apps) ? apps.slice(0, 200) : [];
+      for (const app of list) {
+        if (!app || typeof app.packageName !== 'string' || !app.packageName || typeof app.label !== 'string') continue;
+        const label = app.label.slice(0, 100).trim() || 'Unnamed app';
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'app';
+        button.setAttribute('aria-label', `Open ${label} app`);
+        const symbol = document.createElement('span');
+        symbol.className = 'app-symbol';
+        symbol.setAttribute('aria-hidden', 'true');
+        symbol.textContent = [...label][0].toLocaleUpperCase();
+        const name = document.createElement('span');
+        name.className = 'app-label';
+        name.textContent = label;
+        button.append(symbol, name);
+        button.addEventListener('click', () => command('launch-app', { packageName: app.packageName }, `${label} launch sent. Check the projector.`));
+        appGrid.append(button);
+      }
+      if (!appGrid.childElementCount) {
+        const empty = document.createElement('p');
+        empty.className = 'empty';
+        empty.textContent = connectedHost ? 'No apps returned. You can still open Kodi or try Refresh apps.' : 'Connect to see your projector’s apps.';
+        appGrid.append(empty);
+      }
+      updateControls();
+    }
+
+    async function request(action, payload = {}, target = connectedHost) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10000);
+      try {
+        const response = await fetch('/api/luma', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(action === 'discover' ? { action, ...payload } : { host: target, action, ...payload }),
+          signal: controller.signal, cache: 'no-store', credentials: 'omit'
+        });
+        const data = await response.json();
+        if (!response.ok) {
+          const failure = new Error(typeof data?.error === 'string' ? data.error.slice(0, 240) : 'The projector did not accept this command.');
+          failure.disconnected = data?.connected === false;
+          throw failure;
+        }
+        if (!data || typeof data !== 'object') throw new Error('The projector returned an unexpected response.');
+        return data;
+      } catch (error) {
+        if (error.name === 'AbortError' || error instanceof TypeError || error instanceof SyntaxError) throw new Error('Could not reach the projector. Check its connection and try again.');
+        throw error;
+      } finally { clearTimeout(timeout); }
+    }
+
+    discoverButton.addEventListener('click', async () => {
+      if (busy || connectedHost) return;
+      busy = true;
+      pendingAction = 'discover';
+      discoveryChoice.hidden = true;
+      projectorSelect.replaceChildren();
+      updateControls();
+      message(connectionMessage, 'Searching for up to 3 seconds…');
+      try {
+        const data = await request('discover');
+        const devices = Array.isArray(data.devices) ? data.devices.filter(device => device && typeof device.host === 'string' && privateAddress(device.host)).slice(0, 20) : [];
+        if (!devices.length) {
+          message(connectionMessage, 'No projector replied yet. If it is still starting, try again in a moment or enter its IP address.');
+        } else if (devices.length === 1) {
+          hostInput.value = devices[0].host;
+          const name = typeof devices[0].name === 'string' ? devices[0].name.slice(0, 100).trim() : '';
+          message(connectionMessage, name ? `${name} found. Choose Connect to use your remote.` : 'Projector found. Choose Connect to use your remote.');
+        } else {
+          const placeholder = document.createElement('option');
+          placeholder.value = '';
+          placeholder.textContent = 'Choose a projector…';
+          projectorSelect.append(placeholder);
+          devices.forEach(device => {
+            const option = document.createElement('option');
+            option.value = device.host;
+            const name = typeof device.name === 'string' ? device.name.slice(0, 100).trim() : '';
+            option.textContent = name ? `${name} · ${device.host}` : device.host;
+            projectorSelect.append(option);
+          });
+          discoveryChoice.hidden = false;
+          message(connectionMessage, `Found ${devices.length} projectors. Choose one, then connect.`);
+        }
+      } catch (error) { message(connectionMessage, error.message, true); }
+      finally { busy = false; pendingAction = ''; updateControls(); }
+    });
+    projectorSelect.addEventListener('change', () => {
+      if (privateAddress(projectorSelect.value)) hostInput.value = projectorSelect.value;
+    });
+
+    async function command(action, payload, success) {
+      if (!connectedHost || busy) return;
+      busy = true;
+      pendingAction = action;
+      updateControls();
+      try {
+        const data = await request(action, payload);
+        if (action === 'key' && ['volume-up', 'volume-down', 'mute'].includes(payload.key)) volumeLevel.textContent = '—';
+        showVolume(data.volume);
+        if (action === 'apps') renderApps(data.apps);
+        message(commandMessage, success);
+        return true;
+      } catch (error) {
+        if (error.disconnected) {
+          connectedHost = '';
+          volumeLevel.textContent = '—';
+          renderApps([]);
+          message(connectionMessage, 'Connection lost. Reconnect to continue.', true);
+        }
+        message(commandMessage, error.message, true);
+        return false;
+      }
+      finally { busy = false; pendingAction = ''; updateControls(); }
+    }
+
+    document.querySelector('#connect-form').addEventListener('submit', async event => {
+      event.preventDefault();
+      if (busy || connectedHost) return;
+      const host = hostInput.value.trim();
+      if (!privateAddress(host)) { message(connectionMessage, 'Enter the projector’s local IP address.', true); hostInput.focus(); return; }
+      busy = true;
+      pendingAction = 'connect';
+      updateControls();
+      message(connectionMessage, 'Finding your projector…');
+      try {
+        const data = await request('connect', {}, host);
+        if (data.connected !== true) throw new Error('Could not connect to the projector. Check that it is turned on.');
+        connectedHost = host;
+        const name = typeof data.device?.name === 'string' ? data.device.name.slice(0, 100).trim() : '';
+        message(connectionMessage, name ? `Connected to ${name}. Your remote is ready.` : 'Connected. Your remote is ready.');
+        message(commandMessage, 'Ready when you are.');
+        showVolume(data.volume);
+        renderApps(data.apps);
+      } catch (error) { message(connectionMessage, error.message, true); }
+      finally { busy = false; pendingAction = ''; updateControls(); }
+    });
+
+    disconnectButton.addEventListener('click', async () => {
+      if (!connectedHost || busy) return;
+      busy = true;
+      updateControls();
+      let disconnected = false;
+      try {
+        const data = await request('disconnect');
+        if (data.connected !== false) throw new Error('Could not disconnect. Try again.');
+        disconnected = true;
+      }
+      catch (error) { message(connectionMessage, error.message, true); }
+      finally {
+        if (disconnected) {
+          connectedHost = '';
+          textInput.value = '';
+          volumeLevel.textContent = '—';
+          renderApps([]);
+          message(connectionMessage, 'Disconnected. Connect whenever you need the remote.');
+          message(commandMessage, 'Connect to use the remote.');
+        }
+        busy = false;
+        updateControls();
+      }
+    });
+
+    const keyLabels = { up: 'Up', down: 'Down', left: 'Left', right: 'Right', enter: 'Select', back: 'Back', home: 'Home', menu: 'Menu', 'volume-up': 'Volume up', 'volume-down': 'Volume down', mute: 'Mute' };
+    function sendKey(key) {
+      const now = performance.now();
+      if (!connectedHost || busy || now - lastKeyTime < 100) return;
+      lastKeyTime = now;
+      void command('key', { key }, `${keyLabels[key]} sent. Check the projector.`);
+    }
+    document.querySelectorAll('[data-key]').forEach(button => button.addEventListener('click', () => sendKey(button.dataset.key)));
+    document.addEventListener('keydown', event => {
+      if (event.isComposing || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || event.target.closest('input, textarea, select, [contenteditable]')) return;
+      if (event.key === 'Enter' && event.target.closest('button, a, summary')) return;
+      const key = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right', Enter: 'enter', Escape: 'back', Home: 'home' }[event.key];
+      if (key && connectedHost) { event.preventDefault(); sendKey(key); }
+    });
+    document.querySelector('#launch-kodi').addEventListener('click', () => command('launch-kodi', {}, 'Kodi launch sent. Check the projector.'));
+    document.querySelector('#refresh-apps').addEventListener('click', () => command('apps', {}, 'App list refreshed.'));
+    document.querySelector('#refresh-volume').addEventListener('click', () => command('status', {}, 'Volume refreshed.'));
+    textInput.addEventListener('input', updateControls);
+    document.querySelector('#clear-text').addEventListener('click', () => { textInput.value = ''; updateControls(); textInput.focus(); });
+    document.querySelector('#text-form').addEventListener('submit', async event => {
+      event.preventDefault();
+      if (!textInput.value.trim() || busy || !connectedHost) return;
+      const sent = await command('text', { text: textInput.value }, 'Text sent. Check the selected field on the projector.');
+      if (sent) { textInput.value = ''; updateControls(); }
+    });
+    updateControls();
+  </script>
+</body>
+</html>

@@ -1,0 +1,35 @@
+apply plugin: 'com.android.application'
+
+def mobileRepository = rootProject.projectDir.parentFile
+def bundleMobileAssets = tasks.register('bundleMobileAssets', Exec) {
+    workingDir mobileRepository
+    commandLine 'node', new File(mobileRepository, 'scripts/build-mobile.mjs').absolutePath
+    inputs.files(fileTree(new File(mobileRepository, 'src/mobile')),
+        fileTree(new File(mobileRepository, 'src/handoff')),
+        new File(mobileRepository, 'src/shared/media.js'),
+        new File(mobileRepository, 'scripts/build-mobile.mjs'),
+        new File(mobileRepository, 'package.json'),
+        new File(mobileRepository, 'package-lock.json'))
+    outputs.dir(layout.buildDirectory.dir('generated/lumaAssets'))
+}
+tasks.named('preBuild').configure { dependsOn(bundleMobileAssets) }
+
+android {
+    namespace 'dev.framextv.lumaremote'
+    compileSdk 35
+    buildToolsVersion '36.0.0'
+    defaultConfig {
+        applicationId 'dev.framextv.lumaremote'
+        minSdk 23
+        targetSdk 35
+        versionCode 2
+        versionName '0.2.0'
+        testInstrumentationRunner 'dev.framextv.lumaremote.BackendInstrumentation'
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    sourceSets { main { assets.srcDirs = [layout.buildDirectory.dir('generated/lumaAssets')] } }
+    buildTypes { release { minifyEnabled false } }
+}

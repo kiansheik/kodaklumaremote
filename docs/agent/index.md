@@ -12,6 +12,11 @@ Device follow-up: [Philips TV evidence](philips-tv.md),
 [Kodi/VLC receiver interfaces](receiver-apps.md).
 Working Kodi stepping stone: [setup and physical test](../../tests/manual-kodi.md).
 Latest device result: [actual frameXTV and Portuguese subtitles](session-handoffs/2026-10-18-framextv-kodi-subtitles.md).
+Projector remote: [LUMA protocol and browser controller](luma-remote.md).
+Phone implementation: [Android sender and combined remote](phone-app.md),
+[review findings](luma-review-findings.md),
+[phone handoff](session-handoffs/2026-10-18-phone-handoff.md).
+Latest: [saved setup and background controls](session-handoffs/2026-10-18-phone-background-settings.md).
 
 Execution: [decisions](decisions.md), [experiments](experiments.md),
 [progress](progress.md), [log](log.md), [handoff](handoff.md).

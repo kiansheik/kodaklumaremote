@@ -49,3 +49,26 @@ pause/seek/resume stopped playback; restart without seeking stayed active beyond
 11 minutes. HLS seek reliability, full phone shutdown and URL renewal remain
 open. Latest automated coverage is 60 Node / 32 browser tests; see the
 [source/subtitle handoff](session-handoffs/2026-10-18-framextv-kodi-subtitles.md).
+
+LUMA replacement remote: REA static analysis recovered the official client’s
+native protocol. Browser+Mac bridge now connects to the actual receiver,
+enumerates23 apps and launches Kodi; user confirmed launch and navigation.
+Versioned discovery reply support makes the short normal browser search find
+the ready receiver. Cold-boot delay, volume/text acceptance, touchpad/reverse
+view and Kodi autostart remain. See [remote evidence](luma-remote.md).
+
+Phone increment: packaged Android sender and native LUMA/Kodi bridge implement
+Browse → launch/readiness → video → all declared subtitles → PT-BR/English →
+no-scroll combined Remote. Separate primary/secondary panels, bounded discovery,
+native cancellation and conservative subtitle retries are fixture-tested.
+A 220-review public sample informs specific reliability priorities without
+claiming usage telemetry or repaired firmware. Debug APK and final automated
+results: [phone handoff](session-handoffs/2026-10-18-phone-handoff.md). Actual
+Samsung and full phone-off acceptance remain required.
+
+Phone baseline now installed on Samsung Android16 and user-confirmed controlling
+LUMA. New0.2.0 implements background/system controls, encrypted validated setup,
+cached-IP automatic connection, secondary Settings/reset, corner Home/Back and
+observed-volume slider. First setup must authenticate and then continue the
+selected Cast. Final checks and live acceptance:
+[background/settings handoff](session-handoffs/2026-10-18-phone-background-settings.md).

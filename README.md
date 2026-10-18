@@ -126,5 +126,65 @@ IPv4 address. Credentials and pasted links are not persisted; the Mac does not
 fetch or relay video. The source continued playing with the controller process
 stopped. A rapid pause/seek/resume sequence stopped the HLS episode; a restart
 without seeking remained stable, so HLS seeking remains unresolved. This is a
-working desktop stepping stone; an Android sender and full phone-off acceptance
-are still pending.
+working desktop stepping stone. An Android sender is now implemented below;
+actual phone playback and full phone-off acceptance are still pending.
+
+## LUMA projector remote
+
+A separate remote prototype implements the Kodak LUMA app’s local control
+protocol: navigation, volume, text entry, app selection and **Open Kodi**.
+It has a responsive browser interface and a small Node.js bridge; REA is only
+needed for the investigation, not to run the remote.
+
+```sh
+npm run luma
+```
+
+Open **http://127.0.0.1:4176** on this Mac. Turn on the projector, use the same
+Wi-Fi network, and select **Find projector** or enter its IP address. A search
+finishes after about 2.5 seconds; choose **Connect** when a result appears.
+Once connected, **Refresh apps** retrieves the app list. **Open Kodi** checks
+that Kodi is present before sending its launch command. Select a text field on
+the projector before sending a short line of text.
+
+The real projector returned 23 installed apps. **Open Kodi** launched Kodi 21.2,
+and the user confirmed both Kodi opening and navigation through this remote.
+Volume and typing are implemented from the APK protocol but not physically
+confirmed yet. Initial boot/discovery compatibility findings and test boundaries
+are recorded in the linked protocol notes.
+The remote does not change startup behavior. Launching Kodi at boot still
+requires the projector’s exact Android/model details and a separate device test.
+
+The bridge listens only on this Mac’s loopback address, accepts one private IPv4
+receiver and keeps its connection in memory. An ordinary website cannot open the
+raw TCP connection this protocol uses. See
+[LUMA protocol and testing](docs/agent/luma-remote.md) for evidence and remaining
+device checks.
+
+## Android phone app
+
+The phone prototype packages a separate no-scroll web remote with a native
+network bridge. It connects directly to LUMA and Kodi without the Mac.
+**Browse → Cast to LUMA** launches Kodi, waits for readiness, opens the exposed
+video, imports all declared subtitle languages and selects Brazilian Portuguese
+with English as the fallback. It then opens the combined **Remote** screen.
+Playback, volume and navigation stay visible; languages, typing and apps have
+separate panels. The projector fetches the video and subtitles itself.
+
+First setup opens/authenticates Kodi and saves its login encrypted on the phone.
+Later opens connect automatically using the cached projector address. The
+foreground connection survives switching apps and provides notification/system
+media controls. The phone UI keeps setup behind Settings, shows compact status,
+has corner Home/Back and a volume slider with step buttons. Disconnect leaves
+the video playing; saved setup can be wiped independently.
+
+Build/setup: [Android README](android/README.md). Implementation, fixture results
+and physical acceptance: [phone app](docs/agent/phone-app.md). Source capture
+currently supports HTTPS frameXTV and readable same-origin players. This is an
+installable debug prototype; live Samsung capture/playback, interrupted-network
+recovery and phone fully off remain to be tested on the actual devices.
+
+The [review analysis](docs/agent/luma-review-findings.md) records a bounded sample
+of 220 public written Google Play reviews. Repeated specific complaints informed
+bounded discovery, explicit retry/manual connection, preserved text drafts and
+input gating. Review frequency does not establish which controls people use most.

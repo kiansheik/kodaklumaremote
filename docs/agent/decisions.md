@@ -69,7 +69,8 @@ stone. Standard Cast and an actually supported UPnP MediaRenderer are suitable
 candidate transports; a Miracast-only sink is not. A native helper does not make
 mirroring into independent retrieval. Do not build a phone proxy/hotspot path as
 if it met this requirement. See [mobile target](mobile-target.md) and
-[Philips hardware evidence](philips-tv.md). No mobile app is implemented yet.
+[Philips hardware evidence](philips-tv.md). The first Android LUMA/Kodi sender
+is implemented; physical Samsung and full phone-off acceptance remain pending.
 
 ## D8: Explicit source handoff and media-scoped subtitle metadata
 
@@ -85,4 +86,48 @@ in bounded controller memory, keyed by receiver and SHA-256 of Kodi's verified
 current file. Do not persist raw links or attach old labels to another video.
 Registration/command acceptance is distinct from rendering: only Portuguese
 captions received explicit physical dialogue-match confirmation in this test.
-The all-track handoff currently uses the local API; a batch UI remains future work.
+The original all-track hardware proof used the local API. The Android sender
+now implements automatic batch handoff, with phone hardware acceptance pending.
+
+## D9: Reuse native LUMA wire controls behind a bounded local bridge
+
+The inspected Android client uses raw sockets for projector controls. Keep a
+reusable browser interface over a small loopback HTTP-to-TCP adapter; an ordinary
+website cannot directly implement this transport. Do not expose the bridge to
+the LAN or run the original phone filesystem-sharing server. Verified controls
+worked without its storage-root `auth` advertisement. Require observed pairing
+configuration and reject password/unknown cases until implemented explicitly.
+Launch only packages from the parsed receiver app inventory. Do not treat a
+write acknowledgement as a physical success: Kodi launch/navigation have user
+confirmation, while text/volume changes still need device acceptance.
+
+## D10: Phone web UI inside a narrow native shell
+
+Use native Android sockets for LUMA and HTTP for Kodi; package the no-scroll UI
+as local assets. Keep arbitrary browsing in a different WebView without any
+native JavaScript bridge. Capture only readable declared sources on the supported
+origin. Neither the Mac nor phone relays media. Scope native mutations to a
+fresh casting-attempt token and recheck before writes; cancellation cannot undo
+commands already accepted by the receiver. Reissue subtitle adds only with
+explicit pre-write negative proof, otherwise reconcile observed indices.
+
+Prioritize playback, volume and navigation for the household's bedtime workflow;
+put subtitles, typing and app lists in separate panels. The bounded public
+[review sample](luma-review-findings.md) informs discovery/recovery/input work,
+but its complaint counts are not control-usage measurements or diagnosed causes
+of official-app crashes. Native fixture success is separate from Samsung and
+phone-off hardware acceptance.
+
+## D11: Authorized saved setup and foreground ownership
+
+The user explicitly requested saved login/cached IP and system controls. Save
+only the verified receiver address/name and authenticated Kodi credentials,
+encrypting credentials with Android Keystore/AES-GCM. Active media URLs and
+subtitle sources remain memory-only. Reset scopes are explicit; Disconnect keeps
+saved setup and leaves video playing. Reuse cached IP until failure/rescan and
+automatically choose only a unique compatible discovery result.
+
+A connected-device foreground service owns native I/O and a remote MediaSession;
+the Activity binds to it. Visible-app retries pause on explicit disconnect.
+Native generations reject queued/stale work and permit immediate disconnect.
+First setup authenticates Kodi before saving and continuing the pending video.

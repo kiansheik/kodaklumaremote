@@ -72,3 +72,44 @@
   coexistence browser case passed1. Browser count remains25 extension +7 Kodi.
   Saved a subtitle-only screenshot, removed own temporary raw source/track JSON,
   and kept credentials/active links outside Git. Full phone-off remains untested.
+- 2026-10-18 LUMA replacement remote: Read the user's new `~/code/rea` checkout
+  and Android workflow; used official REA6.7.0 package/pinned verified JADX for
+  static analysis of archived Kodak Luma APKv1.0.116. Recovered TCP8121 commands,
+  binary app inventory and UDP48689 discovery. No APK execution/installation,
+  global REA setup, phone fileserver or projector startup changes.
+- 2026-10-18 live remote acceptance: Receiver initially offline, then refused
+  control port during boot. Once ready, features identified Kodak Luma and
+  pairing replied `configed none`. Optional `getServerInfo` unsupported; omitted
+  after source/live comparison. Actual23-app frame parsed; browser Open Kodi
+  user-confirmed, with Kodi HTTP refused before and21.2 identified after. User
+  confirmed Right/Left navigation. Status read actualvolume6/30.
+- 2026-10-18 discovery/review: Physical reply `ECloudBox516` exposed an exact-
+  prefix bug; fixed to version-aware matching and verified normal Chrome Find
+  projector within the2.5-second search window. Cold-boot speed remains unknown.
+  Added reconnect-state propagation/draft preservation, explicit volume refresh
+  and native Enter behavior. Tests and remaining gaps are in the new handoff.
+- 2026-10-18 phone workflow: Implemented a packaged Android browser plus separate
+  local-control WebView, native LUMA/Kodi transport, source-bound launch/readiness/
+  media/all-subtitle handoff, PT-BR then English defaults and a no-scroll combined
+  Remote. Per-attempt native tokens revoke queued writes; confirmed-unsent Add
+  receipts permit safe retry without guessing uncertain subtitle outcomes.
+- 2026-10-18 review/UI priorities: Retrieved a bounded public Google Play sample,
+  220 unique written reviews. Conservative overlapping coding found87 startup/
+  crash,31 connection and11 navigation/lag reports. Not a random sample or usage
+  telemetry. Main controls follow household workflow; secondary functions use
+  separate paginated/searchable panels. Native/browser fixture results, Android
+  build and actual-device gaps are in the phone handoff; no Samsung installation
+  or full phone-off acceptance is claimed.
+- 2026-10-18 phone testing/steering: Paired wireless debugging at the user's
+  request, installed baseline APK on Samsung Android16. User confirmed projector
+  control; Cast reached setup/Kodi opening without completed media transfer.
+  Requested automatic single-projector connection, cached address, explicitly
+  saved login, hidden configuration, slider and corner Home/Back.
+- 2026-10-18 background/settings implementation: Service owns native I/O beyond
+  Activity destruction and publishes source/revision-bound MediaSession controls.
+  Disconnect immediately closes old generation/rejects queued work without Stop.
+  Added Keystore/AES-GCM saved authenticated login and receiver cache/reset,
+  visible automatic retry, validated first setup with pending-Cast continuation,
+  compact status and real absolute volume. REA confirmed normalized setter0..30;
+  UI consumes observed readback. Final results/phone acceptance are in the
+  [background handoff](session-handoffs/2026-10-18-phone-background-settings.md).

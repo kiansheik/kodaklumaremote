@@ -6,6 +6,9 @@ Device follow-up: [live Philips test and mobile goal](session-handoffs/2026-10-1
 Receiver research: [LUMA and existing apps](session-handoffs/2026-10-18-luma-receivers.md).
 Public receiver proof: [Kodi public playback](session-handoffs/2026-10-18-kodi-playback.md).
 Latest: [actual frameXTV HLS and subtitles](session-handoffs/2026-10-18-framextv-kodi-subtitles.md).
+New projector-control work: [LUMA replacement remote](session-handoffs/2026-10-18-luma-remote.md).
+Latest phone work: [Android handoff and no-scroll remote](session-handoffs/2026-10-18-phone-handoff.md).
+Current: [saved setup/background controls](session-handoffs/2026-10-18-phone-background-settings.md).
 
 ## Outcome
 
@@ -103,9 +106,10 @@ LUMA Kodi 21.2 now plays the actual frameXTV HLS and Portuguese subtitles.
 All 19 tracks are available, with Portuguese first and English next in the Mac
 menu; one displays at a time. Use `npm run kodi` and
 [manual instructions](../../tests/manual-kodi.md). Investigate the observed HLS
-stop after rapid pause/seek/resume, then make batch import and a phone sender
-usable. Perform actual phone-power-off, reconnect and expiry acceptance.
-Model/Android remain unknown; no phone app exists yet.
+stop after rapid pause/seek/resume. The Android sender now implements all-track
+handoff and a no-scroll combined remote; install its debug APK and perform actual
+Samsung capture/playback, phone-power-off, reconnect and expiry acceptance.
+Model/Android remain unknown. See [setup](../../android/README.md).
 
 Use [the physical-device checklist](../../tests/manual-chromecast.md) first with
 the public demo, then the site's own native Cast control in uninstrumented Chrome.
@@ -118,7 +122,7 @@ or receiver error before proposing a custom receiver/authorized relay.
 Chrome's manual **Cast → Sources → Cast tab** is a documented mirroring fallback,
 not an extension-native mode. It does not satisfy independent receiver retrieval.
 
-Suggested next prompt: “Continue from Kodi's confirmed frameXTV HLS and
-Portuguese subtitles. Make source plus all-track handoff a normal controller
-flow, investigate HLS seeking, then build the Android sender and prove playback
-after full phone shutdown. Keep active URLs and credentials out of Git.”
+Suggested next prompt: “Install the built Android phone prototype and test live
+frameXTV → Kodi launch → all subtitles → Portuguese → combined remote, then
+power the phone off and verify continued playback. Resolve actual phone/device
+failures before adding touchpad, boot launch or other receiver adapters.”

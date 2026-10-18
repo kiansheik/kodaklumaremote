@@ -42,8 +42,9 @@ Primary sources: [Google Cast overview](https://developers.google.com/cast/docs/
    Any optional mirroring is a distinct mode and does not satisfy this goal.
 
 The [Android CAF SDK](https://developers.google.com/cast/docs/android_sender)
-is the natural Cast controller for the user's Android phone. No Android app/APK
-has been implemented or installed in this increment. A Chrome Native Messaging
+is the natural Cast controller for the user's Android phone. The first
+[Android app](phone-app.md) now implements LUMA/Kodi, with physical phone
+acceptance still pending; a generic Cast adapter is not implemented. A Chrome Native Messaging
 helper on Mac would still need a real supported transport; it does not turn
 Miracast into independent media retrieval.
 
@@ -54,7 +55,7 @@ there is no automatic extension-to-Kodi connection. **Copy subtitle list** expos
 all declared track descriptors, but batch-import UI is still missing. The tested
 episode had 19 registered tracks, with Portuguese (Brazil) selected and confirmed
 visible; English follows Portuguese in the Mac selector. Only one track displays
-at a time. This controller does not substitute for the future phone app. Kodi
+at a time. This desktop controller is separate from the implemented phone prototype. Kodi
 uses a different transport from Google Cast; both can be adapters behind source
 selection.
 

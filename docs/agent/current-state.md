@@ -14,7 +14,7 @@ Cast UI. A separate ordinary HTTPS demo uses the same controller with a public
 Big Buck Bunny MP4. No SDK injection, relay, auth/DRM bypass, telemetry, or media
 bundling is part of the extension.
 
-Latest validation: build and 60 Node tests passed; browser coverage is 25
+Cast/Kodi validation: build and 60 Node tests passed; browser coverage is 25
 loaded-MV3 extension tests plus seven Kodi UI tests. Full check passed at 55 Node
 and 32 browser tests; subsequent Node and narrow Kodi runs cover the final
 media-scoped label registry and subtitle sorting. A final build and native-Cast
@@ -96,8 +96,66 @@ Kodi's own menu. Batch import is currently an API-driven test procedure, not a
 controller UI feature. See [Kodi evidence](../../tests/manual-kodi.md) and the
 [latest handoff](session-handoffs/2026-10-18-framextv-kodi-subtitles.md).
 
-No generic Google Cast target-source LOAD, long-term source expiry, mobile app
-or full phone-off acceptance is established. TV-side generic Cast app availability is
+No generic Google Cast target-source LOAD, long-term source expiry, physical
+mobile playback or full phone-off acceptance is established. TV-side generic Cast app availability is
 unknown. System Settings computer access was unavailable, so macOS local-network
 permission was not inspected or changed. Chrome debug internals were disabled
 and were not enabled. No anti-debugging/auth/DRM bypass was performed.
+
+LUMA remote follow-up: user requested a replacement for the slow Kodak phone
+remote and eventual Kodi startup. Static REA6.7.0/JADX analysis of archived
+`com.caglobal.kodakluma` v1.0.116 recovered raw TCP8121 controls, UDP48689
+discovery, key/text/app-list/launch frames. New `npm run luma` serves a responsive
+browser remote at127.0.0.1:4176 with a loopback-only socket bridge; an ordinary
+website cannot directly use these sockets. The archived third-party APK was not
+installed/executed and Codex configuration was not changed. See
+[protocol/evidence](luma-remote.md).
+
+Physical acceptance: feature/pairing replies identified Kodak Luma and no
+configured password. Firmware ignores optional `getServerInfo`, which is now
+omitted. Actual app inventory contained23 entries including Kodi. Browser
+**Open Kodi** was user-confirmed; Kodi HTTP was refused before launch and
+identified21.2 afterward. Right/Left navigation was also explicitly confirmed.
+Volume status returned6/30; volume changes and text rendering are not physically
+confirmed. Discovery initially discarded the versioned `ECloudBox516` signature;
+after correcting the parser, the normal browser **Find projector** window found
+the receiver. Search is bounded2.5seconds once its service is available; cold
+boot/service startup delay has not been eliminated or benchmarked.
+
+Controls do not change startup/default launcher.
+Transport/HTTP/discovery and browser tests are recorded in the
+[remote handoff](session-handoffs/2026-10-18-luma-remote.md).
+
+Android phone sender now implemented: separate browser/local-control WebViews,
+native LUMA/Kodi adapter, user-triggered frameXTV source capture, Kodi launch/
+readiness, sequential all-subtitle registration, PT-BR then English selection
+and combined Remote. Phone UI is no-scroll with primary playback/volume/D-pad
+and separate Browse/Devices, subtitle/typing/app panels. Native per-attempt
+tokens revoke queued mutations on Cancel/source change; retry distinguishes
+proved-unsent subtitle adds from uncertain receiver outcomes.
+
+Final build passed,109 Node tests and54 browser tests passed. Native Android
+fixtures passed8/8 and packaged UI smoke passed4/4, including no-scroll320×592
+and native token lifecycle/bridge isolation. The debug APK is built locally;
+emulator fixture validation is recorded in
+the [initial phone handoff](session-handoffs/2026-10-18-phone-handoff.md). The
+baseline APK was subsequently installed on Samsung Android16; the user confirmed
+projector connection/control. Phone media/subtitles and full phone-off remain
+unaccepted.
+The [phone app](phone-app.md) and [Android README](../../android/README.md) explain
+build/setup and remaining tests. Touchpad, reverse-screen and automatic boot
+remain unimplemented. A bounded 220-review Google Play sample is documented in
+[review findings](luma-review-findings.md); complaint counts are not usage data.
+
+Subsequent phone request: foreground ConnectionService owns native I/O and
+MediaSession notification/lock-screen controls. User explicitly authorized
+saved login: SettingsStore encrypts validated Kodi credentials with Android
+Keystore/AES-GCM and caches the verified private receiver address. Visible-app
+retries use cache then bounded discovery; secondary Settings provides rescan and
+scoped wipe. UI now has corner Home/Back, compact red/green status, volume slider
+and ±. First setup opens/authenticates Kodi before saving and continuing Cast.
+Current checks/phone boundary:
+[background/settings handoff](session-handoffs/2026-10-18-phone-background-settings.md).
+Final0.2.0 installed on phone. Build,109 Node/65 browser checks,8 native backend,
+4 service,5 packaged UI and5 Keystore settings checks passed. Live updated phone
+Cast/Portuguese, lock-screen controls and full phone-off remain pending.

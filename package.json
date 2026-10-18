@@ -12,7 +12,9 @@
     "demo": "node scripts/demo-server.mjs",
     "smoke:cast": "node scripts/public-cast-smoke.mjs",
     "discover:tv": "node scripts/discover-tv.mjs",
-    "kodi": "node scripts/kodi-controller.mjs"
+    "kodi": "node scripts/kodi-controller.mjs",
+    "luma": "node scripts/luma-controller.mjs",
+    "build:mobile": "node scripts/build-mobile.mjs"
   },
   "devDependencies": {
     "@playwright/test": "1.64.0",
