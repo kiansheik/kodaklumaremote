@@ -8,7 +8,8 @@
 // kodi.addSubtitle(track, options); kodi.setSubtitle(index|'off', options);
 // remote.ready(result, options). Every options object includes AbortSignal.
 // addSubtitle options.onNotSent() may report explicit proof that this request
-// never reached Kodi, including a late native pre-write rejection after abort.
+// was never applied or queued, including a verified Kodi rejection or a late
+// native pre-write rejection after abort.
 // Cancellation or a timeout alone is not proof and must never call onNotSent.
 // options.phase is 'handoff' or 'remote'. A cold-start Open retry also includes
 // onlyIfInactive:true; its adapter must reject if any video became active before
@@ -37,7 +38,7 @@ export class HandoffError extends Error {
 }
 
 function fail(code) { return new HandoffError(code); }
-const TRANSIENT_ADAPTER_CODES = new Set(['KODI_UNAVAILABLE', 'TIMEOUT', 'BUSY', 'KODI_RESPONSE']);
+const TRANSIENT_ADAPTER_CODES = new Set(['KODI_UNAVAILABLE', 'TIMEOUT', 'BUSY', 'KODI_RESPONSE', 'KODI_REJECTED']);
 function safeText(value, limit) { return typeof value === 'string' ? value.replace(/[\u0000-\u001f\u007f-\u009f]/gu, '').slice(0, limit) : ''; }
 function sourceUrl(value) {
   if (typeof value !== 'string' || /[\s\u0000-\u001f\u007f\\|]/u.test(value)) throw fail('INVALID_MEDIA');
@@ -158,7 +159,7 @@ export function createHandoffCoordinator({
       check(ctx);
       const fixed = fail('ADAPTER_FAILED');
       fixed.retryable = typeof error?.code !== 'string' || TRANSIENT_ADAPTER_CODES.has(error.code);
-      if (error?.code === 'SOURCE_CHANGED') fixed.adapterCode = 'SOURCE_CHANGED';
+      if (error?.code === 'SOURCE_CHANGED' || error?.code === 'KODI_REJECTED') fixed.adapterCode = error.code;
       throw fixed;
     } finally {
       clearTimeout(timer);
@@ -284,6 +285,7 @@ export function createHandoffCoordinator({
     const pending = { url: track.url, before: new Set(snapshot.tracks.map(item => item.index)), invoked: false };
     cache.pending = pending;
     const window = stage(ctx, settings.subtitle, 'SUBTITLE_TIMEOUT');
+    let rejected;
     try {
       await call(ctx, options => {
         pending.invoked = true;
@@ -297,10 +299,11 @@ export function createHandoffCoordinator({
       }, window);
     } catch (error) {
       if (error.code !== 'ADAPTER_FAILED' || error.retryable !== true) throw error;
+      rejected = error;
       // A transport/response failure may follow a successful AddSubtitle write.
       // Observe its result once within the registration window; never resend it.
     }
-    if (!pending.invoked) throw fail('ADAPTER_FAILED');
+    if (!pending.invoked) throw rejected || fail('ADAPTER_FAILED');
     const registration = stage(ctx, settings.subtitle, 'SUBTITLE_TIMEOUT');
     snapshot = await subtitles(ctx, registration);
     return finishPending(ctx, cache, snapshot, registration);

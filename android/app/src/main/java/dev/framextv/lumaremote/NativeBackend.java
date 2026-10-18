@@ -6,6 +6,7 @@ import android.os.SystemClock;
 import android.util.Base64;
 import org.json.JSONArray;
 import org.json.JSONObject;
+import org.json.JSONTokener;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -95,6 +96,7 @@ public final class NativeBackend {
             case "KODI_AUTH": message = "Kodi rejected the username or password."; break;
             case "KODI_UNAVAILABLE": message = "Could not reach Kodi. Open Kodi and check HTTP control and your home network."; break;
             case "KODI_RESPONSE": message = "Kodi did not accept this control command."; break;
+            case "KODI_REJECTED": message = "Kodi rejected this request before it could be applied. Try casting again."; break;
             case "NO_VIDEO": message = "Kodi has no active video. Start a video first."; break;
             case "SOURCE_CHANGED": message = "The video source changed. Choose Cast again before controlling this video."; break;
             case "INVALID_MEDIA": message = "The page does not expose a supported public HTTP media source."; break;
@@ -297,7 +299,12 @@ public final class NativeBackend {
             tcpWrite("MediaControl\r\nsetVolume " + level + "\r\n\r\n", true);
             return lumaAction("status", new JSONObject());
         }
-        if ("key".equals(action)) {
+        if ("powerOff".equals(action)) {
+            if (!Boolean.TRUE.equals(params.opt("confirmed"))) throw fail("INVALID_INPUT");
+            // Original Kodak app's confirmed power dialog sends this exact EShare key.
+            // The receiver decides standby/shutdown behavior; this is a send receipt only.
+            tcpWrite("KEYEVENT\r\n26\r\n\r\n", true);
+        } else if ("key".equals(action)) {
             String named = text(params, "key", 32);
             Integer key = KEYS.get(named); if (key == null) throw fail("INVALID_INPUT");
             if (params.has("expectedSourceUrl") && (named.equals("volume-up") || named.equals("volume-down") || named.equals("mute"))) {
@@ -384,13 +391,39 @@ public final class NativeBackend {
             int id = ++rpcId; byte[] body = object("jsonrpc", "2.0", "id", id, "method", method, "params", params).toString().getBytes(StandardCharsets.UTF_8);
             connection.setFixedLengthStreamingMode(body.length);
             try (OutputStream stream = connection.getOutputStream()) { if (mutation) guard(); stream.write(body); }
-            int status = connection.getResponseCode(); if (status == 401 || status == 403) throw fail("KODI_AUTH"); if (status != 200) throw fail("KODI_RESPONSE");
+            int status = connection.getResponseCode();
+            if (status != 200) android.util.Log.i("LumaKodi", method + " HTTP_" + status);
+            if (status == 401 || status == 403) throw fail("KODI_AUTH"); if (status != 200) throw fail("KODI_RESPONSE");
             if (connection.getContentLength() > MAX_REPLY) throw fail("KODI_RESPONSE");
             ByteArrayOutputStream out = new ByteArrayOutputStream(); byte[] chunk = new byte[4096];
             try (InputStream stream = connection.getInputStream()) { int count; while ((count = stream.read(chunk)) >= 0) { if (out.size() + count > MAX_REPLY) throw fail("KODI_RESPONSE"); out.write(chunk, 0, count); } }
-            JSONObject reply = new JSONObject(decode(out.toByteArray()));
+            JSONObject reply;
+            try {
+                JSONTokener json = new JSONTokener(decode(out.toByteArray())); Object value = json.nextValue();
+                if (!(value instanceof JSONObject) || json.nextClean() != 0) throw fail("KODI_RESPONSE");
+                reply = (JSONObject) value;
+            }
+            catch (Exception invalid) { android.util.Log.i("LumaKodi", method + " MALFORMED_JSON"); throw fail("KODI_RESPONSE"); }
             Object replyId = reply.opt("id");
-            if (!"2.0".equals(reply.opt("jsonrpc")) || !(replyId instanceof Number) || ((Number) replyId).doubleValue() != id || !reply.has("result") || reply.has("error")) throw fail("KODI_RESPONSE");
+            if (!"2.0".equals(reply.opt("jsonrpc")) || !(replyId instanceof Number) || ((Number) replyId).doubleValue() != id) {
+                android.util.Log.i("LumaKodi", method + " INVALID_ENVELOPE"); throw fail("KODI_RESPONSE");
+            }
+            if (reply.has("error")) {
+                JSONObject error = reply.optJSONObject("error"); Object code = error == null ? null : error.opt("code");
+                if (!reply.has("result") && error != null && error.opt("message") instanceof String && code instanceof Number
+                        && ((Number) code).doubleValue() == ((Number) code).intValue()) {
+                    int number = ((Number) code).intValue();
+                    // Fixed method + numeric status only: never log receiver messages, URLs or credentials.
+                    android.util.Log.i("LumaKodi", method + " RPC_ERROR_" + number);
+                    boolean receipt = "Player.AddSubtitle".equals(method) || "Player.Open".equals(method);
+                    // Kodi21.2 rejects these before dispatch; AddSubtitle's FailedToExecute
+                    // also precedes appPlayer->AddSubtitle. Other errors remain uncertain.
+                    if (receipt && (number == -32601 || number == -32602 || number == -32099
+                            || ("Player.AddSubtitle".equals(method) && number == -32100))) throw fail("KODI_REJECTED");
+                }
+                throw fail("KODI_RESPONSE");
+            }
+            if (!reply.has("result")) throw fail("KODI_RESPONSE");
             return reply.get("result");
         } catch (BackendException failure) {
             android.util.Log.i("LumaKodi", method + " " + failure.code);

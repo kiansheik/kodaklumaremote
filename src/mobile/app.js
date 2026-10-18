@@ -19,6 +19,7 @@ const errors = {
   KODI_AUTH: 'Kodi did not accept the username or password. Check the Kodi connection details.',
   KODI_UNAVAILABLE: 'Could not reach Kodi. Open Kodi and check its HTTP control setting.',
   KODI_RESPONSE: 'Kodi did not accept this control command. Try refreshing playback.',
+  KODI_REJECTED: 'Kodi rejected this request before it could be applied. Try casting again.',
   NO_VIDEO: 'Kodi has no active video. Choose a video in Browse first.',
   INVALID_MEDIA: 'The page did not expose a supported video. Open its player and try Cast again.',
   INVALID_SUBTITLE: 'Choose an available subtitle track or turn subtitles off.',
@@ -118,7 +119,7 @@ function rpc(method, params = {}, { signal, timeoutMs = 10000, onNotSent } = {})
     item = {
       receiptOnly: false,
       resolve: result => { remove(); resolve(result); },
-      reject: code => { if (mutationReceipt && code === 'SOURCE_CHANGED') notSent(); remove(); reject(fixedError(code)); },
+      reject: code => { if (mutationReceipt && ['SOURCE_CHANGED', 'KODI_REJECTED'].includes(code)) notSent(); remove(); reject(fixedError(code)); },
     };
     pending.set(id, item);
     signal?.addEventListener('abort', abort, { once: true });
@@ -165,6 +166,7 @@ function deviceStep(name) {
 }
 function closeSheet() {
   $('#sheet').hidden = true;
+  $('#power-backdrop').hidden = true;
   state.sheet = null;
   $('#sheet-message').hidden = true;
   returnFocus?.focus();
@@ -172,11 +174,14 @@ function closeSheet() {
 function sheet(name) {
   if ($('#sheet').hidden) returnFocus = document.activeElement;
   state.sheet = name;
+  $('#sheet').dataset.panel = name;
+  $('#power-backdrop').hidden = name !== 'power';
   $('#sheet-message').hidden = true;
   $('#sheet').hidden = false;
   for (const panel of document.querySelectorAll('.sheet-panel')) panel.hidden = panel.id !== `panel-${name}`;
-  $('#sheet-title').textContent = { settings: 'Configuration', reset: 'Forget saved setup', more: 'More controls', typing: 'Type on the projector', apps: 'Your apps', subtitles: 'Subtitles', seek: 'Go to time', handoff: state.setupFlow ? 'Set up Kodi' : 'Start casting' }[name];
+  $('#sheet-title').textContent = { settings: 'Configuration', reset: 'Forget saved setup', power: 'Turn off the projector?', more: 'More controls', typing: 'Type on the projector', apps: 'Your apps', subtitles: 'Subtitles', seek: 'Go to time', handoff: state.setupFlow ? 'Set up Kodi' : 'Start casting' }[name];
   $('#close-sheet').focus();
+  if (name === 'power') $('#cancel-power').focus();
   if (name === 'typing') $('#remote-text').focus();
   if (name === 'seek') {
     $('#seek-range').max = String(Math.max(1, state.playback?.durationSeconds || 1));
@@ -211,6 +216,8 @@ function renderControls() {
     $('#volume-up').disabled ||= state.volume.current >= state.volume.max;
   }
   $('#settings-disconnect').disabled = !luma;
+  $('#show-power').disabled = !luma;
+  $('#confirm-power').disabled = !luma;
   for (const button of $('#panel-settings').querySelectorAll('button:not(#settings-disconnect)')) button.disabled = !free;
   for (const button of document.querySelectorAll('[data-reset]')) button.disabled = !free;
   $('#play-toggle').disabled = !active;
@@ -382,7 +389,7 @@ async function command(method, params, success, consume) {
       page('devices');
       deviceStep('kodi');
     }
-    message(error.message, true);
+    message(errors[error.adapterCode] || error.message, true);
     return false;
   } finally {
     state.busy = false;
@@ -483,7 +490,7 @@ async function startCasting() {
   } catch (error) {
     cancelNative(jobToken);
     if (id !== flowId) return;
-    const text = state.sourceChanged ? errors.SOURCE_CHANGED : state.setupError?.message || error.message;
+    const text = state.sourceChanged ? errors.SOURCE_CHANGED : state.setupError?.message || errors[error.adapterCode] || error.message;
     reportStatus(error.code === 'CANCELLED' ? 'cancelled' : 'error', state.setupError?.code || error.code);
     if (state.setupError) {
       state.configured = false;
@@ -857,6 +864,13 @@ for (const kind of ['apps', 'subtitles']) {
   for (const [direction, delta] of [['previous', -1], ['next', 1]]) $(`#${kind}-${direction}`).addEventListener('click', () => { state[kind === 'apps' ? 'appPage' : 'subtitlePage'] += delta; kind === 'apps' ? renderApps() : renderTracks(); });
 }
 $('#close-sheet').addEventListener('click', closeSheet);
+$('#show-power').addEventListener('click', () => sheet('power'));
+$('#cancel-power').addEventListener('click', closeSheet);
+$('#power-backdrop').addEventListener('click', closeSheet);
+$('#confirm-power').addEventListener('click', async () => {
+  if (state.sheet !== 'power' || !state.connected || state.busy || state.handoff) return;
+  if (await command('luma.powerOff', { confirmed: true }, 'Power command sent.')) closeSheet();
+});
 $('#cancel-handoff').addEventListener('click', () => { if (state.setupFlow) state.autoStart = false; state.flowController?.abort(); coordinator.cancel(); cancelNative(state.jobToken); });
 $('#retry-handoff').addEventListener('click', startCasting);
 document.addEventListener('keydown', event => {

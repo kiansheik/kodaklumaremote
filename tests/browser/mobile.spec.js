@@ -70,6 +70,7 @@ async function openApp(page, initialSnapshot = null) {
         case 'device.disconnect': return { connected: false };
         case 'kodi.configure': return { configured: true };
         case 'luma.launchKodi': case 'luma.key': case 'luma.launchApp': return { accepted: true };
+        case 'luma.powerOff': return { accepted: true };
         case 'luma.setVolume': receiver.volume = receiver.observedVolume ?? params.value; return { connected: true, volume: { current: receiver.volume, max: 30 } };
         case 'luma.status': return { connected: true, volume: { current: receiver.volume, max: 30 } };
         case 'luma.apps': return { apps: Array.from({ length: 12 }, (_, index) => ({ packageName: `test.app${index}`, label: index === 0 ? '<img src=x onerror="window.appExecuted=true">' : `App ${index}` })) };
@@ -96,6 +97,10 @@ async function openApp(page, initialSnapshot = null) {
       }
       if (request.method === 'kodi.addSubtitle' && receiver.failSubtitle) {
         window.LumaRPC.receive({ id: request.id, ok: false, error: { code: typeof receiver.failSubtitle === 'string' ? receiver.failSubtitle : 'INVALID_SUBTITLE', message: 'private-subtitle-token' } });
+        return;
+      }
+      if (request.method === 'kodi.open' && receiver.failOpen) {
+        window.LumaRPC.receive({ id: request.id, ok: false, error: { code: receiver.failOpen, message: 'private-source-token' } });
         return;
       }
       if (request.method === 'kodi.getSubtitles' && receiver.failSubtitleAuth) {
@@ -801,6 +806,35 @@ test('an uncertain subtitle Add waits within its bound then releases controls wi
   await expect(page.locator('body')).not.toContainText('private-subtitle-token');
 });
 
+for (const rejectedMethod of ['kodi.open', 'kodi.addSubtitle']) {
+  test(`a verified ${rejectedMethod} rejection reports promptly and retries only after Try again`, async ({ page }) => {
+    await openApp(page); await setup(page);
+    await page.evaluate(method => {
+      window.__receiver[method === 'kodi.open' ? 'failOpen' : 'failSubtitle'] = 'KODI_REJECTED';
+    }, rejectedMethod);
+    await page.evaluate(value => window.LumaApp.onCapturedMedia(value), media);
+    await expect(page.locator('#handoff-label')).toHaveText('Kodi rejected this request before it could be applied. Try casting again.');
+    await expect(page.getByRole('button', { name: 'Try again', exact: true })).toBeEnabled();
+    let calls = await page.evaluate(() => window.__calls);
+    expect(calls.filter(call => call.method === rejectedMethod)).toHaveLength(1);
+    expect(calls.filter(call => call.method === 'app.handoffReady')).toHaveLength(0);
+    expect(await page.evaluate(() => window.__receiver.tracks.length)).toBe(0);
+    await page.evaluate(() => { window.__receiver.failOpen = null; window.__receiver.failSubtitle = false; });
+    await page.getByRole('button', { name: 'Try again', exact: true }).click();
+    await expect(page.locator('#message')).toHaveText('Ready on the projector. You can use the remote.');
+    calls = await page.evaluate(() => window.__calls);
+    expect(calls.filter(call => call.method === rejectedMethod)).toHaveLength(2);
+    expect(calls.filter(call => call.method === 'kodi.open')).toHaveLength(rejectedMethod === 'kodi.open' ? 2 : 1);
+    expect(calls.filter(call => call.method === 'kodi.addSubtitle')).toHaveLength(rejectedMethod === 'kodi.addSubtitle' ? 2 : 1);
+    expect(calls.filter(call => call.method === 'app.handoffReady')).toHaveLength(1);
+    const attempts = calls.filter(call => call.method === rejectedMethod);
+    expect(attempts[0].params.sourceToken).not.toBe(attempts[1].params.sourceToken);
+    expect(await page.evaluate(() => ({ tracks: window.__receiver.tracks.length, selected: window.__receiver.currentIndex, playing: window.__receiver.playing }))).toEqual({ tracks: 1, selected: 0, playing: true });
+    await expect(page.locator('body')).not.toContainText('private-source-token');
+    await expect(page.locator('body')).not.toContainText('private-subtitle-token');
+  });
+}
+
 test('initial subtitle selection falls back to English when Brazilian Portuguese is absent', async ({ page }) => {
   await openApp(page); await setup(page);
   await page.evaluate(value => window.LumaApp.onCapturedMedia({ ...value, tracks: value.tracks.filter(track => track.language !== 'pt-BR') }), media);
@@ -810,4 +844,59 @@ test('initial subtitle selection falls back to English when Brazilian Portuguese
   const remote = calls.find(call => call.method === 'app.handoffReady').params.remote;
   expect(remote.catalog).toHaveLength(5);
   expect(remote.selectedIndex).toBe(0);
+});
+
+test('projector power requires confirmation, defaults to Cancel and dismisses without commands', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 592 });
+  await openApp(page);
+  await page.getByRole('tab', { name: 'Remote', exact: true }).click();
+  const power = page.getByRole('button', { name: 'Power off projector', exact: true });
+  await expect(power).toBeDisabled();
+  await layout(page);
+  await page.getByRole('tab', { name: 'Devices', exact: true }).click();
+  await setup(page);
+  const snapshot = serviceSnapshot();
+  snapshot.remote.media.title = 'Restored household episode — a very long episode title for a small phone';
+  await page.evaluate(value => window.LumaApp.onConnectionState(value), snapshot);
+  await expect(page.locator('#media-title')).toHaveText(snapshot.remote.media.title);
+  await expect(power).toBeEnabled();
+  await layout(page);
+  await expect(page.getByRole('button', { name: 'Home', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Back', exact: true })).toBeVisible();
+  for (const dismiss of ['cancel', 'escape', 'backdrop']) {
+    await power.click();
+    await expect(page.getByRole('dialog', { name: 'Turn off the projector?' })).toBeVisible();
+    await expect(page.locator('#panel-power')).toContainText('This will interrupt playback.');
+    await expect(page.getByRole('button', { name: 'Cancel', exact: true })).toBeFocused();
+    await layout(page);
+    if (dismiss === 'cancel') await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+    else if (dismiss === 'escape') await page.keyboard.press('Escape');
+    else await page.locator('#power-backdrop').click({ position: { x: 1, y: 1 } });
+    await expect(page.locator('#sheet')).toBeHidden();
+    await expect(power).toBeFocused();
+  }
+  expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'luma.powerOff'))).toHaveLength(0);
+  expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'luma.key'))).toHaveLength(0);
+});
+
+test('Turn off sends exactly one confirmed power request and disables on connection loss', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 592 });
+  await openApp(page); await setup(page);
+  const power = page.getByRole('button', { name: 'Power off projector', exact: true });
+  await page.evaluate(() => { window.__receiver.holdMethod = 'luma.powerOff'; });
+  await power.click();
+  const confirm = page.getByRole('button', { name: 'Turn off', exact: true });
+  await confirm.click();
+  await expect(confirm).toBeDisabled();
+  expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'luma.powerOff').map(call => call.params))).toEqual([{ confirmed: true }]);
+  await page.evaluate(() => window.__release());
+  await expect(page.locator('#sheet')).toBeHidden();
+  await expect(page.locator('#message')).toHaveText('Power command sent.');
+  await power.click();
+  await page.evaluate(() => window.LumaApp.onConnectionState({ connection: { connected: false, configured: false } }));
+  await expect(confirm).toBeDisabled();
+  await expect(power).toBeDisabled();
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await layout(page);
+  expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'luma.powerOff'))).toHaveLength(1);
 });

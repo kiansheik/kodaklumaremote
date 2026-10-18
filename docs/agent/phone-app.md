@@ -4,7 +4,8 @@ Implemented on 2026-10-18 after actual Mac-controlled frameXTV playback and
 Portuguese subtitles were confirmed on LUMA Kodi 21.2. A baseline debug APK was
 installed on the Samsung phone running Android 16. The user confirmed live
 phone casting with picture, sound and Portuguese subtitles. Background/system
-control presentation and phone-off acceptance remain pending.
+controls on the notification shade and lock screen were user-confirmed on0.2.2.
+Cold-start/subtitle regressions and phone-off acceptance remain open.
 
 ## Runtime path
 
@@ -32,6 +33,13 @@ red/green indicator shows connection state. Browse is a separate bottom tab.
 After valid setup, configuration moves behind Settings instead of remaining a
 primary Devices tab.
 More holds text entry, installed apps, seek, explicit Stop and Kodi launch.
+The main Remote has a Power icon beside Choose video. Its confirmation focuses
+Cancel; Cancel, Escape, backdrop dismissal and connection loss send nothing.
+Turn off sends one dedicated `luma.powerOff` request with a literal confirmation.
+The native adapter uses the original Kodak client's confirmed KEYEVENT26 flow,
+then tears down local controls and pauses reconnect while retaining saved setup.
+This acknowledges sending a power command; standby versus shutdown still needs
+physical acceptance on this firmware.
 Language/app lists use search and three-item pages. Keyboard-sized layouts keep
 the active form usable; drafts survive recoverable errors. These control
 priorities follow the household's workflow. Review complaint counts are not
@@ -63,6 +71,11 @@ Subtitle readiness/registration reads have bounded30-second windows, sized for
 native operations that can contain multiple HTTP requests. Transient reads
 retry; authentication, validation and source errors fail promptly. An uncertain
 Add response is reconciled against actual indices without resending the Add.
+An exact, validated Kodi JSON-RPC rejection known to precede Open/Add dispatch
+now clears the uncertain-write receipt and permits an explicit later Retry.
+Malformed, mismatched-ID, internal/unknown errors and transport failures keep
+their uncertain outcome and cannot authorize duplicate writes. Native diagnostics
+include only fixed methods/categories and numeric HTTP/RPC codes.
 
 ## Saved first setup
 
@@ -104,8 +117,8 @@ The manifest declares the corresponding foreground-service permissions and
 `CHANGE_WIFI_MULTICAST_STATE`. The app requests notification permission on
 Connect where required.
 
-An ongoing notification provides Play/Pause and **Stop video** when the
-remembered source matches observed Kodi playback, plus **Disconnect**. A
+An ongoing notification provides **Volume − / Play-Pause / Volume +** when the
+remembered source matches observed Kodi playback. A
 [`MediaSession`](https://developer.android.com/reference/android/media/session/MediaSession)
 publishes observed playback state for Android’s
 [system media-control surfaces](https://developer.android.com/media/implement/surfaces/mobile),
@@ -114,8 +127,12 @@ target. The ordinary foreground notification keeps source-bound playback buttons
 when verified; a separate MediaStyle card feeds system media/lock-screen surfaces.
 An ordinary connection notification remains available before casting. Android 12+
 requests immediate foreground notification presentation. Presentation depends on
-Android/Samsung settings; actual phone display and actions still need
-acceptance. Source/revision guards prevent an old notification from controlling
+Android/Samsung settings; the user confirmed both surfaces display working
+Play/Pause on0.2.2. The first two MediaSession custom slots now provide volume
+−/+, with Stop/Disconnect following on expanded media surfaces and in the app.
+Distinct projector/playback/volume icons and observed volume in the subtitle
+improve recognition. Volume changes read the receiver back immediately.
+Source/revision guards prevent an old notification from controlling
 a different video. Notification updates coalesce the latest snapshot/revision,
 post at most once per second and skip unchanged visible content; media-session
 state updates immediately.
@@ -137,17 +154,17 @@ never silently retargeted. The complete website language catalog returns after
 another capture/handoff; its URLs remain memory-only.
 Receiver playback remains independent of this control service and uses no Mac.
 
-Validation: **27 mobile browser cases** pass, including first authentication,
+Validation includes first authentication,
 saved setup, reset/rescan, volume commits, cancelled setup preventing auto-Cast,
 restoration without replay, preserved drafts and notification-open navigation.
-Current checks passed128 Node and the full70 browser cases, including27 mobile.
-Updated native service4 and packaged UI5 checks passed.
-Version0.2.2/code4 is installed on Samsung. Two confirmed live checks exercised
-the phone's actual ordinary-notification and MediaSession Pause/Play actions;
-all four state transitions were observed and the identical source was left
-playing. Shade/lock-screen visual acceptance and S1E2 startup/subtitle retest
-remain pending. See the
-[reattachment handoff](session-handoffs/2026-10-18-phone-reattachment-readiness.md).
+The0.2.2 actual-phone checks exercised ordinary-notification and MediaSession
+Pause/Play, preserved the identical source and left it playing; user visual
+acceptance now corroborates those checks. The user subsequently reported Kodi
+exiting on the first S1E3 attempt and missing subtitles after Retry. Logs show
+Kodi becoming unavailable during subtitle preparation and AddSubtitle receiving
+a response error on Retry. Its precise cause is unconfirmed. Current0.2.3
+checks and artifact are recorded in the
+[volume/power handoff](session-handoffs/2026-10-18-phone-volume-power.md).
 
 ## Files and reproduction
 

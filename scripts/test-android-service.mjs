@@ -30,6 +30,8 @@ const tcp = net.createServer(socket => {
       if (method === 'GETPASSWORDCONFIG') socket.write('configed none\r\n\r\n');
       if (command === 'MediaControl\r\ngetVolume\r\n\r\n') socket.write(`${volume} 15\r\n\r\n`);
       if (command === 'MediaControl\r\nsetVolume 14\r\n\r\n') volume = 7;
+      if (command === 'KEYEVENT\r\n25\r\n\r\n') volume = Math.max(0, volume - 1);
+      if (command === 'KEYEVENT\r\n24\r\n\r\n') volume = Math.min(15, volume + 1);
     }
   });
 });
@@ -48,7 +50,9 @@ const kodi = http.createServer(async (request, response) => {
         }
       }
       response.writeHead(200, { 'Content-Type': 'application/json' });
-      response.end(JSON.stringify({ source: currentSource, playing, stops, mutations: mutations.length, connections, held: heldResponses.size, volumeKeys: commands.filter(command => command.startsWith('KEYEVENT\r\n')).length })); return;
+      response.end(JSON.stringify({ source: currentSource, playing, stops, volume, mutations: mutations.length, connections, held: heldResponses.size,
+        volumeKeys: commands.filter(command => /^KEYEVENT\r\n(?:24|25)\r\n\r\n$/u.test(command)).length,
+        powerCommands: commands.filter(command => command === 'KEYEVENT\r\n26\r\n\r\n').length })); return;
     }
     assert.equal(request.url, '/jsonrpc');
     if (request.headers.authorization !== `Basic ${Buffer.from('fixture:fixture').toString('base64')}`) { authRejections++; response.writeHead(401); response.end(); return; }
@@ -85,19 +89,23 @@ try {
   if (Number(sdk.trim()) >= 33) await run(adb, ['-s', serial, 'shell', 'pm', 'grant', 'dev.framextv.lumaremote', 'android.permission.POST_NOTIFICATIONS'], { timeout: 10000 });
   const { stdout, stderr } = await run(adb, ['-s', serial, 'shell', 'am', 'instrument', '-w', '-e', 'mode', 'service', '-e', 'targetHost', '10.0.2.2', '-e', 'kodiPort', String(kodi.address().port), 'dev.framextv.lumaremote.test/dev.framextv.lumaremote.BackendInstrumentation'], { timeout: 90000, maxBuffer: 128 * 1024 });
   process.stdout.write(stdout); if (stderr) process.stderr.write(stderr);
-  assert.match(stdout, /INSTRUMENTATION_RESULT: failures=0/u); assert.match(stdout, /INSTRUMENTATION_RESULT: passed=4/u); assert.match(stdout, /INSTRUMENTATION_CODE: -1/u);
-  assert.equal(connections, 2);
+  assert.match(stdout, /INSTRUMENTATION_RESULT: failures=0/u); assert.match(stdout, /INSTRUMENTATION_RESULT: passed=5/u); assert.match(stdout, /INSTRUMENTATION_CODE: -1/u);
+  assert.equal(connections, 3);
   assert.ok(authRejections >= 2);
   assert.deepEqual(commands.filter(command => command.includes('setVolume')), ['MediaControl\r\nsetVolume 14\r\n\r\n']);
-  assert.equal(volume, 7);
+  assert.equal(volume, 8);
   assert.equal(stops, 1);
   assert.equal(currentSource, FIRST); assert.equal(playing, true);
   assert.deepEqual(mutations.map(message => message.method), ['Player.Open', 'Player.PlayPause', 'Player.PlayPause', 'Player.PlayPause', 'Player.PlayPause', 'Player.Stop', 'Player.Open']);
   assert.deepEqual(mutations.filter(message => message.method === 'Player.PlayPause').map(message => message.params.play), [false, true, false, true]);
   assert.equal(mutations[6].params.item.file, FIRST);
-  assert.deepEqual(commands.filter(command => command.startsWith('KEYEVENT\r\n')), ['KEYEVENT\r\n24\r\n\r\n']);
+  assert.deepEqual(commands.filter(command => command.startsWith('KEYEVENT\r\n')), [
+    'KEYEVENT\r\n25\r\n\r\n', 'KEYEVENT\r\n24\r\n\r\n',
+    'KEYEVENT\r\n25\r\n\r\n', 'KEYEVENT\r\n24\r\n\r\n', 'KEYEVENT\r\n24\r\n\r\n',
+    'KEYEVENT\r\n26\r\n\r\n',
+  ]);
   assert.ok(commands.every(command => !/^(?:auth|CHECKPASSWORD|STARTAPPEVNET)/u.test(command)));
-  console.log('Android connection service: 4 lifecycle, dual-notification, MediaSession control and disconnect checks passed against emulator-only fixtures.');
+  console.log('Android connection service: 5 lifecycle, notification, MediaSession, disconnect and confirmed-power checks passed against emulator-only fixtures.');
 } catch (error) {
   console.error(JSON.stringify({ fixture: { connections, stops, playing, mutations: mutations.map(({ method, params }) => ({ method, ...(typeof params.play === 'boolean' ? { play: params.play } : {}) })) } }));
   throw error;

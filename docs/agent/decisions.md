@@ -170,3 +170,22 @@ Metadata reads can span multiple native HTTP requests. Give subtitle readiness
 and registration bounded30-second windows and propagate their deadlines to the
 bridge. Retry transient reads, not authentication/validation errors. An uncertain
 Add outcome is reconciled against observed indices without sending another Add.
+
+## D14: Explicit power confirmation and verified rejection receipts
+
+Use the archived Kodak client's confirmed KEYEVENT26 flow for a dedicated
+Power off control. Require a literal native confirmation as well as a phone
+dialog with Cancel focused. A send receipt disconnects/demotes local controls
+and pauses automatic reconnect, retaining saved setup. Do not infer physical
+shutdown or send power during automated actual-device checks.
+
+Only validated same-ID JSON-RPC errors known to precede dispatch may clear an
+Open/Add uncertainty receipt. Kodi21.2 schema/method/permission rejection codes
+qualify; AddSubtitle's FailedToExecute also precedes queuing. Open's generic
+FailedToExecute, internal errors, malformed responses and network failures stay
+uncertain. Recovery requires explicit Retry and never blindly duplicates a write.
+Fixed method/category and numeric status diagnostics expose no raw RPC messages.
+
+The first three ordinary/system media buttons prioritize Volume −, Play/Pause,
+Volume +. Read observed volume after relative keys and preserve exact source and
+control revision guards. Stop/Disconnect remain secondary media/app controls.

@@ -169,6 +169,11 @@ public final class ServiceInstrumentation {
         require((card.flags & Notification.FLAG_FOREGROUND_SERVICE) != 0 && Notification.CATEGORY_SERVICE.equals(card.category), "Ordinary controls do not own the foreground service");
         require(!card.extras.containsKey(Notification.EXTRA_MEDIA_SESSION) && !Notification.MediaStyle.class.getName().equals(card.extras.getString("android.template")), "Ordinary controls were published as a media card");
     }
+    private void volumeLayout(Notification card, String playback) {
+        require(card.actions != null && card.actions.length == 3, "Ordinary playback controls must have exactly three priority actions");
+        require("Volume −".contentEquals(card.actions[0].title) && playback.contentEquals(card.actions[1].title)
+                && "Volume +".contentEquals(card.actions[2].title), "Ordinary controls do not prioritize volume, playback, volume");
+    }
     private PendingIntent notificationAction(Notification notification, String title) {
         require(notification.actions != null, "Notification controls missing");
         for (Notification.Action action : notification.actions) {
@@ -195,6 +200,18 @@ public final class ServiceInstrumentation {
             Thread.sleep(100);
         }
         throw new AssertionError("MediaSession control was not observed");
+    }
+    private void waitVolume(int expected) throws Exception {
+        long end = SystemClock.elapsedRealtime() + 4000;
+        while (SystemClock.elapsedRealtime() < end) {
+            if (fixture("").getInt("volume") == expected) {
+                JSONObject observed = call("luma.status").getJSONObject("volume");
+                require(observed.getInt("current") == expected && observed.getInt("max") == 15, "Projector volume readback does not match the wire result");
+                return;
+            }
+            Thread.sleep(40);
+        }
+        throw new AssertionError("Projector volume action was not observed");
     }
     private void execute() {
         Bundle result = new Bundle();
@@ -232,8 +249,13 @@ public final class ServiceInstrumentation {
             require(observedVolume.getInt("current") == 7 && observedVolume.getInt("max") == 15, "Absolute volume did not return the receiver readback");
             Notification firstNotification = currentCard(41, "pause");
             ordinaryCard(firstNotification);
-            notificationAction(firstNotification, "pause"); notificationAction(firstNotification, "stop"); notificationAction(firstNotification, "disconnect");
+            volumeLayout(firstNotification, "Pause");
             Notification firstMedia = currentCard(42, "pause");
+            require(firstMedia.actions != null && firstMedia.actions.length == 5
+                    && "Volume −".contentEquals(firstMedia.actions[0].title) && "Pause".contentEquals(firstMedia.actions[1].title)
+                    && "Volume +".contentEquals(firstMedia.actions[2].title) && "Stop video".contentEquals(firstMedia.actions[3].title)
+                    && "Disconnect".contentEquals(firstMedia.actions[4].title)
+                    && java.util.Arrays.equals(firstMedia.extras.getIntArray(Notification.EXTRA_COMPACT_ACTIONS), new int[] {0, 1, 2}), "Media card priority and expanded actions are incorrect");
             MediaSession.Token token = service.getMediaSessionToken();
             require(token.equals(firstMedia.extras.getParcelable(Notification.EXTRA_MEDIA_SESSION)) && Notification.MediaStyle.class.getName().equals(firstMedia.extras.getString("android.template")), "Separate media card is not attached to the service MediaSession");
             PendingIntent sessionActivity = new MediaController(context, token).getSessionActivity();
@@ -255,7 +277,9 @@ public final class ServiceInstrumentation {
             require(service == original && service.snapshot().getJSONObject("connection").getBoolean("connected"), "Closing the Activity ended the background connection");
             require(fixture("").getInt("connections") == 1, "Activity lifecycle opened another projector socket");
             int beforeRestore = fixture("").getInt("mutations");
-            notificationAction(waitNotification(true), "disconnect").send(); waitNotification(false); waitCard(42, false);
+            MediaController oldController = new MediaController(context, token);
+            PlaybackState.CustomAction initialDisconnect = customAction(oldController, "disconnect");
+            oldController.getTransportControls().sendCustomAction(initialDisconnect.getAction(), initialDisconnect.getExtras()); waitNotification(false); waitCard(42, false);
             require(!service.snapshot().getJSONObject("connection").getBoolean("connected"), "Notification disconnect retained the connection");
             unbind(); runner.waitForIdleSync();
             java.lang.reflect.Field destroyed = ConnectionService.class.getDeclaredField("destroyed"); destroyed.setAccessible(true);
@@ -277,7 +301,7 @@ public final class ServiceInstrumentation {
             JSONObject adopted = service.snapshot().getJSONObject("remote");
             require(FIRST.equals(adopted.getJSONObject("media").getString("url")) && adopted.getJSONArray("tracks").length() == 0 && adopted.getJSONArray("catalog").length() == 0, "Fresh receiver playback was not adopted without old caption aliases");
             require(fixture("").getInt("mutations") == beforeRestore, "Adopting receiver playback replayed the video or changed its subtitles");
-            ordinaryCard(currentCard(41, "pause")); notificationAction(currentCard(41, "stop"), "stop"); currentCard(42, "pause");
+            ordinaryCard(currentCard(41, "pause")); volumeLayout(currentCard(41, "pause"), "Pause"); currentCard(42, "pause");
             token = service.getMediaSessionToken();
             ConnectionService restoredService = service; unbind(); finishActivity(); bind();
             require(service == restoredService, "Restored connection did not remain owned by the started service");
@@ -287,11 +311,22 @@ public final class ServiceInstrumentation {
             phase = "ordinary_pause";
             currentAction("pause").send(); waitPlaying(false);
             phase = "ordinary_play";
+            volumeLayout(currentCard(41, "play"), "Play");
             currentAction("play").send(); waitPlaying(true);
             phase = "session_pause";
             controller.getTransportControls().pause(); waitPlaying(false);
             phase = "session_play";
             controller.getTransportControls().play(); waitPlaying(true);
+            phase = "ordinary_volume";
+            currentAction("volume −").send(); waitVolume(6);
+            currentAction("volume +").send(); waitVolume(7);
+            phase = "custom_volume";
+            java.util.List<PlaybackState.CustomAction> actions = controller.getPlaybackState().getCustomActions();
+            require(actions.size() == 4 && "Volume −".contentEquals(actions.get(0).getName()) && "Volume +".contentEquals(actions.get(1).getName())
+                    && "Stop video".contentEquals(actions.get(2).getName()) && "Disconnect".contentEquals(actions.get(3).getName()), "MediaSession priority/custom action order is incorrect");
+            PlaybackState.CustomAction volumeDown = customAction(controller, "volume −"), volumeUp = customAction(controller, "volume +");
+            controller.getTransportControls().sendCustomAction(volumeDown.getAction(), volumeDown.getExtras()); waitVolume(6);
+            controller.getTransportControls().sendCustomAction(volumeUp.getAction(), volumeUp.getExtras()); waitVolume(7);
             phase = "custom_stop";
             PlaybackState.CustomAction stop = customAction(controller, "stop");
             controller.getTransportControls().sendCustomAction(stop.getAction(), stop.getExtras());
@@ -306,10 +341,12 @@ public final class ServiceInstrumentation {
             phase = "remote_volume";
             controller.adjustVolume(AudioManager.ADJUST_RAISE, 0);
             long volumeBy = SystemClock.elapsedRealtime() + 3000;
-            while (fixture("").getInt("volumeKeys") == 0 && SystemClock.elapsedRealtime() < volumeBy) Thread.sleep(40);
-            require(fixture("").getInt("volumeKeys") == 1, "Framework remote volume did not send one projector control");
+            while (fixture("").getInt("volumeKeys") < 5 && SystemClock.elapsedRealtime() < volumeBy) Thread.sleep(40);
+            require(fixture("").getInt("volumeKeys") == 5, "Framework remote volume did not send one projector control"); waitVolume(8);
             PendingIntent stalePause = currentAction("pause");
+            PendingIntent staleVolumeDown = currentAction("volume −"), staleVolumeUp = currentAction("volume +");
             PlaybackState.CustomAction staleStop = customAction(controller, "stop");
+            PlaybackState.CustomAction staleVolumeDownCustom = customAction(controller, "volume −"), staleVolumeUpCustom = customAction(controller, "volume +");
             phase = "catalog";
             require(call("app.rememberRemote", "expectedSourceUrl", FIRST, "remote", remoteUpdate()).getBoolean("accepted"), "Source-bound catalog update was rejected");
             require(service.snapshot().getJSONObject("remote").getJSONArray("catalog").getJSONObject(0).getInt("index") == 1, "Updated lazy catalog binding was not retained in RAM");
@@ -324,14 +361,20 @@ public final class ServiceInstrumentation {
             PendingCall staleCatalog = submit("app.rememberRemote", "expectedSourceUrl", FIRST, "remote", remoteUpdate());
             require(staleCatalog.ready.await(3, TimeUnit.SECONDS) && "SOURCE_CHANGED".equals(staleCatalog.failure.get()), "A stale source updated the remote catalog");
             controller.getTransportControls().pause(); controller.adjustVolume(AudioManager.ADJUST_RAISE, 0); stalePause.send();
+            staleVolumeDown.send(); staleVolumeUp.send();
+            controller.getTransportControls().sendCustomAction(staleVolumeDownCustom.getAction(), staleVolumeDownCustom.getExtras());
+            controller.getTransportControls().sendCustomAction(staleVolumeUpCustom.getAction(), staleVolumeUpCustom.getExtras());
             controller.getTransportControls().sendCustomAction(staleStop.getAction(), staleStop.getExtras()); Thread.sleep(350); call("kodi.status");
             JSONObject untouched = fixture("");
-            require(untouched.getInt("mutations") == before && untouched.getInt("volumeKeys") == 1 && untouched.getBoolean("playing") && OTHER.equals(untouched.getString("source")), "A stale media control changed another source");
+            require(untouched.getInt("mutations") == before && untouched.getInt("volumeKeys") == 5 && untouched.getInt("volume") == 8 && untouched.getBoolean("playing") && OTHER.equals(untouched.getString("source")), "A stale media control changed another source");
             phase = "stale_same_source";
             fixture("?source=first"); call("kodi.status"); remember(); runner.waitForIdleSync();
             int renewed = fixture("").getInt("mutations");
+            staleVolumeDown.send(); staleVolumeUp.send();
+            controller.getTransportControls().sendCustomAction(staleVolumeDownCustom.getAction(), staleVolumeDownCustom.getExtras());
+            controller.getTransportControls().sendCustomAction(staleVolumeUpCustom.getAction(), staleVolumeUpCustom.getExtras());
             stalePause.send(); controller.getTransportControls().sendCustomAction(staleStop.getAction(), staleStop.getExtras()); Thread.sleep(250); call("kodi.status");
-            require(fixture("").getInt("mutations") == renewed, "A stale notification retargeted a renewed handoff of the same source");
+            require(fixture("").getInt("mutations") == renewed && fixture("").getInt("volumeKeys") == 5 && fixture("").getInt("volume") == 8, "A stale notification retargeted a renewed handoff of the same source");
             passed("MediaSession controls work in background and stale notification/session controls cannot alter another source");
 
             phase = "disconnect";
@@ -356,6 +399,30 @@ public final class ServiceInstrumentation {
             require(FIRST.equals(independent.getString("source")) && independent.getBoolean("playing") && independent.getInt("stops") == stops, "Disconnect stopped receiver playback");
             require(cardsGone(), "A stale completion revived a disconnected control card");
             passed("system disconnect bypasses blocked reads, rejects queued writes and preserves receiver playback");
+
+            phase = "power_off";
+            require(call("device.connect", "host", args.getString("targetHost")).getBoolean("connected"), "Power fixture reconnect failed");
+            require(call("kodi.status").getBoolean("active"), "Power fixture did not retain independent playback");
+            currentCard(41, "pause"); currentCard(42, "pause");
+            for (Object confirmation : new Object[] {JSONObject.NULL, false, "true"}) {
+                PendingCall unconfirmed = confirmation == JSONObject.NULL ? submit("luma.powerOff") : submit("luma.powerOff", "confirmed", confirmation);
+                require(unconfirmed.ready.await(3, TimeUnit.SECONDS) && "INVALID_INPUT".equals(unconfirmed.failure.get()), "Power-off did not require explicit boolean confirmation");
+                require(service.snapshot().getJSONObject("connection").getBoolean("connected") && fixture("").getInt("powerCommands") == 0, "Rejected power-off changed the control session or wrote a power key");
+            }
+            int mutationsBeforePower = fixture("").getInt("mutations");
+            require(call("luma.powerOff", "confirmed", true).getBoolean("accepted"), "Confirmed power-off did not return its send receipt");
+            waitNotification(false); waitCard(42, false);
+            JSONObject powered = service.snapshot();
+            require(!powered.getJSONObject("connection").getBoolean("connected") && powered.getBoolean("autoConnectPaused"), "Power-off retained the control connection or automatic reconnect");
+            JSONObject savedAfterPower = settings.metadata();
+            require(savedAfterPower.getBoolean("hasReceiver") && savedAfterPower.getBoolean("hasKodi")
+                    && args.getString("targetHost").equals(settings.readReceiver().getString("host"))
+                    && "fixture".equals(settings.readKodi().getString("password")), "Power-off erased or changed the saved setup");
+            JSONObject paused = call("app.settings.autoConnect"), powerFixture = fixture("");
+            require(paused.getBoolean("paused") && !paused.getBoolean("connected") && powerFixture.getInt("connections") == 3, "Power-off immediately reconnected to the projector");
+            require(powerFixture.getInt("powerCommands") == 1 && powerFixture.getInt("mutations") == mutationsBeforePower
+                    && powerFixture.getInt("volume") == 8, "Confirmed power-off wrote extra commands or changed unrelated playback controls");
+            passed("confirmed power send tears down local controls, pauses automatic reconnect and retains saved setup");
             result.putInt("passed", checks); result.putInt("failures", 0); runner.finish(Activity.RESULT_OK, result);
         } catch (Throwable error) {
             result.putString("phase", phase); result.putInt("passed", checks); result.putInt("failures", 1); result.putString("failure", error.getClass().getSimpleName() + ": " + error.getMessage()); runner.finish(Activity.RESULT_CANCELED, result);

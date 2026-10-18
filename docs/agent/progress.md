@@ -86,3 +86,12 @@ allows realistic bounded subtitle readiness. Actual Samsung notification and
 MediaSession Pause/Play actions passed without replay. S1E2 first-attempt/PT-BR
 and shade/lock visual confirmation remain pending. See the
 [reattachment handoff](session-handoffs/2026-10-18-phone-reattachment-readiness.md).
+
+User confirmed0.2.2 shade/lock-screen Play/Pause works, but S1E3 crashed Kodi
+once and had missing subtitles after Retry.0.2.3 adds system volume −/+ with
+observed readback/icons and a main-remote confirmed Kodak power command. Known
+pre-dispatch Kodi rejections now permit explicit Retry; crash cause remains
+unconfirmed. Built/installed;130 Node and current74 browser cases are covered
+across full/narrow runs, plus9 backend/5 service/5 packaged UI checks. Actual
+new volume/power and S1E3 retest wait for the projector, confirmed OFF. Encrypted
+Kodi login remains saved. See [handoff](session-handoffs/2026-10-18-phone-volume-power.md).

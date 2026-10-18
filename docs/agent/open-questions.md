@@ -14,7 +14,10 @@
    sender. The phone now loads the preferred track first and keeps the full
    website catalog for on-demand selection. Other languages are not render-tested.
    Does lazy selection and Activity restoration pass on the actual phone?
-   Current Mac UI adds one link at a
+   S1E3 subsequently crashed Kodi on first attempt and played without subtitles
+   after Retry. The phone now distinguishes verified rejection from an unknown
+   write outcome; the receiver crash cause and fresh subtitle acceptance remain
+   open. Current Mac UI adds one link at a
    time; its physical batch test used the local API. No audio selector.
 6. Are cross-origin backup players needed? They are outside current host scope.
 7. Does wrapper/full-video fullscreen and BFCache work on real Chrome? Wrapper
@@ -43,8 +46,9 @@ confirmed on LUMA Kodi from both the Mac and Samsung sender. Full phone shutdown
 remains open. The phone user reported no visible controls in0.2.1 and repeated
 starts/missing subtitles on S1E2. Diagnostics found inactive phone media state
 after upgrade despite receiver playback, then subtitle-stage native errors and
-timeouts during new attempts. Reattachment and readiness repairs need physical
-acceptance; see the latest current-state entry.
+timeouts during new attempts. The user confirmed0.2.2 notification shade and
+lock-screen Play/Pause display/actions. S1E3 cold-start/subtitle failure still
+needs physical resolution; see the latest current-state entry.
 Why did the rapid pause/seek60/resume sequence stop this HLS? MP4 seek worked;
 target HLS seek reliability has not passed. Retest deliberately with settled
 commands before changing transport or introducing a relay.

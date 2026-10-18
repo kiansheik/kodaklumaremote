@@ -20,11 +20,11 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
-/** Explicitly confirmed live Pause/Play checks. No fixture setup, settings writes,
+/** Explicitly confirmed live Pause/Play and volume checks. No fixture setup, settings writes,
  * source opening, subtitle changes, seeks, Stop or Disconnect are permitted. */
 public final class LiveControlsInstrumentation {
     private static final long CONTROL_MS = 8000;
-    private static final long CLEANUP_MS = 45000;
+    private static final long CLEANUP_MS = 60000;
     private final Instrumentation runner;
     private final Bundle args;
     private final Context context;
@@ -33,6 +33,7 @@ public final class LiveControlsInstrumentation {
     private ServiceConnection binding;
     private boolean bound;
     private String source;
+    private int originalVolume = -1, maximumVolume = -1, volumeActionsRequested;
     private int passed;
     private String failure = "";
 
@@ -175,6 +176,56 @@ public final class LiveControlsInstrumentation {
         diagnostics.putInt("mediaStateAfter", finalState == null ? PlaybackState.STATE_NONE : finalState.getState());
         passed("media_session_pause_play");
     }
+    private int volume(long end) throws Exception {
+        exactSource(status(end));
+        JSONObject observed = request("luma.status", new JSONObject(), end).optJSONObject("volume");
+        require(observed != null && observed.optInt("max", 0) > 0 && observed.optInt("current", -1) >= 0
+                && observed.optInt("current") <= observed.optInt("max"), "LIVE_VOLUME_UNAVAILABLE");
+        if (maximumVolume < 0) maximumVolume = observed.getInt("max");
+        require(observed.getInt("max") == maximumVolume, "LIVE_VOLUME_RANGE_CHANGED");
+        return observed.getInt("current");
+    }
+    private int observedVolume(int before, boolean increase, long end) throws Exception {
+        while (SystemClock.elapsedRealtime() < end) {
+            int current = volume(end);
+            if (increase ? current > before : current < before) return current;
+            Thread.sleep(Math.min(150, Math.max(1, end - SystemClock.elapsedRealtime())));
+        }
+        throw new LiveFailure(increase ? "LIVE_VOLUME_UP_NOT_OBSERVED" : "LIVE_VOLUME_DOWN_NOT_OBSERVED");
+    }
+    private PlaybackState.CustomAction volumeAction(MediaController controller, String label, long end) throws Exception {
+        while (SystemClock.elapsedRealtime() < end) {
+            PlaybackState state = controller.getPlaybackState();
+            if (state != null) for (PlaybackState.CustomAction candidate : state.getCustomActions()) {
+                if (label.contentEquals(candidate.getName())) return candidate;
+            }
+            Thread.sleep(100);
+        }
+        throw new LiveFailure("LIVE_MEDIA_VOLUME_ACTION_MISSING");
+    }
+    private void volumeControls(boolean media) throws Exception {
+        String prefix = media ? "media" : "notification";
+        MediaController controller = media ? new MediaController(context, service.getMediaSessionToken()) : null;
+        long end = deadline(); int before = volume(end);
+        require(before > 0, "LIVE_VOLUME_BASELINE_TOO_LOW");
+        if (media) {
+            PlaybackState.CustomAction down = volumeAction(controller, "Volume −", end);
+            controller.getTransportControls().sendCustomAction(down.getAction(), down.getExtras());
+        } else action("Volume −", end).send();
+        volumeActionsRequested++;
+        int lowered = observedVolume(before, false, end);
+        diagnostics.putInt(prefix + "VolumeBefore", before); diagnostics.putInt(prefix + "VolumeAfterDown", lowered);
+        diagnostics.putBoolean(prefix + "VolumeDownObserved", true);
+        end = deadline(); exactSource(status(end));
+        if (media) {
+            PlaybackState.CustomAction up = volumeAction(controller, "Volume +", end);
+            controller.getTransportControls().sendCustomAction(up.getAction(), up.getExtras());
+        } else action("Volume +", end).send();
+        volumeActionsRequested++;
+        int raised = observedVolume(lowered, true, end);
+        diagnostics.putInt(prefix + "VolumeAfterUp", raised); diagnostics.putBoolean(prefix + "VolumeUpObserved", true);
+        passed(media ? "media_session_volume_down_up" : "ordinary_notification_volume_down_up");
+    }
     private void restorePlaying() throws Exception {
         if (source == null) return;
         require(service != null, "LIVE_SERVICE_UNAVAILABLE");
@@ -187,12 +238,32 @@ public final class LiveControlsInstrumentation {
         boolean same = playback.optBoolean("active") && source.equals(playback.optString("sourceUrl"));
         diagnostics.putBoolean("sourcePreserved", same);
         require(same, "LIVE_SOURCE_CHANGED");
+        Exception volumeFailure = null;
+        try {
+            if (originalVolume >= 0) {
+                int current = volume(end);
+                if (current != originalVolume) {
+                    diagnostics.putBoolean("cleanupVolumeRestoreAttempted", true);
+                    JSONObject restored = request("luma.setVolume", new JSONObject().put("value", originalVolume).put("expectedSourceUrl", source), end).optJSONObject("volume");
+                    require(restored != null && restored.optInt("current", -1) == originalVolume && restored.optInt("max", -1) == maximumVolume, "LIVE_VOLUME_RESTORE_FAILED");
+                }
+                int finalVolume = volume(end);
+                diagnostics.putInt("finalRawVolume", finalVolume);
+                require(finalVolume == originalVolume, "LIVE_VOLUME_RESTORE_FAILED");
+                diagnostics.putBoolean("volumeRestored", true);
+            }
+        } catch (Exception error) { volumeFailure = error; }
+        // A volume timeout must not consume the playback recovery window. This
+        // fresh FIFO read also drains a timed-out volume request before resume.
+        end = SystemClock.elapsedRealtime() + CLEANUP_MS;
+        playback = status(end); exactSource(playback);
         if (!playback.optBoolean("playing")) {
             diagnostics.putBoolean("cleanupResumeAttempted", true);
             request("kodi.resume", new JSONObject().put("expectedSourceUrl", source), end);
             observed(true, end);
         }
         diagnostics.putBoolean("finalPlaying", true);
+        if (volumeFailure != null) throw volumeFailure;
     }
     private void execute() {
         try {
@@ -203,7 +274,11 @@ public final class LiveControlsInstrumentation {
             Intent launch = new Intent(context, MainActivity.class).setAction(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
             runner.startActivitySync(launch);
-            bind(); awaitReady(); notificationControls(); mediaControls();
+            bind(); awaitReady();
+            originalVolume = volume(deadline());
+            diagnostics.putInt("startingRawVolume", originalVolume); diagnostics.putInt("rawVolumeMaximum", maximumVolume);
+            require(originalVolume > 0, "LIVE_VOLUME_BASELINE_TOO_LOW");
+            notificationControls(); mediaControls(); volumeControls(false); volumeControls(true);
         } catch (Throwable error) { failure = error instanceof LiveFailure ? ((LiveFailure) error).code : "LIVE_TEST_FAILED"; }
         finally {
             try { restorePlaying(); }
@@ -214,7 +289,8 @@ public final class LiveControlsInstrumentation {
             }
         }
         Bundle result = new Bundle(diagnostics);
-        result.putInt("tests", 2); result.putInt("passed", passed); result.putInt("failures", failure.isEmpty() ? 0 : 1); result.putString("failure", failure);
+        result.putInt("volumeActionsRequested", volumeActionsRequested);
+        result.putInt("tests", 4); result.putInt("passed", passed); result.putInt("failures", failure.isEmpty() ? 0 : 1); result.putString("failure", failure);
         runner.finish(failure.isEmpty() ? Activity.RESULT_OK : Activity.RESULT_CANCELED, result);
     }
 }

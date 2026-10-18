@@ -210,3 +210,30 @@ A single public stream did not match Kodi's current source exactly, so no Mac
 subtitle mutation was sent. Phone opened the exact S1E2 link; user asked to Cast
 once and check visual notification/lock controls. Those results remain pending.
 [Current handoff](session-handoffs/2026-10-18-phone-reattachment-readiness.md).
+
+0.2.2 user acceptance: notification-shade and lock-screen Play/Pause are visible
+and functional. S1E3 failed physically: first attempt exited Kodi to LUMA Home;
+Retry played video without subtitles. Own logs show Kodi becoming unreachable
+during subtitle preparation, then AddSubtitle KODI_RESPONSE on Retry. The crash
+cause is unconfirmed; no successful new subtitle rendering is claimed.
+
+0.2.3/code5 is built, installed and open on Samsung. Ordinary controls now
+prioritize Volume − / Play-Pause / Volume +; MediaSession volume custom actions
+come first, with Stop/Disconnect secondary. Relative volume reads the receiver
+back immediately; distinct projector/action vectors and observed volume improve
+the cards. Main Remote has a confirmed Power off icon using the archived Kodak
+app's KEYEVENT26 flow. Cancel/Escape/backdrop send nothing; accepted send tears
+down local controls, pauses reconnect and retains saved setup. Physical
+shutdown versus standby remains untested.
+
+Verified known JSON-RPC rejections now permit explicit Retry without preserving
+an impossible pending Open/Add. Unknown/malformed/mismatched/internal response
+outcomes remain protected against duplicate writes. Safe numeric HTTP/RPC
+diagnostics support the next live investigation; this is not a crash fix claim.
+130 Node passed. Full browser run73/74 exposed a long-title layout overflow;
+after its narrow fix all31 mobile cases passed, covering all74 current browser
+cases across runs. Final APK build and native Backend9/Service5/packaged UI5
+checks passed. The live phone suite sent zero controls: cached receiver was
+absent while encrypted Kodi settings remained; user confirmed projector OFF.
+Actual new volume/power and S1E3 retest remain pending. See
+[handoff](session-handoffs/2026-10-18-phone-volume-power.md).

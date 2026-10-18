@@ -39,13 +39,18 @@ seek, Kodi launch and Stop. Lists use search and pages. Cancelling casting
 revokes queued source-bound commands; commands already accepted by the receiver
 cannot be undone. Browsing another page after a successful handoff does not
 stop receiver playback.
+The Power icon on Remote opens a confirmation with Cancel focused. **Turn off**
+sends the original Kodak power command once and disconnects local controls,
+keeping saved setup. Actual standby/shutdown behavior depends on the receiver.
 
 After connecting, allow notification permission when Android asks if you want
 notification controls. Expand the ongoing LUMA notification to use
-Play/Pause, **Stop video** and **Disconnect** for the verified current source.
+**Volume − / Play-Pause / Volume +** for the verified current source.
 A separate media card and MediaSession serve Android’s lock-screen/system
-controls. Both action routes passed live Pause/Play checks on Samsung;
-their visual shade/lock-screen presentation still needs acceptance.
+controls, with Stop/Disconnect in the expanded media controls and full remote.
+Both action routes passed live Pause/Play checks on Samsung; the user confirmed
+the shade and lock-screen controls are visible and functional. Cards now show
+distinct action icons and observed projector volume after a volume press.
 **Disconnect** closes the controller connection and leaves Kodi playback alone.
 Use **Stop video** to end the video.
 
@@ -90,7 +95,7 @@ Mac loopback fixtures via `10.0.2.2`; it does not discover or contact the actual
 projector. See [phone implementation and acceptance](../docs/agent/phone-app.md)
 for recorded results and physical tests still required.
 
-For an explicitly intended live phone Pause/Play test, install both built APKs
+For an explicitly intended live phone playback/volume test, install both built APKs
 on that phone, then invoke the separate confirmed mode:
 
 ```sh
@@ -100,20 +105,20 @@ adb -s "$LUMA_PHONE_SERIAL" shell am instrument -w \
 ```
 
 This mode requires saved setup and an already-playing verified public HTTP
-source. It tests notification and media-session Pause/Play, then verifies that
-the identical source is playing. It never resets setup, opens media, adds
+source. It tests notification and media-session Pause/Play and volume down/up,
+then restores the exact starting raw volume and verifies the identical source
+is playing. It never resets setup, opens media, adds
 subtitles, seeks, stops or disconnects. Without the confirmation flag it exits
 before accessing playback. Do not use the emulator fixture modes on a phone.
 
-The mobile UI has 27 passing browser cases, including validated first setup,
-saved-settings presentation, cancellation, reset/rescan, volume commits,
-session restoration and notification-open handling. Final checks passed:
-128 Node and70 browser coverage; updated4 service and5 packaged UI checks passed.
-The earlier8 transport/5 Keystore checks cover unchanged logic. Updated0.2.2
-is installed on Samsung Android16, with2 live Pause/Play checks passed. The user
-confirmed live casting with picture, sound and Portuguese subtitles on0.2.0.
-The repaired cold start, system control display/actions and full phone-off
-playback still need physical acceptance.
+The mobile cases cover validated setup, saved-settings presentation,
+cancellation, reset/rescan, volume commits, session restoration, system-control
+launch and confirmed power commands. Current0.2.3 results and installed artifact
+are recorded in the [handoff](../docs/agent/session-handoffs/2026-10-18-phone-volume-power.md).
+The user confirmed live casting with picture, sound and Portuguese subtitles
+on0.2.0, and system-control display/actions on0.2.2. Cold-start crashes/missing
+subtitles recurred on S1E3; that receiver failure and full phone-off acceptance
+remain unresolved.
 
 The service uses Android’s
 [`connectedDevice` foreground-service type](https://developer.android.com/develop/background-work/services/fgs/service-types#connected-device)

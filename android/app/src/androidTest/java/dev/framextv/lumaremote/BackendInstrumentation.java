@@ -64,6 +64,10 @@ public final class BackendInstrumentation extends UiSmokeInstrumentation {
             rejects("INVALID_INPUT", "luma.setVolume", "value", 1.5);
             rejects("INVALID_TEXT", "luma.text", "text", "text\r\nKEYEVENT\r\n3");
             rejects("INVALID_INPUT", "luma.key", "key", "power");
+            rejects("INVALID_INPUT", "luma.powerOff");
+            rejects("INVALID_INPUT", "luma.powerOff", "confirmed", false);
+            rejects("INVALID_INPUT", "luma.powerOff", "confirmed", "true");
+            call("luma.powerOff", "confirmed", true);
         });
         check("verified app inventory and launch", () -> {
             JSONArray apps = call("luma.apps").getJSONArray("apps"); require(apps.length() == 2, "App inventory incomplete");
@@ -93,6 +97,15 @@ public final class BackendInstrumentation extends UiSmokeInstrumentation {
             call("kodi.setSubtitle", "index", 1, "expectedSourceUrl", FIRST, "sourceToken", "current");
             rejects("INVALID_SUBTITLE", "kodi.setSubtitle", "index", 8, "expectedSourceUrl", FIRST);
             rejects("SOURCE_CHANGED", "kodi.getSubtitles", "expectedSourceUrl", "https://media.example/other.m3u8");
+        });
+        check("rejected subtitle receipt versus uncertain responses", () -> {
+            rejects("KODI_REJECTED", "kodi.addSubtitle", "track", data("url", "https://media.example/rejected.vtt"), "expectedSourceUrl", FIRST);
+            rejects("KODI_RESPONSE", "kodi.addSubtitle", "track", data("url", "https://media.example/unknown.vtt"), "expectedSourceUrl", FIRST);
+            rejects("KODI_RESPONSE", "kodi.addSubtitle", "track", data("url", "https://media.example/wrong-id.vtt"), "expectedSourceUrl", FIRST);
+            rejects("KODI_RESPONSE", "kodi.addSubtitle", "track", data("url", "https://media.example/malformed.vtt"), "expectedSourceUrl", FIRST);
+            rejects("KODI_RESPONSE", "kodi.addSubtitle", "track", data("url", "https://media.example/trailing.vtt"), "expectedSourceUrl", FIRST);
+            rejects("KODI_REJECTED", "kodi.open", "media", media("https://media.example/rejected.m3u8"), "sourceToken", "current");
+            rejects("KODI_RESPONSE", "kodi.open", "media", media("https://media.example/unknown.m3u8"), "sourceToken", "current");
         });
         check("explicit pause resume seek stop", () -> {
             call("kodi.pause", "expectedSourceUrl", FIRST, "sourceToken", "current");

@@ -144,3 +144,20 @@
   notification/MediaSession Pause/Play checks passed, same source left playing.
   Exact S1E2 opened for user subtitle/first-attempt and visual-control acceptance.
   Public PT-BR read succeeded; no receiver subtitle write on unmatched source.
+- 2026-10-18 physical0.2.2 result: user confirmed visible working shade/lock
+  controls; S1E3 exited Kodi on first Cast and played without subtitles on Retry.
+  Own logs distinguish GetItem/API unavailability from later AddSubtitle response
+  failure. Receiver log download did not complete; no receiver access policy changed.
+- 2026-10-18 controls0.2.3: volume −/Play-Pause/volume + on ordinary/media
+  controls, observed readback and projector/action icons. Added main-remote Power
+  confirmation using statically verified Kodak KEYEVENT26 flow; accepted send
+  disconnects local controls and retains saved setup. No physical power sent.
+  Verified known JSON-RPC rejection receipts permit manual Retry; uncertain
+  errors remain nonduplicating. Numeric fixed diagnostics retain privacy.
+- 2026-10-18 checks/install:130 Node; browser73/74 then final31/31 mobile after
+  fixing long-title overflow; native Backend9, Service5 and final packaged UI5
+  passed. Built/installed0.2.3/code5 and opened it on Samsung. Live suite safely
+  stopped before controls because cached receiver was absent; encrypted Kodi
+  login remains. User confirmed projector OFF. Live volume/power and recurring
+  S1E3 crash/subtitle acceptance remain open; see
+  [handoff](session-handoffs/2026-10-18-phone-volume-power.md).

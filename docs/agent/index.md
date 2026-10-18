@@ -19,6 +19,7 @@ Phone implementation: [Android sender and combined remote](phone-app.md),
 Saved setup: [background controls](session-handoffs/2026-10-18-phone-background-settings.md).
 System controls: [cold start and lazy subtitles](session-handoffs/2026-10-18-phone-system-controls.md).
 Latest: [playback reattachment and subtitle readiness](session-handoffs/2026-10-18-phone-reattachment-readiness.md).
+Current: [system volume, confirmed power and Kodi error receipts](session-handoffs/2026-10-18-phone-volume-power.md).
 
 Execution: [decisions](decisions.md), [experiments](experiments.md),
 [progress](progress.md), [log](log.md), [handoff](handoff.md).

@@ -44,6 +44,8 @@ public final class ConnectionService extends Service {
     private static final String START = "dev.framextv.lumaremote.CONNECTING";
     private static final String PLAY = "dev.framextv.lumaremote.PLAY";
     private static final String PAUSE = "dev.framextv.lumaremote.PAUSE";
+    private static final String VOLUME_DOWN = "dev.framextv.lumaremote.VOLUME_DOWN";
+    private static final String VOLUME_UP = "dev.framextv.lumaremote.VOLUME_UP";
     private static final String STOP = "dev.framextv.lumaremote.STOP";
     private static final String DISCONNECT = "dev.framextv.lumaremote.DISCONNECT";
     private static final String CHANNEL = "projector_connection";
@@ -101,7 +103,9 @@ public final class ConnectionService extends Service {
             @Override public void onStop() { mediaAction("kodi.stop"); }
             @Override public void onCustomAction(String action, Bundle extras) {
                 if (extras == null || !mediaRevision.equals(extras.getString("revision"))) return;
-                if (STOP.equals(action)) mediaAction("kodi.stop");
+                if (VOLUME_DOWN.equals(action)) mediaAction("volume-down");
+                else if (VOLUME_UP.equals(action)) mediaAction("volume-up");
+                else if (STOP.equals(action)) mediaAction("kodi.stop");
                 else if (DISCONNECT.equals(action)) request("device.disconnect", new JSONObject(), null);
             }
         }, main);
@@ -128,6 +132,8 @@ public final class ConnectionService extends Service {
         else if (intent != null && mediaRevision.equals(intent.getStringExtra("revision"))) {
             if (PLAY.equals(action)) mediaAction("kodi.resume");
             else if (PAUSE.equals(action)) mediaAction("kodi.pause");
+            else if (VOLUME_DOWN.equals(action)) mediaAction("volume-down");
+            else if (VOLUME_UP.equals(action)) mediaAction("volume-up");
             else if (STOP.equals(action)) mediaAction("kodi.stop");
         }
         if (!foreground && !START.equals(action)) stopSelf(startId);
@@ -253,6 +259,12 @@ public final class ConnectionService extends Service {
                 if ("app.settings.reset".equals(method)) state.remove("playback");
             }
             work.post(() -> {
+                if ("luma.powerOff".equals(method)) {
+                    work.complete(result, null, null);
+                    disconnect(null);
+                    notice = "Power command sent"; publish();
+                    return;
+                }
                 if (connecting && connected()) { notice = "Connected to projector"; lastHeartbeat = 0; schedulePoll(0); }
                 else if (connecting) { notice = "No unique projector was found yet."; demote(); }
                 publish();
@@ -436,11 +448,17 @@ public final class ConnectionService extends Service {
                     work.post(() -> { notice = "Kodi is playing a different video. Open the app to choose it."; publish(); }); return;
                 }
                 JSONObject args = object("expectedSourceUrl", expected);
+                JSONObject projector = null;
                 if (method.startsWith("volume-") || method.equals("mute")) {
                     put(args, "key", method); work.transport.handle("luma.key", args);
+                    projector = work.transport.handle("luma.status", new JSONObject());
                 } else work.transport.handle(method, args);
                 JSONObject observed = work.transport.handle("kodi.status", new JSONObject());
-                synchronized (stateLock) { if (!work.current()) return; put(state, "playback", observed); put(state, "connection", work.transport.connectionSnapshot()); }
+                synchronized (stateLock) {
+                    if (!work.current()) return;
+                    put(state, "playback", observed); put(state, "connection", work.transport.connectionSnapshot());
+                    if (projector != null && projector.optJSONObject("volume") != null) put(state, "volume", projector.optJSONObject("volume"));
+                }
                 work.post(this::publish);
             } catch (NativeBackend.BackendException failure) {
                 if ("KODI_AUTH".equals(failure.code) && work.current()) { candidateKodi = null; candidateGeneration = -1; }
@@ -518,14 +536,16 @@ public final class ConnectionService extends Service {
                 verified && playback.optBoolean("playing") ? 1f : 0f, SystemClock.elapsedRealtime());
         if (verified) {
             Bundle revision = new Bundle(); revision.putString("revision", mediaRevision);
-            controls.addCustomAction(new PlaybackState.CustomAction.Builder(STOP, "Stop video", android.R.drawable.ic_menu_close_clear_cancel).setExtras(revision).build());
-            controls.addCustomAction(new PlaybackState.CustomAction.Builder(DISCONNECT, "Disconnect", android.R.drawable.ic_menu_close_clear_cancel).setExtras(revision).build());
+            controls.addCustomAction(new PlaybackState.CustomAction.Builder(VOLUME_DOWN, "Volume −", R.drawable.ic_volume_down).setExtras(revision).build());
+            controls.addCustomAction(new PlaybackState.CustomAction.Builder(VOLUME_UP, "Volume +", R.drawable.ic_volume_up).setExtras(revision).build());
+            controls.addCustomAction(new PlaybackState.CustomAction.Builder(STOP, "Stop video", R.drawable.ic_stop).setExtras(revision).build());
+            controls.addCustomAction(new PlaybackState.CustomAction.Builder(DISCONNECT, "Disconnect", R.drawable.ic_disconnect).setExtras(revision).build());
         }
         mediaSession.setPlaybackState(controls.build());
         String title = verified ? clean(remote.optJSONObject("media").optString("title"), 200) : "LUMA Remote";
         if (title.isEmpty()) title = "Kodi video";
         MediaMetadata.Builder metadata = new MediaMetadata.Builder().putString(MediaMetadata.METADATA_KEY_TITLE, title)
-                .putString(MediaMetadata.METADATA_KEY_ARTIST, connection == null ? "Projector" : clean(connection.optString("name"), 200));
+                .putString(MediaMetadata.METADATA_KEY_ARTIST, projectorSummary(all));
         if (verified) metadata.putLong(MediaMetadata.METADATA_KEY_DURATION, playback.optLong("durationSeconds") * 1000);
         mediaSession.setMetadata(metadata.build());
         mediaSession.setActive(verified);
@@ -545,10 +565,8 @@ public final class ConnectionService extends Service {
         boolean verified = connection != null && connection.optBoolean("connected") && matches(remote, playback);
         String title = verified ? clean(remote.optJSONObject("media").optString("title"), 200) : "LUMA Remote";
         if (title.isEmpty()) title = "Kodi video";
-        String name = connection == null ? "Projector" : clean(connection.optString("name"), 200);
-        if (name.isEmpty()) name = "Projector";
         return object("revision", revision, "verified", verified, "playing", playback != null && playback.optBoolean("playing"),
-                "title", title, "name", name, "notice", clean(notice, 200), "foreground", foreground).toString();
+                "title", title, "projector", projectorSummary(all), "notice", clean(notice, 200), "foreground", foreground).toString();
     }
     private void queueNotificationFlush() {
         if (destroyed || !foreground || notificationFlushQueued) return;
@@ -577,24 +595,37 @@ public final class ConnectionService extends Service {
     private Notification notification(boolean mediaCard, JSONObject all, String revision) {
         JSONObject connection = all.optJSONObject("connection"), remote = all.optJSONObject("remote"), playback = all.optJSONObject("playback");
         boolean verified = connection != null && connection.optBoolean("connected") && matches(remote, playback);
-        String name = connection == null ? "Projector" : clean(connection.optString("name"), 200);
-        if (name.isEmpty()) name = "Projector";
         String title = verified ? clean(remote.optJSONObject("media").optString("title"), 200) : "LUMA Remote";
         if (title.isEmpty()) title = "Kodi video";
         Notification.Builder builder = Build.VERSION.SDK_INT >= 26 ? new Notification.Builder(this, CHANNEL) : new Notification.Builder(this);
         if (Build.VERSION.SDK_INT >= 31) builder.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE);
-        builder.setSmallIcon(android.R.drawable.ic_media_play).setContentTitle(title).setContentText(verified ? name : clean(notice, 200))
+        builder.setSmallIcon(R.drawable.ic_projector).setColor(getColor(R.color.projector_accent))
+                .setContentTitle(title).setContentText(verified ? projectorSummary(all) : clean(notice, 200))
                 .setContentIntent(sessionActivity).setOngoing(true).setOnlyAlertOnce(true).setShowWhen(false)
                 .setCategory(mediaCard ? Notification.CATEGORY_TRANSPORT : Notification.CATEGORY_SERVICE).setVisibility(Notification.VISIBILITY_PUBLIC);
         if (verified) {
             boolean playing = playback.optBoolean("playing");
-            builder.addAction(new Notification.Action.Builder(playing ? android.R.drawable.ic_media_pause : android.R.drawable.ic_media_play,
+            builder.addAction(new Notification.Action.Builder(R.drawable.ic_volume_down, "Volume −", pending(VOLUME_DOWN, 4, revision)).build());
+            builder.addAction(new Notification.Action.Builder(playing ? R.drawable.ic_pause : R.drawable.ic_play,
                     playing ? "Pause" : "Play", pending(playing ? PAUSE : PLAY, 1, revision)).build());
-            builder.addAction(new Notification.Action.Builder(android.R.drawable.ic_menu_close_clear_cancel, "Stop video", pending(STOP, 2, revision)).build());
-            if (mediaCard) builder.setStyle(new Notification.MediaStyle().setMediaSession(mediaSession.getSessionToken()).setShowActionsInCompactView(0, 1, 2));
+            builder.addAction(new Notification.Action.Builder(R.drawable.ic_volume_up, "Volume +", pending(VOLUME_UP, 5, revision)).build());
+            if (mediaCard) {
+                builder.addAction(new Notification.Action.Builder(R.drawable.ic_stop, "Stop video", pending(STOP, 2, revision)).build());
+                builder.addAction(new Notification.Action.Builder(R.drawable.ic_disconnect, "Disconnect", pending(DISCONNECT, 3, revision)).build());
+                builder.setStyle(new Notification.MediaStyle().setMediaSession(mediaSession.getSessionToken()).setShowActionsInCompactView(0, 1, 2));
+            }
+        } else {
+            builder.addAction(new Notification.Action.Builder(R.drawable.ic_disconnect, "Disconnect", pending(DISCONNECT, 3, revision)).build());
         }
-        builder.addAction(new Notification.Action.Builder(android.R.drawable.ic_menu_close_clear_cancel, "Disconnect", pending(DISCONNECT, 3, revision)).build());
         return builder.build();
+    }
+    private static String projectorSummary(JSONObject all) {
+        JSONObject connection = all.optJSONObject("connection"), volume = all.optJSONObject("volume");
+        String name = connection == null ? "Projector" : clean(connection.optString("name"), 120);
+        if (name.isEmpty()) name = "Projector";
+        if (volume == null) return name;
+        int current = volume.optInt("current", -1), max = volume.optInt("max", 0);
+        return current >= 0 && max > 0 && current <= max ? name + " · Volume " + current + "/" + max : name;
     }
     private PendingIntent pending(String action, int requestCode, String revision) {
         Intent intent = new Intent(this, ConnectionService.class).setAction(action);

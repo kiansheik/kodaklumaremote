@@ -50,6 +50,21 @@ const kodi = http.createServer(async (request, response) => {
     const chunks = []; for await (const bytes of request) chunks.push(bytes);
     const message = JSON.parse(Buffer.concat(chunks).toString());
     const { method, params, id } = message; let result;
+    if (method === 'Player.Open' && /\/(?:rejected|unknown)\.m3u8$/u.test(params.item.file)) {
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify({ jsonrpc: '2.0', id,
+        error: { code: params.item.file.endsWith('/rejected.m3u8') ? -32602 : -32100, message: 'Fixture rejection' } }));
+      return;
+    }
+    if (method === 'Player.AddSubtitle' && /\/(?:rejected|unknown|wrong-id|malformed|trailing)\.vtt$/u.test(params.subtitle)) {
+      const known = params.subtitle.endsWith('/rejected.vtt') || params.subtitle.endsWith('/trailing.vtt');
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify({ jsonrpc: '2.0', id: params.subtitle.endsWith('/wrong-id.vtt') ? id + 1 : id,
+        error: params.subtitle.endsWith('/malformed.vtt') ? { code: -32100 }
+          : { code: known ? -32100 : params.subtitle.endsWith('/wrong-id.vtt') ? -32602 : -32603, message: 'Fixture rejection' } })
+          + (params.subtitle.endsWith('/trailing.vtt') ? ' unexpected' : ''));
+      return;
+    }
     if (method === 'JSONRPC.Ping') result = 'pong';
     else if (method === 'Application.GetProperties') result = { name: 'Kodi', version: { major: 21, minor: 2 } };
     else if (method === 'Player.GetActivePlayers') result = currentSource ? [{ playerid: 1, type: 'video' }] : [];
@@ -76,16 +91,17 @@ try {
   }
   const { stdout, stderr } = await run(adb, ['-s', serial, 'shell', 'am', 'instrument', '-w', '-e', 'targetHost', '10.0.2.2', '-e', 'kodiPort', String(kodi.address().port), '-e', 'slowPort', String(slow.address().port), 'dev.framextv.lumaremote.test/dev.framextv.lumaremote.BackendInstrumentation'], { timeout: 60000, maxBuffer: 128 * 1024 });
   process.stdout.write(stdout); if (stderr) process.stderr.write(stderr);
-  assert.match(stdout, /INSTRUMENTATION_RESULT: failures=0/u); assert.match(stdout, /INSTRUMENTATION_RESULT: passed=8/u); assert.match(stdout, /INSTRUMENTATION_CODE: -1/u);
+  assert.match(stdout, /INSTRUMENTATION_RESULT: failures=0/u); assert.match(stdout, /INSTRUMENTATION_RESULT: passed=9/u); assert.match(stdout, /INSTRUMENTATION_CODE: -1/u);
   assert.equal(connections, 2); assert.equal(appLists, 1);
   assert.ok(commands.includes('CONTENT\r\n1\r\n0 Olá 👋\r\n\r\n'));
+  assert.equal(commands.filter(command => command === 'KEYEVENT\r\n26\r\n\r\n').length, 1);
   assert.ok(commands.includes('STARTAPPEVNET\r\norg.xbmc.kodi\r\n\r\n'));
   assert.equal(commands.filter(command => command.startsWith('STARTAPPEVNET')).length, 1);
   assert.deepEqual(commands.filter(command => command.includes('setVolume')), ['MediaControl\r\nsetVolume 14\r\n\r\n']);
   assert.ok(commands.every(command => !/^(?:auth|CHECKPASSWORD|getServerInfo)/u.test(command)));
   assert.deepEqual(mutations.map(message => message.method), ['Player.Open', 'Player.AddSubtitle', 'Player.SetSubtitle', 'Player.PlayPause', 'Player.PlayPause', 'Player.Seek', 'Player.Stop']);
   assert.equal(mutations[2].params.subtitle, 1);
-  console.log('Native backend: 8 instrumentation checks and wire assertions passed against emulator-only fixtures.');
+  console.log('Native backend: 9 instrumentation checks and wire assertions passed against emulator-only fixtures.');
 } finally {
   for (const socket of sockets) socket.destroy();
   for (const server of [tcp, kodi, slow]) { server.closeAllConnections?.(); await new Promise(done => server.close(done)); }

@@ -59,7 +59,10 @@
 - `scripts/build-mobile.mjs`, `scripts/test-android-*.mjs`: mobile assets and
   explicit emulator-only native backend, UI, service/persistence and Keystore tests.
 - `LiveControlsInstrumentation.java`: separately confirmed actual-phone
-  notification/MediaSession Pause/Play checks; no fixture reset or media opening.
+  notification/MediaSession Pause/Play and volume checks with exact starting-volume
+  restoration; no fixture reset, media opening or power commands.
+- `android/app/src/main/res/`: native projector/action vectors and adaptive
+  launcher/themed icon; media cards prioritize guarded volume/playback controls.
 - `tests/handoff.test.mjs`, `tests/browser/mobile*.spec.js`,
   `android/app/src/androidTest/`: coordinator, capture, layouts and Android tests.
 - `docs/agent/{phone-app,luma-review-findings}.md`: phone architecture/acceptance

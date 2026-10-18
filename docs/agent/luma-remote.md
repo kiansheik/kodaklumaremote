@@ -77,6 +77,7 @@ describe this client version, not guaranteed behavior on every LUMA firmware.
 | Discovery reply | Text begins `ECloudBox` with optional numeric version suffix, then `:name:port:…`; receiver address comes from the datagram source. The prototype accepts private source addresses on the selected local subnet and control port 8121. |
 | Control connection | Raw TCP, default port 8121. Feature and pairing-config requests precede controls; optional unsupported device-info query is omitted. |
 | Keys | `KEYEVENT` with an allowlisted Android key code. |
+| Power (phone app) | Original `dialog_power_off` confirmation uses dialog case101 → MainActivity.d(26) → worker → EShare key serializer. The phone implements this as dedicated confirmed `luma.powerOff`, not an ordinary power key. KEYEVENT26 send does not prove shutdown rather than standby. |
 | Text | `CONTENT`, mode `1`, payload prefixed `0 `. CR/LF/NUL and oversized UTF-8 payloads are rejected. |
 | App inventory | `GETAPPINFOSEVNET`; the spelling is present in the APK. Reply uses little-endian total/field lengths. Names and package identifiers are validated; icon bytes are never served. |
 | App launch | `STARTAPPEVNET` with a package from the current verified inventory. The spelling is present in the APK. |

@@ -258,6 +258,27 @@ test('a bridge timeout without an aborted signal stays uncertain and retry obser
   }
 });
 
+test('a verified unapplied Open rejection permits one explicit later retry', async () => {
+  let applied = 0;
+  const f = fixture({ open: (state, options) => {
+    if (state.opened === 1) {
+      state.playback = { active: false, sourceUrl: '' };
+      options.onNotSent();
+      throw Object.assign(new Error('Private native rejection detail'), { code: 'KODI_REJECTED' });
+    }
+    applied++;
+  } });
+  const request = media([]);
+  await assert.rejects(f.coordinator.start(request), { code: 'ADAPTER_FAILED', adapterCode: 'KODI_REJECTED' });
+  assert.equal(f.state.time, 0);
+  assert.equal(f.state.opened, 1);
+  assert.equal(applied, 0);
+  await f.coordinator.start(request);
+  await f.coordinator.start(request);
+  assert.equal(f.state.opened, 2);
+  assert.equal(applied, 1);
+});
+
 test('a cancelled unknown Open is reissued only after explicit native proof that it was not sent', async () => {
   for (const lateReceipt of [false, true]) {
     const queued = deferred();
@@ -440,6 +461,29 @@ test('an uncertain Add response reconciles a late observed index without sending
   assert.equal(result.selectedIndex, 0);
   assert.equal(f.state.adds.length, 1);
   assert.equal(f.state.ready.length, 1);
+});
+
+test('a verified unapplied Add rejection fails promptly and an explicit retry adds once without replay', async () => {
+  let applied = 0;
+  const f = fixture({ add: (state, value, options) => {
+    if (state.adds.length === 1) {
+      options.onNotSent();
+      throw Object.assign(new Error('Private native rejection detail'), { code: 'KODI_REJECTED' });
+    }
+    applied++;
+    state.tracks.push({ index: 0 });
+  } });
+  const request = media([track('pt-BR')]);
+  await assert.rejects(f.coordinator.start(request), { code: 'ADAPTER_FAILED', adapterCode: 'KODI_REJECTED' });
+  assert.equal(f.state.time, 0);
+  assert.equal(f.state.adds.length, 1);
+  assert.equal(applied, 0);
+  await f.coordinator.start(request);
+  await f.coordinator.start(request);
+  assert.equal(f.state.adds.length, 2);
+  assert.equal(applied, 1);
+  assert.equal(f.state.opened, 1);
+  assert.equal(f.state.currentIndex, 0);
 });
 
 test('an uncertain Add with no index times out without a duplicate while unsent proof permits manual retry', async () => {

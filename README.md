@@ -179,14 +179,17 @@ has corner Home/Back and a volume slider with step buttons. Disconnect leaves
 the video playing; saved setup can be wiped independently.
 After a process restart it can attach to Kodi's continuing video from fresh
 status without restarting playback. Expand the ordinary LUMA notification for
-its buttons; a separate media card serves system controls.
+Volume − / Play-Pause / Volume +; a separate media card serves system controls.
+The main Remote's Power icon requires confirmation before sending the Kodak
+power command, then disconnects while retaining saved setup.
 
 Build/setup: [Android README](android/README.md). Implementation, fixture results
 and physical acceptance: [phone app](docs/agent/phone-app.md). Source capture
 currently supports HTTPS frameXTV and readable same-origin players. This is an
 installable debug prototype. The user confirmed Samsung casting with picture,
-sound and Portuguese subtitles. Cold-start recovery, system control display,
-interrupted-network recovery and phone fully off still need physical acceptance.
+sound and Portuguese subtitles, plus working notification/lock-screen controls.
+Later Kodi cold-start crashes/missing subtitles, interrupted-network recovery
+and phone fully off still need physical acceptance.
 
 The [review analysis](docs/agent/luma-review-findings.md) records a bounded sample
 of 220 public written Google Play reviews. Repeated specific complaints informed
