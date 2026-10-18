@@ -358,3 +358,22 @@
   9,631,440-byte APK/SHA-256 and production signature match. Python's CA-bundle
   error was isolated to that client; curl/Chrome verified normal TLS. No phone
   install or TV operation. Desktop probes remain separate from phone features.
+- 2026-10-18 Motorola/Kodi recovery: user reports repeated Bly Manor starts,
+  startup UI persisting after playback, absent subtitles and a disappearing,
+  ineffective locked-screen Pause card. Exact episode and Motorola debugging
+  are unavailable.0.4.2/code11 adds exact-source Open reconciliation, subtitle
+  readiness and partial success, bounded multi-RPC reads, retained pending
+  catalog/card state, independent Kodi HTTP controls and per-action wake locks.
+  Node181/mobile55 and debug/test/lint builds passed; isolated fixture rebuild
+  passed. Service10/Backend12 native checks and signing/publication are pending
+  at this checkpoint. No physical device controls were sent.
+  [Recovery handoff](session-handoffs/2026-10-18-motorola-kodi-recovery.md).
+- 2026-10-18 final recovery validation: Node184/coordinator52, mobile56 and
+  native36 passed (service10/backend12/UI5/settings5/dual receiver4). Strict
+  screen-off/keyguard-locked actions and CPU-lock cleanup passed; the emulator's
+  original lock setting was restored. A late native-completion receipt now
+  releases an already-observed same-source Open and resumes an explicit waiting
+  recast with the native idle guard, without overlap or a third tap. Final
+  packaged UI was rebuilt/retested after those bridge/coordinator refinements.
+  Signed release/public verification follows; actual Motorola acceptance remains
+  pending because the device is unavailable.

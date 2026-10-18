@@ -127,9 +127,20 @@ async function openApp(page, initialSnapshot = null) {
         window.LumaRPC.receive({ id: request.id, ok: false, error: { code: 'CONNECTION_FAILED', message: 'private-source-token <img src=x onerror="window.errorExecuted=true">' } });
         return;
       }
-      window.LumaRPC.receive({ id: request.id, ok: true, result: result(request) });
+      const response = { id: request.id, ok: true, result: result(request) };
+      if (request.method === 'kodi.open' && receiver.holdOpenResponse) {
+        receiver.openResponse = response;
+        return;
+      }
+      window.LumaRPC.receive(response);
     };
     window.__release = () => { receiver.holdMethod = null; for (const request of receiver.held.splice(0)) respond(request); };
+    window.__releaseOpenResponse = code => {
+      const response = receiver.openResponse;
+      receiver.openResponse = null;
+      receiver.holdOpenResponse = false;
+      if (response) window.LumaRPC.receive(code ? { id: response.id, ok: false, error: { code } } : response);
+    };
     window.LumaNative = { postMessage(text) {
       const request = JSON.parse(text);
       window.__calls.push(request);
@@ -806,7 +817,7 @@ test('an uncertain subtitle Add waits within its bound then releases controls wi
   await expect(page.locator('body')).not.toContainText('private-subtitle-token');
 });
 
-for (const rejectedMethod of ['kodi.open', 'kodi.addSubtitle']) {
+for (const rejectedMethod of ['kodi.open']) {
   test(`a verified ${rejectedMethod} rejection reports promptly and retries only after Try again`, async ({ page }) => {
     await openApp(page); await setup(page);
     await page.evaluate(method => {
@@ -834,6 +845,71 @@ for (const rejectedMethod of ['kodi.open', 'kodi.addSubtitle']) {
     await expect(page.locator('body')).not.toContainText('private-subtitle-token');
   });
 }
+
+test('playing video finishes casting and loads Portuguese while the Open response is still outstanding', async ({ page }) => {
+  await openApp(page); await setup(page);
+  await page.evaluate(() => { window.__receiver.holdOpenResponse = true; });
+  await page.evaluate(value => window.LumaApp.onCapturedMedia(value), media);
+  await expect(page.locator('#message')).toHaveText('Ready on the projector. You can use the remote.');
+  await expect(page.locator('#sheet')).toBeHidden();
+  await expect(page.getByRole('button', { name: 'Pause', exact: true })).toBeEnabled();
+  const before = await page.evaluate(() => ({ calls: window.__calls, pending: Boolean(window.__receiver.openResponse), selected: window.__receiver.currentIndex }));
+  expect(before.pending).toBe(true);
+  expect(before.selected).toBe(0);
+  expect(before.calls.filter(call => call.method === 'kodi.open')).toHaveLength(1);
+  expect(before.calls.filter(call => call.method === 'kodi.addSubtitle').map(call => call.params.track.language)).toEqual(['pt-BR']);
+  expect(before.calls.filter(call => call.method === 'app.handoffReady')).toHaveLength(1);
+  expect(before.calls.filter(call => call.method === 'app.cancelHandoff')).toHaveLength(0);
+  await page.getByRole('button', { name: 'Pause', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Resume', exact: true })).toBeEnabled();
+  await page.evaluate(() => window.__releaseOpenResponse());
+  await expect(page.getByRole('button', { name: 'Resume', exact: true })).toBeEnabled();
+  expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'kodi.open').length)).toBe(1);
+});
+
+test('initial subtitle rejection keeps playback controls and the full catalog for a subtitle-only retry', async ({ page }) => {
+  await openApp(page); await setup(page);
+  await page.evaluate(() => { window.__receiver.failSubtitle = 'KODI_REJECTED'; });
+  await page.evaluate(value => window.LumaApp.onCapturedMedia(value), media);
+  await expect(page.locator('#message')).toHaveText('Video is playing. Subtitles could not be loaded. Open Subtitles to try again.');
+  await expect(page.locator('#sheet')).toBeHidden();
+  await expect(page.getByRole('button', { name: 'Pause', exact: true })).toBeEnabled();
+  const remote = await page.evaluate(() => window.__receiver.rememberedRemote);
+  expect(remote.catalog).toHaveLength(media.tracks.length);
+  expect(remote.selectedIndex).toBe(null);
+  expect(remote.subtitlesEnabled).toBe(false);
+  expect(await page.evaluate(() => window.__calls.some(call => call.method === 'app.cancelHandoff'))).toBe(false);
+  await page.evaluate(() => { window.__receiver.failSubtitle = false; });
+  await page.getByRole('button', { name: 'Subtitles', exact: true }).click();
+  await page.getByRole('button', { name: 'Portuguese (Brazil)', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Portuguese (Brazil)', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'kodi.open').length)).toBe(1);
+  expect(await page.evaluate(() => window.__receiver.playing)).toBe(true);
+  await expect(page.locator('body')).not.toContainText('private-source-token');
+  await expect(page.locator('body')).not.toContainText('private-subtitle-token');
+});
+
+test('a late native receipt after bridge timeout permits an explicit recast without overlapping Open requests', async ({ page }) => {
+  await page.clock.install();
+  await openApp(page); await setup(page);
+  await page.evaluate(() => { window.__receiver.holdOpenResponse = true; });
+  await page.evaluate(value => window.LumaApp.onCapturedMedia(value), media);
+  await expect(page.locator('#message')).toHaveText('Ready on the projector. You can use the remote.');
+  await page.clock.fastForward(31000);
+  await page.evaluate(value => {
+    window.__receiver.active = false;
+    window.__receiver.sourceUrl = null;
+    window.LumaApp.onCapturedMedia({ ...value, sourceToken: 'capture-two' });
+  }, media);
+  await page.clock.runFor(1000);
+  expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'kodi.open').length)).toBe(1);
+  await page.evaluate(() => window.__releaseOpenResponse('KODI_UNAVAILABLE'));
+  await page.clock.runFor(1000);
+  await expect(page.locator('#message')).toHaveText('Ready on the projector. You can use the remote.');
+  const calls = await page.evaluate(() => window.__calls);
+  expect(calls.filter(call => call.method === 'kodi.open').map(call => call.params.sourceToken)).toEqual(['job-1', 'job-2']);
+  expect(await page.evaluate(() => window.__receiver.playing)).toBe(true);
+});
 
 test('initial subtitle selection falls back to English when Brazilian Portuguese is absent', async ({ page }) => {
   await openApp(page); await setup(page);

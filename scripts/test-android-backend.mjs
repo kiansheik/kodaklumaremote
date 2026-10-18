@@ -53,18 +53,21 @@ const kodi = http.createServer(async (request, response) => {
     const chunks = []; for await (const bytes of request) chunks.push(bytes);
     const message = JSON.parse(Buffer.concat(chunks).toString());
     const { method, params, id } = message; let result;
-    if (method === 'Player.Open' && /\/(?:rejected|unknown)\.m3u8$/u.test(params.item.file)) {
+    if (method === 'Player.Open' && /\/(?:rejected|unknown|false-result|null-result)\.m3u8$/u.test(params.item.file)) {
       response.writeHead(200, { 'Content-Type': 'application/json' });
-      response.end(JSON.stringify({ jsonrpc: '2.0', id,
-        error: { code: params.item.file.endsWith('/rejected.m3u8') ? -32602 : -32100, message: 'Fixture rejection' } }));
+      response.end(JSON.stringify({ jsonrpc: '2.0', id, ...(/\/(?:false|null)-result\.m3u8$/u.test(params.item.file)
+        ? { result: params.item.file.endsWith('/false-result.m3u8') ? false : null }
+        : { error: { code: params.item.file.endsWith('/rejected.m3u8') ? -32602 : -32100, message: 'Fixture rejection' } }) }));
       return;
     }
-    if (method === 'Player.AddSubtitle' && /\/(?:rejected|unknown|wrong-id|malformed|trailing)\.vtt$/u.test(params.subtitle)) {
+    if (method === 'Player.AddSubtitle' && /\/(?:rejected|unknown|wrong-id|malformed|trailing|false-result|null-result)\.vtt$/u.test(params.subtitle)) {
       const known = params.subtitle.endsWith('/rejected.vtt') || params.subtitle.endsWith('/trailing.vtt');
       response.writeHead(200, { 'Content-Type': 'application/json' });
       response.end(JSON.stringify({ jsonrpc: '2.0', id: params.subtitle.endsWith('/wrong-id.vtt') ? id + 1 : id,
-        error: params.subtitle.endsWith('/malformed.vtt') ? { code: -32100 }
-          : { code: known ? -32100 : params.subtitle.endsWith('/wrong-id.vtt') ? -32602 : -32603, message: 'Fixture rejection' } })
+        ...(/\/(?:false|null)-result\.vtt$/u.test(params.subtitle)
+          ? { result: params.subtitle.endsWith('/false-result.vtt') ? false : null }
+          : { error: params.subtitle.endsWith('/malformed.vtt') ? { code: -32100 }
+            : { code: known ? -32100 : params.subtitle.endsWith('/wrong-id.vtt') ? -32602 : -32603, message: 'Fixture rejection' } }) })
           + (params.subtitle.endsWith('/trailing.vtt') ? ' unexpected' : ''));
       return;
     }
@@ -86,17 +89,52 @@ const kodi = http.createServer(async (request, response) => {
   } catch { response.writeHead(400); response.end(); }
 });
 const slow = http.createServer(request => request.resume());
+const deadline = http.createServer(async (request, response) => {
+  const chunks = []; for await (const bytes of request) chunks.push(bytes);
+  const { method, id } = JSON.parse(Buffer.concat(chunks).toString());
+  const result = method === 'Player.GetActivePlayers' ? [{ playerid: 1, type: 'video' }]
+    : method === 'Player.GetItem' ? { item: { file: 'https://media.example/first.m3u8' } }
+      : { speed: 1, time: { hours: 0, minutes: 0, seconds: 0 }, totaltime: { hours: 0, minutes: 22, seconds: 35 }, canseek: true };
+  setTimeout(() => { response.writeHead(200, { 'Content-Type': 'application/json' }); response.end(JSON.stringify({ jsonrpc: '2.0', id, result })); }, 1800);
+});
+let changed = false;
+const changing = http.createServer(async (request, response) => {
+  const chunks = []; for await (const bytes of request) chunks.push(bytes);
+  const { method, params, id } = JSON.parse(Buffer.concat(chunks).toString()); let result;
+  if (method === 'Player.GetActivePlayers') { changed = false; result = [{ playerid: 1, type: 'video' }]; }
+  else if (method === 'Player.GetItem') result = { item: { file: `https://media.example/${changed ? 'other' : 'first'}.m3u8` } };
+  else if (method === 'Player.GetProperties') {
+    changed = true;
+    result = params.properties.includes('subtitles')
+      ? { subtitles: [{ index: 0, name: 'Other movie', language: 'en' }], currentsubtitle: { index: 0 }, subtitleenabled: true }
+      : { speed: 1, time: { hours: 0, minutes: 0, seconds: 0 }, totaltime: { hours: 0, minutes: 22, seconds: 35 }, canseek: true };
+  }
+  response.writeHead(200, { 'Content-Type': 'application/json' }); response.end(JSON.stringify({ jsonrpc: '2.0', id, result }));
+});
+let readinessReads = 0;
+const readiness = http.createServer(async (request, response) => {
+  const chunks = []; for await (const bytes of request) chunks.push(bytes);
+  const { method, id } = JSON.parse(Buffer.concat(chunks).toString()); let result;
+  if (method === 'Player.GetActivePlayers') result = [{ playerid: 1, type: 'video' }];
+  else if (method === 'Player.GetItem') result = { item: { file: 'https://media.example/first.m3u8' } };
+  else if (method === 'Player.GetProperties') {
+    readinessReads++;
+    result = { subtitles: [], subtitleenabled: false,
+      ...(readinessReads === 3 ? {} : { currentsubtitle: readinessReads === 1 ? null : readinessReads === 2 ? {} : 'invalid' }) };
+  }
+  response.writeHead(200, { 'Content-Type': 'application/json' }); response.end(JSON.stringify({ jsonrpc: '2.0', id, result }));
+});
 function listen(server, port) { return new Promise((done, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', done); }); }
 try {
-  await listen(tcp, 8121); await listen(kodi, 0); await listen(slow, 0);
+  await listen(tcp, 8121); await listen(kodi, 0); await listen(slow, 0); await listen(deadline, 0); await listen(changing, 0); await listen(readiness, 0);
   for (const [apk, expected] of [['android/app/build/outputs/apk/debug/app-debug.apk', appPackage], ['android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk', `${appPackage}.test`]]) {
   const { stdout: apkMetadata } = await run(resolve(androidSdk, 'build-tools/36.0.0/aapt2'), ['dump', 'badging', resolve(apk)], { timeout: 10000 });
   assert.equal(apkMetadata.match(/^package: name='([^']+)'/mu)?.[1], expected, 'Build the intended fixture package before installing.');
     await run(adb, ['-s', serial, 'install', '-r', resolve(apk)], { timeout: 60000 });
   }
-  const { stdout, stderr } = await run(adb, ['-s', serial, 'shell', 'am', 'instrument', '-w', '-e', 'targetHost', '10.0.2.2', '-e', 'kodiPort', String(kodi.address().port), '-e', 'slowPort', String(slow.address().port), `${appPackage}.test/dev.framextv.lumaremote.BackendInstrumentation`], { timeout: 60000, maxBuffer: 128 * 1024 });
+  const { stdout, stderr } = await run(adb, ['-s', serial, 'shell', 'am', 'instrument', '-w', '-e', 'targetHost', '10.0.2.2', '-e', 'kodiPort', String(kodi.address().port), '-e', 'slowPort', String(slow.address().port), '-e', 'deadlinePort', String(deadline.address().port), '-e', 'changingPort', String(changing.address().port), '-e', 'readinessPort', String(readiness.address().port), `${appPackage}.test/dev.framextv.lumaremote.BackendInstrumentation`], { timeout: 60000, maxBuffer: 128 * 1024 });
   process.stdout.write(stdout); if (stderr) process.stderr.write(stderr);
-  assert.match(stdout, /INSTRUMENTATION_RESULT: failures=0/u); assert.match(stdout, /INSTRUMENTATION_RESULT: passed=9/u); assert.match(stdout, /INSTRUMENTATION_CODE: -1/u);
+  assert.match(stdout, /INSTRUMENTATION_RESULT: failures=0/u); assert.match(stdout, /INSTRUMENTATION_RESULT: passed=12/u); assert.match(stdout, /INSTRUMENTATION_CODE: -1/u);
   assert.equal(connections, 2); assert.equal(appLists, 1);
   assert.ok(commands.includes('CONTENT\r\n1\r\n0 Olá 👋\r\n\r\n'));
   assert.equal(commands.filter(command => command === 'KEYEVENT\r\n26\r\n\r\n').length, 1);
@@ -106,8 +144,9 @@ try {
   assert.ok(commands.every(command => !/^(?:auth|CHECKPASSWORD|getServerInfo)/u.test(command)));
   assert.deepEqual(mutations.map(message => message.method), ['Player.Open', 'Player.AddSubtitle', 'Player.SetSubtitle', 'Player.PlayPause', 'Player.PlayPause', 'Player.Seek', 'Player.Stop']);
   assert.equal(mutations[2].params.subtitle, 1);
-  console.log('Native backend: 9 instrumentation checks and wire assertions passed against emulator-only fixtures.');
+  assert.equal(readinessReads, 4);
+  console.log('Native backend: 12 instrumentation checks and wire assertions passed against emulator-only fixtures.');
 } finally {
   for (const socket of sockets) socket.destroy();
-  for (const server of [tcp, kodi, slow]) { server.closeAllConnections?.(); await new Promise(done => server.close(done)); }
+  for (const server of [tcp, kodi, slow, deadline, changing, readiness]) { server.closeAllConnections?.(); await new Promise(done => server.close(done)); }
 }

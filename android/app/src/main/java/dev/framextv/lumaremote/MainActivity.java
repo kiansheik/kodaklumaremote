@@ -458,6 +458,12 @@ public final class MainActivity extends Activity {
                 // Keep the capture identity stable, but authorize each attempt separately.
                 capturedToken = captureSession + ":" + capturedGeneration + ":" + captureSequence.incrementAndGet();
                 connectionService.authorizeToken(capturedToken, params.optString("target", "luma"));
+                if (!"philips".equals(params.optString("target", "luma"))
+                        && !connectionService.prepareHandoff(capturedMedia, capturedToken)) {
+                    connectionService.revokeToken(capturedToken);
+                    capturedToken = null;
+                    reply(id, null, "INVALID_MEDIA", "Choose the video again in Browse."); return;
+                }
                 reply(id, new JSONObject().put("sourceToken", capturedToken), null, null);
             }
             else if (method.equals("app.cancelHandoff")) {

@@ -2,6 +2,7 @@ package dev.framextv.lumaremote;
 
 import android.app.Activity;
 import android.app.Instrumentation;
+import android.app.KeyguardManager;
 import android.app.Notification;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
@@ -18,6 +19,8 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.IBinder;
+import android.os.ParcelFileDescriptor;
+import android.os.PowerManager;
 import android.os.SystemClock;
 import android.service.notification.StatusBarNotification;
 import android.webkit.WebView;
@@ -44,6 +47,8 @@ public final class ServiceInstrumentation {
     private ConnectionService service;
     private ServiceConnection binding;
     private int checks;
+    private boolean sleptEmulator;
+    private boolean disabledKeyguardOriginally;
     private String phase = "setup";
     private static final class PendingCall {
         final CountDownLatch ready = new CountDownLatch(1);
@@ -121,6 +126,10 @@ public final class ServiceInstrumentation {
         JSONObject media = object("url", FIRST, "contentType", "application/vnd.apple.mpegurl", "title", "Owned service fixture", "tracks", new JSONArray().put(declared));
         JSONObject result = object("tracks", new JSONArray(), "catalog", new JSONArray().put(declared), "subtitleCount", 0, "selectedIndex", JSONObject.NULL, "selectedLanguage", JSONObject.NULL);
         runner.runOnMainSync(() -> service.rememberHandoff(media, result));
+    }
+    private JSONObject preparedMedia() throws Exception {
+        return object("url", FIRST, "contentType", "application/vnd.apple.mpegurl", "title", "Owned service fixture",
+                "tracks", new JSONArray().put(object("url", "https://media.example/pt.vtt", "language", "pt-BR", "label", "Português")));
     }
     private JSONObject remoteUpdate() throws Exception {
         return object("media", object("url", FIRST, "contentType", "application/vnd.apple.mpegurl"),
@@ -201,6 +210,49 @@ public final class ServiceInstrumentation {
         }
         throw new AssertionError("MediaSession control was not observed");
     }
+    private void waitReceiverPlaying(boolean expected) throws Exception {
+        long end = SystemClock.elapsedRealtime() + 8000;
+        while (SystemClock.elapsedRealtime() < end) {
+            if (fixture("").getBoolean("playing") == expected) return;
+            Thread.sleep(40);
+        }
+        throw new AssertionError("The receiver did not observe the requested playback state");
+    }
+    private boolean mediaWakeHeld() throws Exception {
+        java.lang.reflect.Field field = ConnectionService.class.getDeclaredField("pending"); field.setAccessible(true);
+        for (Object work : (java.util.Set<?>) field.get(service)) {
+            java.lang.reflect.Field lockField = work.getClass().getDeclaredField("wakeLock"); lockField.setAccessible(true);
+            PowerManager.WakeLock lock = (PowerManager.WakeLock) lockField.get(work);
+            if (lock != null && lock.isHeld()) return true;
+        }
+        return false;
+    }
+    private void waitMediaWake(boolean expected) throws Exception {
+        long end = SystemClock.elapsedRealtime() + 3000;
+        while (SystemClock.elapsedRealtime() < end) { if (mediaWakeHeld() == expected) return; Thread.sleep(20); }
+        throw new AssertionError(expected ? "A user control did not hold its bounded wake lock" : "A completed control retained its wake lock");
+    }
+    private String shell(String command) throws Exception {
+        try (ParcelFileDescriptor descriptor = runner.getUiAutomation().executeShellCommand(command);
+                InputStream input = new java.io.FileInputStream(descriptor.getFileDescriptor())) {
+            ByteArrayOutputStream output = new ByteArrayOutputStream(); byte[] bytes = new byte[1024]; int count;
+            while ((count = input.read(bytes)) >= 0) { require(output.size() + count <= 8192, "Emulator shell response exceeded bound"); output.write(bytes, 0, count); }
+            return output.toString(StandardCharsets.UTF_8.name());
+        }
+    }
+    private void sleepEmulator() throws Exception {
+        require(!context.getSystemService(KeyguardManager.class).isKeyguardSecure(), "Use an isolated emulator without a secure credential");
+        String disabled = shell("locksettings get-disabled").trim();
+        require("true".equals(disabled) || "false".equals(disabled), "Could not read the emulator's original keyguard setting");
+        disabledKeyguardOriginally = "true".equals(disabled);
+        sleptEmulator = true;
+        if (disabledKeyguardOriginally) shell("locksettings set-disabled false");
+        shell("input keyevent 224"); shell("input keyevent 223");
+        long end = SystemClock.elapsedRealtime() + 8000;
+        while (SystemClock.elapsedRealtime() < end && (context.getSystemService(PowerManager.class).isInteractive()
+                || !context.getSystemService(KeyguardManager.class).isKeyguardLocked())) Thread.sleep(40);
+        require(!context.getSystemService(PowerManager.class).isInteractive() && context.getSystemService(KeyguardManager.class).isKeyguardLocked(), "Emulator did not enter the locked, screen-off state");
+    }
     private void waitVolume(int expected) throws Exception {
         long end = SystemClock.elapsedRealtime() + 4000;
         while (SystemClock.elapsedRealtime() < end) {
@@ -215,6 +267,7 @@ public final class ServiceInstrumentation {
     }
     private void execute() {
         Bundle result = new Bundle();
+        int resultCode = Activity.RESULT_CANCELED;
         try {
             require("10.0.2.2".equals(args.getString("targetHost")), "Only the explicit emulator fixture is supported");
             new SettingsStore(context).clear("all");
@@ -244,8 +297,16 @@ public final class ServiceInstrumentation {
             require("fixture".equals(settings.readKodi().getString("password")) && !service.snapshot().getJSONObject("connection").getBoolean("configured"), "Rejected replacement changed saved credentials or remained configured");
             call("kodi.configure", "username", "fixture", "password", "fixture", "port", Integer.parseInt(args.getString("kodiPort")));
             call("kodi.connect");
-            call("kodi.open", "media", object("url", FIRST, "contentType", "application/vnd.apple.mpegurl"), "expectedSourceUrl", FIRST);
-            require(call("kodi.status").getBoolean("active"), "Fixture media not active"); remember();
+            service.authorizeToken("prepared-handoff-fixture");
+            require(!service.prepareHandoff(preparedMedia(), "obsolete-handoff-fixture") && !service.snapshot().has("remote"), "An obsolete token retained or exposed a pending subtitle catalog");
+            require(service.prepareHandoff(preparedMedia(), "prepared-handoff-fixture") && !service.snapshot().has("remote"), "Preparation exposed controls before this source was submitted");
+            call("kodi.open", "media", preparedMedia(), "expectedSourceUrl", FIRST, "sourceToken", "prepared-handoff-fixture");
+            require(call("kodi.status").getBoolean("active"), "Fixture media not active");
+            JSONObject pendingRemote = service.snapshot().getJSONObject("remote");
+            require(pendingRemote.getJSONArray("catalog").length() == 1 && pendingRemote.getJSONArray("tracks").length() == 0
+                    && pendingRemote.getJSONArray("catalog").getJSONObject(0).isNull("index"), "The in-progress handoff lost its declared subtitle catalog");
+            service.revokeToken("prepared-handoff-fixture");
+            passed("an authorized Open retains the complete pending subtitle catalog before handoff completion without adding subtitles");
             JSONObject observedVolume = call("luma.setVolume", "value", 7, "expectedSourceUrl", FIRST).getJSONObject("volume");
             require(observedVolume.getInt("current") == 7 && observedVolume.getInt("max") == 15, "Absolute volume did not return the receiver readback");
             Notification firstNotification = currentCard(41, "pause");
@@ -310,12 +371,34 @@ public final class ServiceInstrumentation {
 
             MediaController controller = new MediaController(context, token);
             phase = "ordinary_pause";
-            currentAction("pause").send(); waitPlaying(false);
+            sleepEmulator(); fixture("?hold=1");
+            currentAction("pause").send();
+            long actionHeldBy = SystemClock.elapsedRealtime() + 3000;
+            while (fixture("").getInt("held") == 0 && SystemClock.elapsedRealtime() < actionHeldBy) Thread.sleep(20);
+            require(fixture("").getInt("held") > 0, "Fixture did not hold the locked-screen action's observation");
+            waitMediaWake(true); fixture("?hold=0"); waitReceiverPlaying(false); waitMediaWake(false); waitPlaying(false);
+            require(!context.getSystemService(PowerManager.class).isInteractive() && context.getSystemService(KeyguardManager.class).isKeyguardLocked(), "A background control opened or unlocked the phone");
+            passed("notification Pause completes with the Activity closed and the screen locked, releasing its bounded wake lock");
             phase = "ordinary_play";
             volumeLayout(currentCard(41, "play"), "Play");
-            currentAction("play").send(); waitPlaying(true);
+            JSONObject beforeOutage = fixture("?failStatus=1");
+            PendingCall failedRead = submit("kodi.status");
+            require(failedRead.ready.await(8, TimeUnit.SECONDS) && "KODI_RESPONSE".equals(failedRead.failure.get()), "Fixture did not reject the transient status read");
+            require(service.snapshot().getJSONObject("playback").getBoolean("stale"), "A failed observation was not marked stale");
+            PendingIntent retryPlay = currentAction("play"); retryPlay.send(); waitMediaWake(true);
+            long failureBy = SystemClock.elapsedRealtime() + 3000;
+            while (fixture("").getInt("failedStatusReads") < beforeOutage.getInt("failedStatusReads") + 3 && SystemClock.elapsedRealtime() < failureBy) Thread.sleep(30);
+            waitMediaWake(false); currentCard(42, "play");
+            require(controller.getPlaybackState().getState() == PlaybackState.STATE_PAUSED
+                    && fixture("").getInt("mutations") == beforeOutage.getInt("mutations"), "Unreachable Kodi erased the media session or sent an unverified write");
+            fixture("?failStatus=0&failStatusOnce=1"); retryPlay.send(); waitReceiverPlaying(true); waitMediaWake(false); waitPlaying(true);
+            require(!service.snapshot().getJSONObject("playback").optBoolean("stale"), "A successful observation did not clear the stale state");
+            passed("failed reads preserve the locked-screen card without writes and a later button tap recovers with a read-only retry");
             phase = "session_pause";
-            controller.getTransportControls().pause(); waitPlaying(false);
+            fixture("?failAfterPause=2"); controller.getTransportControls().pause(); waitReceiverPlaying(false); waitMediaWake(false);
+            require(notification(42) != null && controller.getPlaybackState().getState() != PlaybackState.STATE_NONE, "A lost post-write read erased the control card");
+            require(service.snapshot().getJSONObject("playback").optBoolean("stale"), "A lost post-write read did not preserve uncertain playback");
+            waitPlaying(false);
             phase = "session_play";
             controller.getTransportControls().play(); waitPlaying(true);
             phase = "ordinary_volume";
@@ -377,6 +460,19 @@ public final class ServiceInstrumentation {
             stalePause.send(); controller.getTransportControls().sendCustomAction(staleStop.getAction(), staleStop.getExtras()); Thread.sleep(250); call("kodi.status");
             require(fixture("").getInt("mutations") == renewed && fixture("").getInt("volumeKeys") == 5 && fixture("").getInt("volume") == 8, "A stale notification retargeted a renewed handoff of the same source");
             passed("MediaSession controls work in background and stale notification/session controls cannot alter another source");
+
+            phase = "independent_kodi_http";
+            fixture("?dropTcp=1"); PendingCall hardwareLost = submit("luma.status");
+            require(hardwareLost.ready.await(8, TimeUnit.SECONDS) && hardwareLost.failure.get() != null
+                    && !service.snapshot().getJSONObject("connection").getBoolean("connected"), "Fixture did not disconnect the projector socket");
+            Notification httpOnly = currentCard(41, "pause");
+            long hardwareCardBy = SystemClock.elapsedRealtime() + 3000;
+            while (httpOnly.actions.length != 1 && SystemClock.elapsedRealtime() < hardwareCardBy) { Thread.sleep(50); httpOnly = currentCard(41, "pause"); }
+            require(httpOnly.actions.length == 1 && "Pause".contentEquals(httpOnly.actions[0].title), "Disconnected projector volume remained available or Kodi controls disappeared");
+            notificationAction(httpOnly, "pause").send(); waitReceiverPlaying(false); waitMediaWake(false); waitPlaying(false);
+            controller.getTransportControls().play(); waitReceiverPlaying(true); waitMediaWake(false); waitPlaying(true); currentCard(42, "pause");
+            require(context.getSystemService(KeyguardManager.class).isKeyguardLocked(), "Independent HTTP controls unlocked the device");
+            passed("locked-screen Kodi HTTP controls survive an independent projector TCP failure without hardware volume actions");
 
             phase = "disconnect";
             int stops = fixture("").getInt("stops");
@@ -448,13 +544,20 @@ public final class ServiceInstrumentation {
             require(!foregroundField.getBoolean(service) && !handler.hasCallbacks((Runnable) pollField.get(service)), "Failed background pairing retained the idle foreground service or polling timer");
             stateField.set(adapter, matterOriginal);
             passed("asynchronous Matter state starts background polling and failed pairing releases the idle foreground service");
-            result.putInt("passed", checks); result.putInt("failures", 0); runner.finish(Activity.RESULT_OK, result);
+            result.putInt("passed", checks); result.putInt("failures", 0); resultCode = Activity.RESULT_OK;
         } catch (Throwable error) {
-            result.putString("phase", phase); result.putInt("passed", checks); result.putInt("failures", 1); result.putString("failure", error.getClass().getSimpleName() + ": " + error.getMessage()); runner.finish(Activity.RESULT_CANCELED, result);
+            result.putString("phase", phase); result.putInt("passed", checks); result.putInt("failures", 1); result.putString("failure", error.getClass().getSimpleName() + ": " + error.getMessage());
         } finally {
+            if (sleptEmulator) {
+                try {
+                    shell("input keyevent 224"); shell("wm dismiss-keyguard");
+                    if (disabledKeyguardOriginally) shell("locksettings set-disabled true");
+                } catch (Exception ignored) { }
+            }
             if (service != null) { try { call("device.disconnect"); } catch (Exception ignored) { } }
             try { new SettingsStore(context).clear("all"); } catch (Exception ignored) { }
             unbind(); if (activity != null) runner.runOnMainSync(() -> activity.finish());
         }
+        runner.finish(resultCode, result);
     }
 }

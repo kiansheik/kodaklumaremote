@@ -109,8 +109,40 @@ public final class BackendInstrumentation extends UiSmokeInstrumentation {
             rejects("KODI_RESPONSE", "kodi.addSubtitle", "track", data("url", "https://media.example/wrong-id.vtt"), "expectedSourceUrl", FIRST);
             rejects("KODI_RESPONSE", "kodi.addSubtitle", "track", data("url", "https://media.example/malformed.vtt"), "expectedSourceUrl", FIRST);
             rejects("KODI_RESPONSE", "kodi.addSubtitle", "track", data("url", "https://media.example/trailing.vtt"), "expectedSourceUrl", FIRST);
+            rejects("KODI_RESPONSE", "kodi.addSubtitle", "track", data("url", "https://media.example/false-result.vtt"), "expectedSourceUrl", FIRST);
+            rejects("KODI_RESPONSE", "kodi.addSubtitle", "track", data("url", "https://media.example/null-result.vtt"), "expectedSourceUrl", FIRST);
             rejects("KODI_REJECTED", "kodi.open", "media", media("https://media.example/rejected.m3u8"), "sourceToken", "current");
             rejects("KODI_RESPONSE", "kodi.open", "media", media("https://media.example/unknown.m3u8"), "sourceToken", "current");
+            rejects("KODI_RESPONSE", "kodi.open", "media", media("https://media.example/false-result.m3u8"), "sourceToken", "current");
+            rejects("KODI_RESPONSE", "kodi.open", "media", media("https://media.example/null-result.m3u8"), "sourceToken", "current");
+        });
+        check("source changes cannot mix playback or subtitle snapshots", () -> {
+            configure(Integer.parseInt(args.getString("changingPort")));
+            try {
+                rejects("SOURCE_CHANGED", "kodi.status");
+                rejects("SOURCE_CHANGED", "kodi.getSubtitles", "expectedSourceUrl", FIRST);
+            } finally { configure(kodiPort); }
+        });
+        check("subtitle reads wait for the actual player before adding", () -> {
+            configure(Integer.parseInt(args.getString("readinessPort")));
+            try {
+                JSONObject waiting = call("kodi.getSubtitles", "expectedSourceUrl", FIRST);
+                require(!waiting.getBoolean("active") && waiting.getJSONArray("tracks").length() == 0, "Unready player was reported subtitle-ready");
+                JSONObject ready = call("kodi.getSubtitles", "expectedSourceUrl", FIRST);
+                require(ready.getBoolean("active") && ready.getJSONArray("tracks").length() == 0, "Ready player without tracks was treated as inactive");
+                rejects("KODI_RESPONSE", "kodi.getSubtitles", "expectedSourceUrl", FIRST);
+                rejects("KODI_RESPONSE", "kodi.getSubtitles", "expectedSourceUrl", FIRST);
+            } finally { configure(kodiPort); }
+        });
+        check("one bounded deadline covers every RPC in a status read", () -> {
+            configure(Integer.parseInt(args.getString("deadlinePort")));
+            long before = SystemClock.elapsedRealtime();
+            try {
+                rejects("KODI_UNAVAILABLE", "kodi.status");
+                long duration = SystemClock.elapsedRealtime() - before;
+                require(duration >= 4000 && duration < 6500, "Status read exceeded its overall deadline");
+            } finally { configure(kodiPort); }
+            require(call("kodi.status").getBoolean("active"), "Expired read affected the next operation");
         });
         check("explicit pause resume seek stop", () -> {
             call("kodi.pause", "expectedSourceUrl", FIRST, "sourceToken", "current");

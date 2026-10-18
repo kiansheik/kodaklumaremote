@@ -6,6 +6,9 @@ installed on the Samsung phone running Android 16. The user confirmed live
 phone casting with picture, sound and Portuguese subtitles. Background/system
 controls on the notification shade and lock screen were user-confirmed on0.2.2.
 Cold-start/subtitle regressions and phone-off acceptance remain open.
+The latest [Motorola recovery](session-handoffs/2026-10-18-motorola-kodi-recovery.md)
+implements source-verified startup/subtitle and locked-screen fixes; physical
+Motorola/Bly Manor acceptance is pending.
 
 ## Runtime path
 
@@ -66,16 +69,29 @@ A cold Kodi start may acknowledge the first Open before video playback becomes
 ready. One bounded retry is allowed only after that request settles and fresh
 observations confirm Kodi is idle; a native prewrite guard rejects the retry if
 another video has started. Unknown command outcomes are not blindly repeated.
+Exact-source playback is also observed while Open's response remains unresolved
+or fails, allowing the same attempt to continue into subtitles without replay.
+Observation releases the Open wait without aborting its native cast job.
 
 Subtitle readiness/registration reads have bounded30-second windows, sized for
-native operations that can contain multiple HTTP requests. Transient reads
-retry; authentication, validation and source errors fail promptly. An uncertain
+native operations that can contain multiple HTTP requests. Each native Kodi
+operation now has one five-second budget across those requests. Transient reads
+retry; authentication, configuration and source errors fail promptly. Kodi's
+null `currentsubtitle` means its subtitle player is not ready; an empty object
+means ready without a selection. An uncertain
 Add response is reconciled against actual indices without resending the Add.
 An exact, validated Kodi JSON-RPC rejection known to precede Open/Add dispatch
 now clears the uncertain-write receipt and permits an explicit later Retry.
 Malformed, mismatched-ID, internal/unknown errors and transport failures keep
 their uncertain outcome and cannot authorize duplicate writes. Native diagnostics
 include only fixed methods/categories and numeric HTTP/RPC codes.
+Initial subtitle-only failure opens the remote only after fresh exact-source
+playback confirmation, retaining every captured language for subtitle-only retry.
+An English Add follows rejected PT-BR only with explicit non-application proof;
+uncertain Add outcomes never authorize another Add. Captured metadata is prepared
+in service memory before opening, so it survives an interrupted completion step.
+Per-operation bridge abort does not revoke the entire cast job; user Cancel and
+source changes still do.
 
 ## Saved first setup
 
@@ -136,6 +152,13 @@ Source/revision guards prevent an old notification from controlling
 a different video. Notification updates coalesce the latest snapshot/revision,
 post at most once per second and skip unchanged visible content; media-session
 state updates immediately.
+Transient HTTP failure marks matching playback stale and retains its card instead
+of inferring that video stopped. System actions first read fresh source-bound
+playback; they do not replay failed writes. Each user media action holds a CPU
+wake lock for at most30seconds and releases it on completion/cancellation. Kodi
+HTTP controls can remain usable when the independent projector TCP link drops;
+hardware volume still requires that hardware transport. These paths are covered
+by isolated Android fixtures, not yet confirmed on Julia's Motorola.
 
 Read-only diagnostics on the installed0.2.0 found notification permission
 granted, an unblocked active foreground notification and an active playing media

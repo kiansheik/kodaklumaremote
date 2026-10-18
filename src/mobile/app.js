@@ -264,36 +264,46 @@ function reportStatus(stage, code) {
   try { window.LumaNative.postMessage(JSON.stringify({ id: String(++requestId), method: 'app.handoffStatus', params })); }
   catch { /* Diagnostics never change the result of a user action. */ }
 }
-function rpc(method, params = {}, { signal, timeoutMs = 10000, onNotSent } = {}) {
+function rpc(method, params = {}, { signal, timeoutMs = 10000, onNotSent, onSettled } = {}) {
   const mutationReceipt = method === 'kodi.addSubtitle' || method === 'kodi.open';
   const notSent = () => { try { onNotSent?.(); } catch { /* Receipt observers cannot alter transport outcome. */ } };
+  const settled = () => { try { onSettled?.(); } catch { /* Only a native reply supplies this receipt. */ } };
   if (!window.LumaNative?.postMessage) { notSent(); return Promise.reject(fixedError('NATIVE_UNAVAILABLE')); }
   if (signal?.aborted) { notSent(); return Promise.reject(fixedError('CANCELLED')); }
   return new Promise((resolve, reject) => {
     const id = String(++requestId);
     let item;
+    let timer;
     const remove = () => {
       clearTimeout(timer);
       signal?.removeEventListener('abort', abort);
       pending.delete(id);
     };
+    const retainReceipt = () => {
+      const receipts = [...pending.values()].filter(entry => entry.receiptOnly).length;
+      if (!mutationReceipt || (typeof onNotSent !== 'function' && typeof onSettled !== 'function') || receipts >= 32) { remove(); return; }
+      item.receiptOnly = true;
+      signal?.removeEventListener('abort', abort);
+      clearTimeout(timer);
+      // A bridge timeout is not native completion. Retain only a bounded
+      // observer for an eventual real reply, never an automatic replay.
+      timer = setTimeout(remove, 60000);
+    };
     const abort = () => {
-      cancelNative(params.sourceToken);
+      // A stage deadline can expire while the cast itself remains valid.
+      // User cancellation/source changes revoke the job explicitly; a single
+      // timed-out read must not invalidate later playback/subtitle recovery.
       // A cancelled mutation may still receive proof that the native guard stopped
       // it before writing. Keep only this bounded, expiring receipt observer;
       // the caller stops immediately and unknown outcomes remain unknown.
-      const receipts = [...pending.values()].filter(entry => entry.receiptOnly).length;
-      if (mutationReceipt && typeof onNotSent === 'function' && receipts < 32) {
-        item.receiptOnly = true;
-        signal?.removeEventListener('abort', abort);
-      } else remove();
+      retainReceipt();
       reject(fixedError('CANCELLED'));
     };
-    const timer = setTimeout(() => { remove(); reject(fixedError('TIMEOUT')); }, timeoutMs);
+    timer = setTimeout(() => { retainReceipt(); reject(fixedError('TIMEOUT')); }, timeoutMs);
     item = {
       receiptOnly: false,
-      resolve: result => { remove(); resolve(result); },
-      reject: code => { if (mutationReceipt && ['SOURCE_CHANGED', 'KODI_REJECTED'].includes(code)) notSent(); remove(); reject(fixedError(code)); },
+      resolve: result => { settled(); remove(); resolve(result); },
+      reject: code => { if (mutationReceipt && ['SOURCE_CHANGED', 'KODI_REJECTED'].includes(code)) notSent(); settled(); remove(); reject(fixedError(code)); },
     };
     pending.set(id, item);
     signal?.addEventListener('abort', abort, { once: true });
@@ -738,8 +748,13 @@ async function startCasting() {
     if (id !== flowId || state.sourceGeneration !== generation || state.pendingMedia !== selected) throw fixedError('SOURCE_CHANGED');
     state.jobToken = jobToken;
     selected.sourceToken = jobToken;
-    await coordinator.start(selected, { signal: controller.signal, isCurrentSource: () => state.sourceGeneration === generation && state.pendingMedia === selected });
-    if (id === flowId) { state.pendingMedia = null; message('Ready on the projector. You can use the remote.'); }
+    const result = await coordinator.start(selected, { signal: controller.signal, isCurrentSource: () => state.sourceGeneration === generation && state.pendingMedia === selected });
+    if (id === flowId) {
+      state.pendingMedia = null;
+      message(result.subtitleError
+        ? 'Video is playing. Subtitles could not be loaded. Open Subtitles to try again.'
+        : 'Ready on the projector. You can use the remote.', Boolean(result.subtitleError));
+    }
   } catch (error) {
     cancelNative(jobToken);
     if (id !== flowId) return;
@@ -837,6 +852,7 @@ window.LumaApp = Object.freeze({
     }
     const interruptedMsx = state.handoff && state.pendingTarget === 'philips';
     if (interruptedMsx) state.philips.openUncertain = true;
+    if (state.handoff) cancelNative(state.jobToken);
     state.flowController?.abort();
     coordinator.cancel();
     flowId++;
@@ -854,6 +870,7 @@ window.LumaApp = Object.freeze({
     state.autoStart = false;
     if (state.handoff && !state.setupFlow) {
       state.sourceChanged = true;
+      cancelNative(state.jobToken);
       state.flowController?.abort();
       coordinator.cancel();
       message(errors.SOURCE_CHANGED, true);

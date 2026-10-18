@@ -518,3 +518,41 @@ and downloaded bytes/signature match the prepared release. The Python HTTPS
 client lacked a trusted CA bundle; system curl and Chrome verified successfully
 without trust changes. No installation, device commands or new phone features
 were part of this maintenance deployment.
+
+Motorola follow-up: Julia's phone needed about three attempts to start a movie
+on LUMA/Kodi, kept showing startup after playback began, never loaded subtitles,
+and lost its lock-screen card after an ineffective Pause. The user identified
+the title as Bly Manor. The Motorola is unavailable for debugging and the exact
+episode/source is unknown; this report does not establish a device-specific cause.
+
+Version0.4.2/code11 now prepares startup, subtitle and background-control fixes.
+The coordinator observes exact-source playback while Open is unresolved or its
+response is unknown, without replaying uncertain writes. Kodi's null
+`currentsubtitle` now means its subtitle player is not ready; an empty object is
+ready without a selection. Initial subtitle failures preserve verified playback,
+the full captured catalog and a subtitle-only retry. English fallback requires
+explicit proof that the preferred Add was not applied.
+
+Native Kodi operations share one five-second budget across their RPCs, require
+exact mutation acknowledgements and reject mixed-source observations. The
+service retains prepared catalog metadata before handoff completion, preserves
+a matching stale media card on transient HTTP failures and separates Kodi HTTP
+control from projector TCP availability. Every system media action gets a
+bounded30-second CPU wake lock and fresh source/revision checks before writes.
+Per-operation JS abort no longer revokes the whole cast job; explicit user
+Cancel and source changes still revoke it.
+
+Final Node184 checks (including coordinator52), mobile browser56,
+debug/AndroidTest builds and lintDebug passed. Isolated `receiverFixture`
+checks passed: Service10, Backend12, packaged UI5, settings5 and dual receiver4.
+The service test used a genuinely screen-off/keyguard-locked emulator after its
+Activity closed, verified Pause/Resume and bounded CPU-lock release, and restored
+the original emulator lock setting. Final review also caught and fixed a
+same-URL recast blocked by an earlier unknown response: only an actual native
+completion receipt plus prior matching playback can release that cached attempt.
+Late bridge receipts are bounded and never justify overlapping unknown writes.
+Version0.4.2 signing/publication is not yet established here. No
+physical phone/projector/TV actions were sent during this repair. Motorola
+locked-screen controls, the exact Bly Manor episode and visible subtitles still
+need physical acceptance. See the
+[recovery handoff](session-handoffs/2026-10-18-motorola-kodi-recovery.md).

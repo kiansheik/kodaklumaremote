@@ -69,7 +69,9 @@
   provenance, physical acceptance and remaining startup/phone work.
 - `src/handoff/coordinator.mjs`: bounded receiver launch/readiness/media/subtitle
   orchestration, preferred-first/on-demand subtitle catalog, observed-index
-  bindings, cancellation and a guarded cold-start Open retry.
+  bindings, cancellation and a guarded cold-start Open retry. Exact-source
+  observation reconciles unresolved Opens; subtitle-only failure preserves the
+  playing remote/catalog without another video Open.
 - `src/mobile/{index.html,app.js,capture.js}`: no-scroll combined phone remote,
   native RPC adapters, same-origin declared source/track capture and matched pause.
 - `android/`: phone APK shell and native networking; browser WebView has no
@@ -77,6 +79,11 @@
   ConnectionService owns background TCP/UDP/Kodi, MediaSession/notification and
   cached state. NativeBackend implements transport; SettingsStore encrypts
   validated credentials and caches the receiver. Generated assets/APKs ignored.
+  Kodi calls share a five-second multi-RPC budget and subtitle-player readiness;
+  system media actions use bounded wake locks, fresh source guards and Kodi HTTP
+  independently of the projector's TCP connection. The
+  [Motorola recovery handoff](session-handoffs/2026-10-18-motorola-kodi-recovery.md)
+  distinguishes fixture evidence from pending physical acceptance.
 - `src/msx/`, `MsxServer.java`: TV-owned MSX player/subtitle renderer and
   capability/peer-pinned phone LAN control server. No media proxy. Independent
   service executor/heartbeat and selected-target system controls coexist with

@@ -1,0 +1,9 @@
+Fixes Kodi startup recovery when the movie begins before its start request finishes responding. A failed subtitle load now leaves the playing video and remote usable, with all captured languages available for a subtitle-only retry.
+
+Waits for Kodi's subtitle player to be ready. Prefers Brazilian Portuguese, then English when a rejected subtitle request is confirmed not to have loaded.
+
+Keeps lock-screen and notification controls during temporary connection failures and completes button actions while the screen is locked. Kodi playback controls can remain connected when the projector's separate hardware-control connection drops.
+
+Motorola device confirmation is still pending; fixes are covered by local and Android emulator regressions.
+
+Requires 64-bit ARM Android 7 or newer.

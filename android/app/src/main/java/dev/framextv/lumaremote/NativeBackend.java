@@ -48,7 +48,7 @@ public final class NativeBackend {
         public final String code;
         private BackendException(String code, String message) { super(message); this.code = code; }
     }
-    private static final int TCP_TIMEOUT = 2500, MAX_REPLY = 65536, MAX_APPS_BYTES = 16 * 1024 * 1024;
+    private static final int TCP_TIMEOUT = 2500, KODI_CALL_TIMEOUT = 5000, MAX_REPLY = 65536, MAX_APPS_BYTES = 16 * 1024 * 1024;
     private static final Pattern PACKAGE = Pattern.compile("[A-Za-z][A-Za-z0-9_]*(?:\\.[A-Za-z][A-Za-z0-9_]*)+");
     private static final Map<String, Integer> KEYS = new LinkedHashMap<>();
     static {
@@ -65,6 +65,7 @@ public final class NativeBackend {
     private volatile HttpURLConnection activeHttp;
     private String host, deviceName, username, password, activeToken;
     private int kodiPort = 8080, rpcId;
+    private long kodiDeadline;
     private Map<String, String> apps;
 
     public NativeBackend(Context context) { this.context = context.getApplicationContext(); }
@@ -179,7 +180,7 @@ public final class NativeBackend {
             throw failure;
         }
         catch (Exception ignored) { throw fail("CONNECTION_FAILED"); }
-        finally { activeToken = null; }
+        finally { activeToken = null; kodiDeadline = 0; }
     }
 
     private void requireHost() throws BackendException { if (!privateAddress(host)) throw fail("NOT_CONNECTED"); }
@@ -380,11 +381,17 @@ public final class NativeBackend {
     }
     private Object rpc(String method, JSONObject params, boolean mutation) throws Exception {
         requireHost(); if (username == null || password == null) throw fail("KODI_CONFIG");
+        // One public operation can require several RPCs. A fresh five seconds
+        // per RPC used to hold the service queue for 15-20 seconds, outliving
+        // the bridge request and delaying lock-screen actions behind it.
+        if (kodiDeadline == 0) kodiDeadline = SystemClock.elapsedRealtime() + KODI_CALL_TIMEOUT;
+        long remaining = kodiDeadline - SystemClock.elapsedRealtime();
+        if (remaining <= 0) throw fail("KODI_UNAVAILABLE");
         HttpURLConnection connection = null; ScheduledFuture<?> deadline = null;
         try {
             connection = (HttpURLConnection) new URL("http", host, kodiPort, "/jsonrpc").openConnection(Proxy.NO_PROXY); activeHttp = connection;
-            final HttpURLConnection owned = connection; deadline = deadlines.schedule(owned::disconnect, 5, TimeUnit.SECONDS);
-            connection.setConnectTimeout(5000); connection.setReadTimeout(5000); connection.setInstanceFollowRedirects(false);
+            final HttpURLConnection owned = connection; deadline = deadlines.schedule(owned::disconnect, remaining, TimeUnit.MILLISECONDS);
+            connection.setConnectTimeout((int) remaining); connection.setReadTimeout((int) remaining); connection.setInstanceFollowRedirects(false);
             connection.setRequestMethod("POST"); connection.setDoOutput(true); connection.setUseCaches(false);
             connection.setRequestProperty("Content-Type", "application/json");
             connection.setRequestProperty("Authorization", "Basic " + Base64.encodeToString((username + ":" + password).getBytes(StandardCharsets.UTF_8), Base64.NO_WRAP));
@@ -438,6 +445,11 @@ public final class NativeBackend {
     private JSONObject rpcObject(String method, JSONObject params) throws Exception {
         Object result = rpc(method, params, false); if (!(result instanceof JSONObject)) throw fail("KODI_RESPONSE"); return (JSONObject) result;
     }
+    private void rpcAccepted(String method, JSONObject params) throws Exception {
+        // These Kodi methods acknowledge with exactly "OK". A valid envelope
+        // containing null/false/another result is still an unknown write outcome.
+        if (!"OK".equals(rpc(method, params, true))) throw fail("KODI_RESPONSE");
+    }
     private Integer player() throws Exception {
         Object result = rpc("Player.GetActivePlayers", new JSONObject(), false); if (!(result instanceof JSONArray)) throw fail("KODI_RESPONSE");
         JSONArray list = (JSONArray) result; if (list.length() > 32) throw fail("KODI_RESPONSE");
@@ -457,22 +469,30 @@ public final class NativeBackend {
     }
     private JSONObject playback(Integer player) throws Exception {
         if (player == null) return object("active", false, "playing", false);
+        String source = currentSource(player);
         JSONObject data = rpcObject("Player.GetProperties", object("playerid", player, "properties", new JSONArray().put("speed").put("time").put("totaltime").put("canseek")));
         if (!(data.opt("speed") instanceof Number) || !(data.opt("canseek") instanceof Boolean)) throw fail("KODI_RESPONSE");
-        return object("active", true, "playing", data.getDouble("speed") != 0, "positionSeconds", seconds(data.optJSONObject("time")), "durationSeconds", seconds(data.optJSONObject("totaltime")), "canSeek", data.getBoolean("canseek"), "sourceUrl", currentSource(player));
+        if (!source.equals(currentSource(player))) throw fail("SOURCE_CHANGED");
+        return object("active", true, "playing", data.getDouble("speed") != 0, "positionSeconds", seconds(data.optJSONObject("time")), "durationSeconds", seconds(data.optJSONObject("totaltime")), "canSeek", data.getBoolean("canseek"), "sourceUrl", source);
     }
     private JSONObject subtitles(Integer player) throws Exception {
         if (player == null) return object("active", false, "enabled", false, "currentIndex", JSONObject.NULL, "tracks", new JSONArray());
         JSONObject data = rpcObject("Player.GetProperties", object("playerid", player, "properties", new JSONArray().put("subtitles").put("currentsubtitle").put("subtitleenabled")));
         JSONArray list = data.optJSONArray("subtitles"); if (list == null || list.length() > 128 || !(data.opt("subtitleenabled") instanceof Boolean)) throw fail("KODI_RESPONSE");
+        // Kodi21.2 returns null here until appPlayer->HasPlayer(), whereas a
+        // ready player with no selected subtitles returns an empty object.
+        // GetActivePlayers alone therefore does not authorize AddSubtitle yet.
+        if (!data.has("currentsubtitle")) throw fail("KODI_RESPONSE");
+        if (data.isNull("currentsubtitle")) return object("active", false, "enabled", false, "currentIndex", JSONObject.NULL, "tracks", new JSONArray());
+        JSONObject selected = data.optJSONObject("currentsubtitle"); if (selected == null) throw fail("KODI_RESPONSE");
         JSONArray tracks = new JSONArray(); List<Integer> indices = new ArrayList<>();
         for (int i = 0; i < list.length(); i++) {
             JSONObject entry = list.optJSONObject(i); if (entry == null) throw fail("KODI_RESPONSE");
             int index = integer(entry.opt("index"), 0, 1024); if (indices.contains(index)) throw fail("KODI_RESPONSE"); indices.add(index);
             tracks.put(object("index", index, "name", label(entry.optString("name", ""), 200), "language", label(entry.optString("language", ""), 64)));
         }
-        JSONObject selected = data.optJSONObject("currentsubtitle"); Object current = JSONObject.NULL;
-        if (selected != null && selected.opt("index") instanceof Number) {
+        Object current = JSONObject.NULL;
+        if (selected.opt("index") instanceof Number) {
             double index = ((Number) selected.opt("index")).doubleValue();
             if (index >= 0 && index <= 1024 && index == Math.floor(index) && indices.contains((int) index)) current = (int) index;
         }
@@ -492,16 +512,21 @@ public final class NativeBackend {
             if (params.has("expectedSourceUrl") && !url.equals(publicUrl(params.opt("expectedSourceUrl")))) throw fail("SOURCE_CHANGED");
             if (params.has("onlyIfInactive") && !(params.opt("onlyIfInactive") instanceof Boolean)) throw fail("INVALID_INPUT");
             if (params.optBoolean("onlyIfInactive") && player() != null) throw fail("SOURCE_CHANGED");
-            rpc("Player.Open", object("item", object("file", url)), true); return object("accepted", true);
+            rpcAccepted("Player.Open", object("item", object("file", url))); return object("accepted", true);
         }
         Integer player = player();
         if ("status".equals(action)) return playback(player);
-        if ("getSubtitles".equals(action)) { if (player != null) expectedSource(player, params); return subtitles(player); }
+        if ("getSubtitles".equals(action)) {
+            if (player != null) expectedSource(player, params);
+            JSONObject result = subtitles(player);
+            if (player != null) expectedSource(player, params);
+            return result;
+        }
         if (player == null) throw fail("NO_VIDEO");
         if ("addSubtitle".equals(action)) {
             JSONObject track = params.optJSONObject("track"); if (track == null) throw fail("INVALID_SUBTITLE");
             String url = publicUrl(track.opt("url")); expectedSource(player, params);
-            rpc("Player.AddSubtitle", object("playerid", player, "subtitle", url), true); return object("accepted", true);
+            rpcAccepted("Player.AddSubtitle", object("playerid", player, "subtitle", url)); return object("accepted", true);
         }
         if ("setSubtitle".equals(action)) {
             Object index = params.opt("index"); JSONObject command = object("playerid", player);
@@ -511,7 +536,7 @@ public final class NativeBackend {
                 for (int i = 0; i < tracks.length(); i++) if (tracks.getJSONObject(i).getInt("index") == selected) found = true;
                 if (!found) throw fail("INVALID_SUBTITLE"); command.put("subtitle", selected).put("enable", true);
             }
-            expectedSource(player, params); rpc("Player.SetSubtitle", command, true); return object("accepted", true);
+            expectedSource(player, params); rpcAccepted("Player.SetSubtitle", command); return object("accepted", true);
         }
         if ("seek".equals(action)) {
             Object raw = params.opt("position"); if (!(raw instanceof Number)) throw fail("INVALID_INPUT"); double value = ((Number) raw).doubleValue();
@@ -522,7 +547,7 @@ public final class NativeBackend {
         } else if ("pause".equals(action) || "resume".equals(action)) {
             expectedSource(player, params); rpc("Player.PlayPause", object("playerid", player, "play", "resume".equals(action)), true);
         } else if ("stop".equals(action)) {
-            expectedSource(player, params); rpc("Player.Stop", object("playerid", player), true);
+            expectedSource(player, params); rpcAccepted("Player.Stop", object("playerid", player));
         } else throw fail("INVALID_INPUT");
         return object("accepted", true);
     }

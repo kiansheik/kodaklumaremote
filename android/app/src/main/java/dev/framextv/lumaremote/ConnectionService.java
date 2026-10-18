@@ -19,6 +19,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.os.PowerManager;
 import android.os.SystemClock;
 import android.util.Log;
 import org.json.JSONArray;
@@ -78,6 +79,9 @@ public final class ConnectionService extends Service {
     private JSONObject state = new JSONObject();
     private volatile String authorizedToken;
     private volatile String authorizedTarget = "luma";
+    private JSONObject preparedRemote;
+    private String preparedToken;
+    private long preparedGeneration = -1;
     private volatile String mediaRevision = UUID.randomUUID().toString();
     private boolean foreground, pollQueued, startRequested, autoConnectPaused;
     private long lastHeartbeat;
@@ -168,12 +172,26 @@ public final class ConnectionService extends Service {
     public void authorizeToken(String token) { authorizeToken(token, "luma"); }
     public void authorizeToken(String token, String target) {
         synchronized (stateLock) {
+            if (token == null || !token.equals(authorizedToken)) clearPreparedHandoff();
             authorizedTarget = "philips".equals(target) ? "philips" : "luma";
             authorizedToken = token != null && token.length() <= 200 ? token : null;
         }
     }
-    public void revokeToken(String token) { synchronized (stateLock) { if (token != null && token.equals(authorizedToken)) authorizedToken = null; } }
-    public void revokeTokens() { synchronized (stateLock) { authorizedToken = null; } }
+    public void revokeToken(String token) { synchronized (stateLock) { if (token != null && token.equals(authorizedToken)) { authorizedToken = null; clearPreparedHandoff(); } } }
+    public void revokeTokens() { synchronized (stateLock) { authorizedToken = null; clearPreparedHandoff(); } }
+    private void clearPreparedHandoff() { preparedRemote = null; preparedToken = null; preparedGeneration = -1; }
+    /** Retains the declared catalog if the browsing Activity closes during Open.
+     * It is not published until this exact authorized source is submitted. */
+    public boolean prepareHandoff(JSONObject media, String token) {
+        JSONObject remote;
+        try { remote = remoteData(media, new JSONObject(), media == null ? null : media.optJSONArray("tracks")); }
+        catch (NativeBackend.BackendException ignored) { return false; }
+        synchronized (stateLock) {
+            if (destroyed || token == null || !token.equals(authorizedToken) || !"luma".equals(authorizedTarget)) return false;
+            preparedRemote = remote; preparedToken = token; preparedGeneration = generation;
+        }
+        return true;
+    }
     public void addListener(Listener listener) { if (listener != null) { listeners.add(listener); main.post(() -> { if (listeners.contains(listener)) listener.onStateChanged(snapshot()); }); } }
     public void removeListener(Listener listener) { listeners.remove(listener); }
     public JSONObject snapshot() { synchronized (stateLock) { return copy(state); } }
@@ -202,20 +220,32 @@ public final class ConnectionService extends Service {
         final NativeBackend transport = backend;
         final NetworkAction action;
         final Callback callback;
+        final PowerManager.WakeLock wakeLock;
         boolean finished;
-        Work(NetworkAction action, Callback callback) { this.action = action; this.callback = callback; }
+        Work(NetworkAction action, Callback callback, boolean userMediaAction) {
+            this.action = action; this.callback = callback;
+            // The system holds the callback awake, not the asynchronous LAN work.
+            // Only a requested control needs CPU time; playback and polling do not.
+            wakeLock = userMediaAction ? getSystemService(PowerManager.class)
+                    .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "LumaRemote:MediaControl") : null;
+            if (wakeLock != null) { wakeLock.setReferenceCounted(false); wakeLock.acquire(30000); }
+        }
+        synchronized void releaseWakeLock() { if (wakeLock != null && wakeLock.isHeld()) wakeLock.release(); }
         boolean current() { return !destroyed && session == generation; }
         void post(Runnable update) { main.post(() -> { if (current()) update.run(); else cancel(); }); }
         void complete(JSONObject result, String code, String message) {
             if (finished) return; finished = true; pending.remove(this);
             if (callback != null) { if (code == null) callback.success(copy(result)); else callback.failure(code, message); }
         }
-        void cancel() { complete(null, "NOT_CONNECTED", "Disconnected from the projector. Connect again to send controls."); }
+        void cancel() { releaseWakeLock(); complete(null, "NOT_CONNECTED", "Disconnected from the projector. Connect again to send controls."); }
         @Override public void run() {
             if (!current()) { main.post(this::cancel); return; }
             try { action.run(this); }
             catch (RuntimeException ignored) { post(() -> complete(null, "CONNECTION_FAILED", "Could not complete the control. Try again.")); }
-            finally { if (callback == null) main.post(() -> { if (!finished) { finished = true; pending.remove(this); } }); }
+            finally {
+                releaseWakeLock();
+                if (callback == null) main.post(() -> { if (!finished) { finished = true; pending.remove(this); } });
+            }
         }
     }
 
@@ -253,7 +283,13 @@ public final class ConnectionService extends Service {
             }
             if ("kodi.open".equals(method)) {
                 mediaRevision = UUID.randomUUID().toString();
-                synchronized (stateLock) { state.remove("remote"); }
+                synchronized (stateLock) {
+                    JSONObject media = args.optJSONObject("media"), remembered = preparedRemote == null ? null : preparedRemote.optJSONObject("media");
+                    if (preparedGeneration == generation && preparedToken != null && preparedToken.equals(authorizedToken)
+                            && preparedToken.equals(args.optString("sourceToken")) && media != null && remembered != null
+                            && remembered.optString("url").equals(media.optString("url"))) put(state, "remote", copy(preparedRemote));
+                    else state.remove("remote");
+                }
                 publish();
             }
             if (!enqueue(work -> perform(work, method, args), callback) && "device.connect".equals(method) && !connected()) demote();
@@ -277,10 +313,13 @@ public final class ConnectionService extends Service {
         if (callback != null) callback.success(object("connected", false));
     }
     private boolean enqueue(NetworkAction action, Callback callback) {
+        return enqueue(action, callback, false);
+    }
+    private boolean enqueue(NetworkAction action, Callback callback, boolean userMediaAction) {
         if (backend == null) backend = newBackend();
-        Work work = new Work(action, callback); pending.add(work);
+        Work work = new Work(action, callback, userMediaAction); pending.add(work);
         try { network.execute(work); return true; }
-        catch (RejectedExecutionException ignored) { pending.remove(work); reject(callback, "BUSY", "Please wait for the current controls to finish."); return false; }
+        catch (RejectedExecutionException ignored) { work.releaseWakeLock(); pending.remove(work); reject(callback, "BUSY", "Please wait for the current controls to finish."); return false; }
     }
     private void perform(Work work, String method, JSONObject args) {
         try {
@@ -335,7 +374,7 @@ public final class ConnectionService extends Service {
                 if (!work.current()) return;
                 put(state, "connection", work.transport.connectionSnapshot());
                 put(state, "settings", settings.metadata());
-                if (method != null && method.startsWith("kodi.") && !method.equals("kodi.configure")) state.remove("playback");
+                if (method != null && method.startsWith("kodi.") && !method.equals("kodi.configure")) observeKodiFailure(failure);
             }
             work.post(() -> {
                 notice = failure.getMessage();
@@ -577,11 +616,12 @@ public final class ConnectionService extends Service {
     }
     public boolean rememberHandoff(JSONObject media, JSONObject result) {
         long session = generation;
+        String token = authorizedToken;
         JSONObject remote;
         try { remote = remoteData(media, result, media == null ? null : media.optJSONArray("tracks")); }
         catch (NativeBackend.BackendException ignored) { return false; }
         main.post(() -> {
-            if (destroyed || session != generation || !connected()) return;
+            if (destroyed || session != generation || !java.util.Objects.equals(token, authorizedToken) || !configured()) return;
             mediaRevision = UUID.randomUUID().toString();
             synchronized (stateLock) { put(state, "remote", remote); }
             publish(); schedulePoll(0);
@@ -662,8 +702,39 @@ public final class ConnectionService extends Service {
         put(remote, "selectedIndex", observed.opt("currentIndex"));
         put(remote, "subtitlesEnabled", observed.optBoolean("enabled"));
     }
+    /** A failed HTTP read says nothing about whether receiver playback stopped. */
+    private void observeKodiFailure(NativeBackend.BackendException failure) {
+        synchronized (stateLock) {
+            if ("KODI_AUTH".equals(failure.code) || "KODI_CONFIG".equals(failure.code)
+                    || "NO_VIDEO".equals(failure.code) || "SOURCE_CHANGED".equals(failure.code)) {
+                state.remove("playback");
+            } else if ("KODI_UNAVAILABLE".equals(failure.code) || "KODI_RESPONSE".equals(failure.code)) {
+                JSONObject playback = state.optJSONObject("playback");
+                if (matches(state.optJSONObject("remote"), playback)) {
+                    put(playback, "stale", true); put(playback, "errorCode", failure.code);
+                }
+            }
+        }
+    }
+    /** Retry only a fast failed observation, never a write or a full timeout. */
+    private JSONObject readMediaPlayback(Work work) throws NativeBackend.BackendException {
+        long started = SystemClock.elapsedRealtime();
+        try { return work.transport.handle("kodi.status", new JSONObject()); }
+        catch (NativeBackend.BackendException failure) {
+            if (!work.current() || SystemClock.elapsedRealtime() - started >= 1000
+                    || !("KODI_UNAVAILABLE".equals(failure.code) || "KODI_RESPONSE".equals(failure.code))) throw failure;
+            SystemClock.sleep(150);
+            if (!work.current()) throw NativeBackend.fail("NOT_CONNECTED");
+            return work.transport.handle("kodi.status", new JSONObject());
+        }
+    }
     private boolean connected() { return snapshot().optJSONObject("connection").optBoolean("connected"); }
     private boolean configured() { return snapshot().optJSONObject("connection").optBoolean("configured"); }
+    private boolean hasKodiPlayback() {
+        JSONObject all = snapshot(), connection = all.optJSONObject("connection");
+        return connection != null && connection.optBoolean("configured") && matches(all.optJSONObject("remote"), all.optJSONObject("playback"));
+    }
+    private boolean needsKodiPolling() { return connected() || hasKodiPlayback(); }
     /** A fresh service may attach controls to video already playing on Kodi.
      * A remembered source or an in-progress handoff always keeps its own scope. */
     private void adoptObservedPlayback(JSONObject current) {
@@ -693,10 +764,11 @@ public final class ConnectionService extends Service {
         if ("philips".equals(selectedTarget)) { televisionMediaAction(method); return; }
         String expected = rememberedSource();
         String revision = mediaRevision;
-        if (expected.isEmpty() || !connected() || !configured()) return;
+        if (expected.isEmpty() || !configured()) return;
+        if ((method.startsWith("volume-") || method.equals("mute")) && !connected()) return;
         enqueue(work -> {
             try {
-                JSONObject current = work.transport.handle("kodi.status", new JSONObject());
+                JSONObject current = readMediaPlayback(work);
                 synchronized (stateLock) { if (!work.current()) return; put(state, "playback", current); }
                 if (!revision.equals(mediaRevision) || !expected.equals(rememberedSource()) || !current.optBoolean("active") || !expected.equals(current.optString("sourceUrl"))) {
                     work.post(() -> { notice = "Kodi is playing a different video. Open the app to choose it."; publish(); }); return;
@@ -707,7 +779,7 @@ public final class ConnectionService extends Service {
                     put(args, "key", method); work.transport.handle("luma.key", args);
                     projector = work.transport.handle("luma.status", new JSONObject());
                 } else work.transport.handle(method, args);
-                JSONObject observed = work.transport.handle("kodi.status", new JSONObject());
+                JSONObject observed = readMediaPlayback(work);
                 synchronized (stateLock) {
                     if (!work.current()) return;
                     put(state, "playback", observed); put(state, "connection", work.transport.connectionSnapshot());
@@ -716,13 +788,13 @@ public final class ConnectionService extends Service {
                 work.post(this::publish);
             } catch (NativeBackend.BackendException failure) {
                 if ("KODI_AUTH".equals(failure.code) && work.current()) { candidateKodi = null; candidateGeneration = -1; }
-                synchronized (stateLock) { if (!work.current()) return; put(state, "connection", work.transport.connectionSnapshot()); state.remove("playback"); }
-                work.post(() -> { notice = failure.getMessage(); publish(); if (!connected()) demote(); });
+                synchronized (stateLock) { if (!work.current()) return; put(state, "connection", work.transport.connectionSnapshot()); observeKodiFailure(failure); }
+                work.post(() -> { notice = failure.getMessage(); publish(); if (!connected()) demote(); else schedulePoll(1000); });
             }
-        }, null);
+        }, null, true);
     }
     private final Runnable poll = () -> {
-        if (destroyed || !foreground || !connected() || pollQueued) return;
+        if (destroyed || !foreground || !needsKodiPolling() || pollQueued) return;
         pollQueued = true;
         boolean queued = enqueue(work -> {
             try {
@@ -732,12 +804,12 @@ public final class ConnectionService extends Service {
                         synchronized (stateLock) { if (!work.current()) return; put(state, "playback", current); adoptObservedPlayback(current); }
                     } catch (NativeBackend.BackendException failure) {
                         if ("KODI_AUTH".equals(failure.code) && work.current()) { candidateKodi = null; candidateGeneration = -1; }
-                        synchronized (stateLock) { if (!work.current()) return; state.remove("playback"); }
+                        synchronized (stateLock) { if (!work.current()) return; observeKodiFailure(failure); }
                     }
                 }
                 if (!work.current()) return;
                 long now = SystemClock.elapsedRealtime();
-                if (now - lastHeartbeat >= 15000 || lastHeartbeat == 0) {
+                if (connected() && (now - lastHeartbeat >= 15000 || lastHeartbeat == 0)) {
                     try {
                         JSONObject result = work.transport.handle("luma.status", new JSONObject());
                         synchronized (stateLock) { if (!work.current()) return; if (result.optJSONObject("volume") != null) put(state, "volume", result.optJSONObject("volume")); }
@@ -746,14 +818,14 @@ public final class ConnectionService extends Service {
                 }
                 synchronized (stateLock) { if (!work.current()) return; put(state, "connection", work.transport.connectionSnapshot()); }
             } finally {
-                work.post(() -> { pollQueued = false; if (!connected()) demote(); publish(); schedulePoll(4000); });
+                work.post(() -> { pollQueued = false; if (!needsKodiPolling()) demote(); publish(); schedulePoll(4000); });
             }
         }, null);
         if (!queued) { pollQueued = false; schedulePoll(4000); }
     };
     private void schedulePoll(long delay) {
         main.removeCallbacks(poll);
-        if (foreground && connected()) main.postDelayed(poll, delay);
+        if (foreground && needsKodiPolling()) main.postDelayed(poll, delay);
     }
     private void promote() {
         if (destroyed) return;
@@ -767,6 +839,7 @@ public final class ConnectionService extends Service {
         }
     }
     private void demote() {
+        if (hasKodiPlayback()) { schedulePoll(1000); return; }
         if (televisionRunning || televisionStarting || matter != null && (matter.snapshot().optBoolean("paired") && !matter.snapshot().optBoolean("paused") || matter.snapshot().optBoolean("pairing"))) { main.removeCallbacks(poll); return; }
         main.removeCallbacks(poll);
         cancelNotificationFlush();
@@ -783,16 +856,18 @@ public final class ConnectionService extends Service {
     private void updatePresentation() {
         if (mediaSession == null) return;
         JSONObject all = presentationSnapshot(), connection = all.optJSONObject("connection"), remote = all.optJSONObject("remote"), playback = all.optJSONObject("playback");
-        boolean verified = connection != null && connection.optBoolean("connected") && matches(remote, playback);
-        long actions = verified ? PlaybackState.ACTION_PLAY | PlaybackState.ACTION_PAUSE | PlaybackState.ACTION_STOP : 0;
+        boolean verified = verifiedPlayback(all);
+        long actions = verified ? PlaybackState.ACTION_PLAY | PlaybackState.ACTION_PAUSE | PlaybackState.ACTION_PLAY_PAUSE | PlaybackState.ACTION_STOP : 0;
         int status = verified ? (playback.optBoolean("playing") ? PlaybackState.STATE_PLAYING : PlaybackState.STATE_PAUSED) : PlaybackState.STATE_NONE;
         long position = verified ? Math.max(0, playback.optLong("positionSeconds")) * 1000 : 0;
         PlaybackState.Builder controls = new PlaybackState.Builder().setActions(actions).setState(status, position,
-                verified && playback.optBoolean("playing") ? 1f : 0f, SystemClock.elapsedRealtime());
+                verified && playback.optBoolean("playing") && !playback.optBoolean("stale") ? 1f : 0f, SystemClock.elapsedRealtime());
         if (verified) {
             Bundle revision = new Bundle(); revision.putString("revision", mediaRevision);
-            controls.addCustomAction(new PlaybackState.CustomAction.Builder(VOLUME_DOWN, "Volume −", R.drawable.ic_volume_down).setExtras(revision).build());
-            controls.addCustomAction(new PlaybackState.CustomAction.Builder(VOLUME_UP, "Volume +", R.drawable.ic_volume_up).setExtras(revision).build());
+            if (connection.optBoolean("connected")) {
+                controls.addCustomAction(new PlaybackState.CustomAction.Builder(VOLUME_DOWN, "Volume −", R.drawable.ic_volume_down).setExtras(revision).build());
+                controls.addCustomAction(new PlaybackState.CustomAction.Builder(VOLUME_UP, "Volume +", R.drawable.ic_volume_up).setExtras(revision).build());
+            }
             controls.addCustomAction(new PlaybackState.CustomAction.Builder(STOP, "Stop video", R.drawable.ic_stop).setExtras(revision).build());
             controls.addCustomAction(new PlaybackState.CustomAction.Builder(DISCONNECT, "Disconnect", R.drawable.ic_disconnect).setExtras(revision).build());
         }
@@ -800,7 +875,7 @@ public final class ConnectionService extends Service {
         String title = verified ? clean(remote.optJSONObject("media").optString("title"), 200) : "LUMA Remote";
         if (title.isEmpty()) title = "Kodi video";
         MediaMetadata.Builder metadata = new MediaMetadata.Builder().putString(MediaMetadata.METADATA_KEY_TITLE, title)
-                .putString(MediaMetadata.METADATA_KEY_ARTIST, projectorSummary(all));
+                .putString(MediaMetadata.METADATA_KEY_ARTIST, playbackSummary(all));
         if (verified) metadata.putLong(MediaMetadata.METADATA_KEY_DURATION, playback.optLong("durationSeconds") * 1000);
         mediaSession.setMetadata(metadata.build());
         mediaSession.setActive(verified);
@@ -817,11 +892,12 @@ public final class ConnectionService extends Service {
     }
     private String notificationSignature(JSONObject all, String revision) {
         JSONObject connection = all.optJSONObject("connection"), remote = all.optJSONObject("remote"), playback = all.optJSONObject("playback");
-        boolean verified = connection != null && connection.optBoolean("connected") && matches(remote, playback);
+        boolean verified = verifiedPlayback(all);
         String title = verified ? clean(remote.optJSONObject("media").optString("title"), 200) : "LUMA Remote";
         if (title.isEmpty()) title = "Kodi video";
         return object("revision", revision, "verified", verified, "playing", playback != null && playback.optBoolean("playing"),
-                "title", title, "projector", projectorSummary(all), "notice", clean(notice, 200), "foreground", foreground).toString();
+                "title", title, "projector", playbackSummary(all), "hardwareConnected", connection != null && connection.optBoolean("connected"),
+                "notice", clean(notice, 200), "foreground", foreground).toString();
     }
     private void queueNotificationFlush() {
         if (destroyed || !foreground || notificationFlushQueued) return;
@@ -840,7 +916,7 @@ public final class ConnectionService extends Service {
         NotificationManager notifications = getSystemService(NotificationManager.class);
         notifications.notify(NOTIFICATION, notification(false, all, revision));
         JSONObject connection = all.optJSONObject("connection");
-        if (connection != null && connection.optBoolean("connected") && matches(all.optJSONObject("remote"), all.optJSONObject("playback"))) notifications.notify(MEDIA_NOTIFICATION, notification(true, all, revision));
+        if (verifiedPlayback(all)) notifications.notify(MEDIA_NOTIFICATION, notification(true, all, revision));
         else notifications.cancel(MEDIA_NOTIFICATION);
         lastNotificationSignature = signature; lastNotificationPost = now;
     }
@@ -849,25 +925,27 @@ public final class ConnectionService extends Service {
     }
     private Notification notification(boolean mediaCard, JSONObject all, String revision) {
         JSONObject connection = all.optJSONObject("connection"), remote = all.optJSONObject("remote"), playback = all.optJSONObject("playback");
-        boolean verified = connection != null && connection.optBoolean("connected") && matches(remote, playback);
+        boolean verified = verifiedPlayback(all);
         String title = verified ? clean(remote.optJSONObject("media").optString("title"), 200) : "LUMA Remote";
         if (title.isEmpty()) title = "Kodi video";
         Notification.Builder builder = Build.VERSION.SDK_INT >= 26 ? new Notification.Builder(this, CHANNEL) : new Notification.Builder(this);
         if (Build.VERSION.SDK_INT >= 31) builder.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE);
         builder.setSmallIcon(R.drawable.ic_projector).setColor(getColor(R.color.projector_accent))
-                .setContentTitle(title).setContentText(verified ? projectorSummary(all) : clean(notice, 200))
+                .setContentTitle(title).setContentText(verified ? playbackSummary(all) : clean(notice, 200))
                 .setContentIntent(sessionActivity).setOngoing(true).setOnlyAlertOnce(true).setShowWhen(false)
                 .setCategory(mediaCard ? Notification.CATEGORY_TRANSPORT : Notification.CATEGORY_SERVICE).setVisibility(Notification.VISIBILITY_PUBLIC);
         if (verified) {
             boolean playing = playback.optBoolean("playing");
-            builder.addAction(new Notification.Action.Builder(R.drawable.ic_volume_down, "Volume −", pending(VOLUME_DOWN, 4, revision)).build());
+            boolean hardwareConnected = connection.optBoolean("connected");
+            if (hardwareConnected) builder.addAction(new Notification.Action.Builder(R.drawable.ic_volume_down, "Volume −", pending(VOLUME_DOWN, 4, revision)).build());
             builder.addAction(new Notification.Action.Builder(playing ? R.drawable.ic_pause : R.drawable.ic_play,
                     playing ? "Pause" : "Play", pending(playing ? PAUSE : PLAY, 1, revision)).build());
-            builder.addAction(new Notification.Action.Builder(R.drawable.ic_volume_up, "Volume +", pending(VOLUME_UP, 5, revision)).build());
+            if (hardwareConnected) builder.addAction(new Notification.Action.Builder(R.drawable.ic_volume_up, "Volume +", pending(VOLUME_UP, 5, revision)).build());
             if (mediaCard) {
                 builder.addAction(new Notification.Action.Builder(R.drawable.ic_stop, "Stop video", pending(STOP, 2, revision)).build());
                 builder.addAction(new Notification.Action.Builder(R.drawable.ic_disconnect, "Disconnect", pending(DISCONNECT, 3, revision)).build());
-                builder.setStyle(new Notification.MediaStyle().setMediaSession(mediaSession.getSessionToken()).setShowActionsInCompactView(0, 1, 2));
+                builder.setStyle(new Notification.MediaStyle().setMediaSession(mediaSession.getSessionToken())
+                        .setShowActionsInCompactView(hardwareConnected ? new int[] {0, 1, 2} : new int[] {0}));
             }
         } else {
             builder.addAction(new Notification.Action.Builder(R.drawable.ic_disconnect, "Disconnect", pending(DISCONNECT, 3, revision)).build());
@@ -881,6 +959,15 @@ public final class ConnectionService extends Service {
         if (volume == null) return name;
         int current = volume.optInt("current", -1), max = volume.optInt("max", 0);
         return current >= 0 && max > 0 && current <= max ? name + " · Volume " + current + "/" + max : name;
+    }
+    private static String playbackSummary(JSONObject all) {
+        JSONObject playback = all.optJSONObject("playback");
+        return playback != null && playback.optBoolean("stale") ? "Checking Kodi connection · Tap a control to retry" : projectorSummary(all);
+    }
+    private static boolean verifiedPlayback(JSONObject all) {
+        JSONObject connection = all.optJSONObject("connection");
+        return connection != null && connection.optBoolean("philips".equals(all.optString("selectedTarget")) ? "connected" : "configured")
+                && matches(all.optJSONObject("remote"), all.optJSONObject("playback"));
     }
     private PendingIntent pending(String action, int requestCode, String revision) {
         Intent intent = new Intent(this, ConnectionService.class).setAction(action);

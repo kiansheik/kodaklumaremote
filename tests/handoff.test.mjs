@@ -249,13 +249,116 @@ test('a bridge timeout without an aborted signal stays uncertain and retry obser
       wait: state => { if (retrying && latePlayback && state.time >= 350) state.playback = { active: true, sourceUrl: url }; },
       coordinator: { limits: { activeMs: 700 } },
     });
-    await assert.rejects(f.coordinator.start(media([])), { code: 'ADAPTER_FAILED' });
+    await assert.rejects(f.coordinator.start(media([])), { code: 'VIDEO_TIMEOUT' });
     retrying = true;
     if (latePlayback) await f.coordinator.start(media([]));
     else await assert.rejects(f.coordinator.start(media([])), { code: 'VIDEO_TIMEOUT' });
     assert.equal(f.state.opened, 1);
-    assert.ok(f.state.time <= 700);
+    assert.ok(f.state.time <= 1400);
   }
+});
+
+test('selected playback finishes the same handoff while Open is unresolved, without a later abort of the cast job', async () => {
+  let openSignal;
+  const f = fixture({
+    open: (state, options) => { openSignal = options.signal; return new Promise(() => {}); },
+    coordinator: { limits: { activeMs: 20 } },
+  });
+  const result = await f.coordinator.start(media([track('pt-BR'), track('en')]));
+  assert.equal(result.selectedLanguage, 'pt-br');
+  assert.equal(f.state.opened, 1);
+  assert.deepEqual(f.state.adds, [track('pt-BR').url]);
+  assert.equal(f.state.ready.length, 1);
+  await new Promise(resolve => setTimeout(resolve, 35));
+  assert.equal(openSignal.aborted, false);
+});
+
+test('an unknown Open response reconciles late selected playback and subtitles on the first attempt', async () => {
+  const f = fixture({
+    neverActive: true,
+    open: () => { throw Object.assign(new Error('Private unavailable Open receipt'), { code: 'TIMEOUT' }); },
+    wait: state => { if (state.time >= 700) state.playback = { active: true, sourceUrl: url }; },
+    coordinator: { limits: { activeMs: 2000, openRetryMs: 500 } },
+  });
+  const result = await f.coordinator.start(media([track('pt-BR'), track('en')]));
+  assert.equal(result.selectedLanguage, 'pt-br');
+  assert.equal(f.state.opened, 1);
+  assert.deepEqual(f.state.adds, [track('pt-BR').url]);
+  assert.equal(f.state.ready.length, 1);
+});
+
+test('same-source recast after observed playback ends requires an actual native completion receipt for an unknown Open', async () => {
+  for (const nativeCompleted of [true, false]) {
+    const f = fixture({
+      open: (state, options) => {
+        if (nativeCompleted) options.onSettled?.();
+        if (state.opened === 1) throw Object.assign(new Error('Unknown Open outcome'), { code: 'TIMEOUT' });
+      },
+      coordinator: { limits: { activeMs: 700 } },
+    });
+    await f.coordinator.start(media([]));
+    f.state.playback = { active: false, sourceUrl: '' };
+    if (nativeCompleted) await f.coordinator.start(media([]));
+    else await assert.rejects(f.coordinator.start(media([])), { code: 'VIDEO_TIMEOUT' });
+    assert.equal(f.state.opened, nativeCompleted ? 2 : 1);
+  }
+});
+
+test('a late native completion receipt releases only its observed attempt after a pending same-source recast was protected', async () => {
+  const completed = deferred();
+  let receipt;
+  const f = fixture({
+    open: (state, options) => {
+      if (state.opened === 1) { receipt = options.onSettled; return completed.promise; }
+      return new Promise(() => {});
+    },
+    coordinator: { limits: { activeMs: 700 } },
+  });
+  await f.coordinator.start(media([]));
+  f.state.playback = { active: false, sourceUrl: '' };
+  await assert.rejects(f.coordinator.start(media([])), { code: 'VIDEO_TIMEOUT' });
+  assert.equal(f.state.opened, 1);
+  assert.equal(typeof receipt, 'function');
+  receipt(); completed.resolve();
+  await f.coordinator.start(media([]));
+  receipt(); // A duplicate receipt cannot clear the newer Open attempt.
+  f.state.playback = { active: false, sourceUrl: '' };
+  await assert.rejects(f.coordinator.start(media([])), { code: 'VIDEO_TIMEOUT' });
+  assert.equal(f.state.opened, 2);
+});
+
+test('an explicit same-source recast resumes within that run when the previous observed Open receives late native completion', async () => {
+  let receipt, retrying = false;
+  const f = fixture({
+    open: (state, options) => {
+      if (state.opened === 1) {
+        receipt = options.onSettled;
+        throw Object.assign(new Error('Bridge response timeout'), { code: 'TIMEOUT' });
+      }
+      assert.equal(options.onlyIfInactive, true);
+    },
+    wait: state => { if (retrying && state.time >= 350) receipt(); },
+    coordinator: { limits: { activeMs: 1400 } },
+  });
+  await f.coordinator.start(media([]));
+  f.state.playback = { active: false, sourceUrl: '' };
+  retrying = true;
+  await f.coordinator.start(media([]));
+  assert.equal(f.state.opened, 2);
+  assert.equal(f.state.ready.length, 2);
+  assert.ok(f.state.time < 1400);
+});
+
+test('an unknown Open never adopts or replaces independently selected playback', async () => {
+  const f = fixture({
+    neverActive: true,
+    open: () => { throw Object.assign(new Error('Unavailable response'), { code: 'KODI_RESPONSE' }); },
+    wait: state => { state.playback = { active: true, sourceUrl: 'https://media.example.org/independent.m3u8' }; },
+  });
+  await assert.rejects(f.coordinator.start(media([track('pt-BR')])), { code: 'SOURCE_CHANGED' });
+  assert.equal(f.state.opened, 1);
+  assert.equal(f.state.adds.length, 0);
+  assert.equal(f.state.ready.length, 0);
 });
 
 test('a verified unapplied Open rejection permits one explicit later retry', async () => {
@@ -412,7 +515,7 @@ test('multi-RPC subtitle reads and delayed registration have bounded windows lon
   assert.equal(f.state.ready.length, 1);
 });
 
-test('inactive subtitle metadata waits for readiness and permanent read failure has a fixed bound', async () => {
+test('inactive subtitle metadata waits for readiness and permanent read failure opens the remote with a fixed bound', async () => {
   let warming = 2;
   const f = fixture({ getSubtitles: () => warming-- > 0 ? { active: false, tracks: [], enabled: false, currentIndex: null } : undefined });
   await f.coordinator.start(media([track('pt-BR')]));
@@ -422,10 +525,10 @@ test('inactive subtitle metadata waits for readiness and permanent read failure 
     getSubtitles: () => { throw new Error('Native read unavailable'); },
     coordinator: { limits: { subtitleMs: 700 } },
   });
-  await assert.rejects(unavailable.coordinator.start(media([track('pt-BR')])), { code: 'SUBTITLE_TIMEOUT' });
+  assert.equal((await unavailable.coordinator.start(media([track('pt-BR')]))).subtitleError, 'SUBTITLE_TIMEOUT');
   assert.equal(unavailable.state.time, 700);
   assert.equal(unavailable.state.adds.length, 0);
-  assert.equal(unavailable.state.ready.length, 0);
+  assert.equal(unavailable.state.ready.length, 1);
 });
 
 test('a transient post-add read never permits subtitle selection after the receiver changes source', async () => {
@@ -443,13 +546,21 @@ test('a transient post-add read never permits subtitle selection after the recei
 });
 
 test('read retries stop immediately for native authentication, configuration and source errors', async () => {
-  for (const code of ['KODI_AUTH', 'KODI_CONFIG', 'SOURCE_CHANGED', 'INVALID_INPUT']) {
+  for (const code of ['KODI_AUTH', 'KODI_CONFIG', 'SOURCE_CHANGED']) {
     const f = fixture({ getSubtitles: () => { throw Object.assign(new Error('Fixed native failure'), { code }); } });
     await assert.rejects(f.coordinator.start(media([track('pt-BR')])), { code: code === 'SOURCE_CHANGED' ? 'SOURCE_CHANGED' : 'ADAPTER_FAILED' });
     assert.equal(f.state.time, 0);
     assert.equal(f.state.calls.filter(name => name === 'getSubtitles').length, 1);
     assert.equal(f.state.adds.length, 0);
   }
+});
+
+test('a nonretryable subtitle-only validation failure still opens a freshly verified playing remote', async () => {
+  const f = fixture({ getSubtitles: () => { throw Object.assign(new Error('Private invalid caption payload'), { code: 'INVALID_INPUT' }); } });
+  assert.equal((await f.coordinator.start(media([track('pt-BR')]))).subtitleError, 'ADAPTER_FAILED');
+  assert.equal(f.state.calls.filter(name => name === 'getSubtitles').length, 1);
+  assert.equal(f.state.adds.length, 0);
+  assert.equal(f.state.ready.length, 1);
 });
 
 test('an uncertain Add response reconciles a late observed index without sending Add again', async () => {
@@ -463,7 +574,76 @@ test('an uncertain Add response reconciles a late observed index without sending
   assert.equal(f.state.ready.length, 1);
 });
 
-test('a verified unapplied Add rejection fails promptly and an explicit retry adds once without replay', async () => {
+test('a proved-unapplied Portuguese subtitle falls back to English without restarting the video', async () => {
+  const f = fixture({ add: (state, value, options) => {
+    if (value.url === track('pt-BR').url) {
+      options.onNotSent();
+      throw Object.assign(new Error('Private rejected caption detail'), { code: 'KODI_REJECTED' });
+    }
+    state.tracks.push({ index: 3 });
+  } });
+  const result = await f.coordinator.start(media([track('en'), track('pt-BR'), track('de')]));
+  assert.equal(result.selectedLanguage, 'en');
+  assert.equal(result.subtitleError, undefined);
+  assert.deepEqual(f.state.adds, [track('pt-BR').url, track('en').url]);
+  assert.equal(f.state.opened, 1);
+  assert.equal(f.state.enabled, true);
+  assert.deepEqual(result.catalog.map(item => item.index), [3, null, null]);
+});
+
+test('rejecting both preferred subtitle files preserves the playing remote and full catalog', async () => {
+  const f = fixture({ add: (state, value, options) => {
+    options.onNotSent();
+    throw Object.assign(new Error('Private rejected file detail'), { code: 'KODI_REJECTED' });
+  } });
+  const result = await f.coordinator.start(media([track('pt-BR'), track('en'), track('de')]));
+  assert.equal(result.subtitleError, 'ADAPTER_FAILED');
+  assert.equal(result.selectedIndex, null);
+  assert.deepEqual(result.catalog.map(item => item.index), [null, null, null]);
+  assert.deepEqual(f.state.adds, [track('pt-BR').url, track('en').url]);
+  assert.equal(f.state.opened, 1);
+  assert.equal(f.state.ready.length, 1);
+  assert.equal(f.state.time, 0);
+});
+
+test('an uncertain Portuguese subtitle keeps all languages available without an ambiguous English Add or video replay', async () => {
+  const f = fixture({
+    add: () => { throw Object.assign(new Error('Unavailable Add receipt'), { code: 'KODI_UNAVAILABLE' }); },
+    coordinator: { limits: { subtitleMs: 700 } },
+  });
+  const result = await f.coordinator.start(media([track('pt-BR'), track('en'), track('de')]));
+  assert.equal(result.subtitleError, 'SUBTITLE_TIMEOUT');
+  assert.equal(result.selectedIndex, null);
+  assert.deepEqual(result.catalog.map(item => item.index), [null, null, null]);
+  assert.deepEqual(f.state.adds, [track('pt-BR').url]);
+  assert.equal(f.state.opened, 1);
+  assert.equal(f.state.ready.length, 1);
+  assert.match(f.state.statuses.at(-1).message, /Video is playing/u);
+});
+
+test('an uncertain subtitle selection response is reconciled from the observed enabled track without another selection write', async () => {
+  const f = fixture({ select: (state, index) => {
+    state.enabled = true; state.currentIndex = index;
+    throw Object.assign(new Error('Lost selection response'), { code: 'KODI_RESPONSE' });
+  } });
+  const result = await f.coordinator.start(media([track('pt-BR')]));
+  assert.equal(result.subtitleError, undefined);
+  assert.equal(result.selectedLanguage, 'pt-br');
+  assert.equal(f.state.calls.filter(name => name === 'setSubtitle').length, 1);
+  assert.equal(f.state.ready.length, 1);
+});
+
+test('a subtitle failure cannot report ready after the receiver stopped playing', async () => {
+  const f = fixture({
+    getSubtitles: state => { state.playback = { active: false, sourceUrl: '' }; throw Object.assign(new Error('Unavailable captions'), { code: 'KODI_RESPONSE' }); },
+    coordinator: { limits: { subtitleMs: 700 } },
+  });
+  await assert.rejects(f.coordinator.start(media([track('pt-BR')])), { code: 'SOURCE_CHANGED' });
+  assert.equal(f.state.opened, 1);
+  assert.equal(f.state.ready.length, 0);
+});
+
+test('a verified unapplied Add rejection preserves playback and an explicit retry adds once without replay', async () => {
   let applied = 0;
   const f = fixture({ add: (state, value, options) => {
     if (state.adds.length === 1) {
@@ -474,7 +654,7 @@ test('a verified unapplied Add rejection fails promptly and an explicit retry ad
     state.tracks.push({ index: 0 });
   } });
   const request = media([track('pt-BR')]);
-  await assert.rejects(f.coordinator.start(request), { code: 'ADAPTER_FAILED', adapterCode: 'KODI_REJECTED' });
+  assert.equal((await f.coordinator.start(request)).subtitleError, 'ADAPTER_FAILED');
   assert.equal(f.state.time, 0);
   assert.equal(f.state.adds.length, 1);
   assert.equal(applied, 0);
@@ -499,16 +679,16 @@ test('an uncertain Add with no index times out without a duplicate while unsent 
       coordinator: { limits: { subtitleMs: 700 } },
     });
     const request = media([track('pt-BR')]);
-    await assert.rejects(f.coordinator.start(request), { code: unsent ? 'ADAPTER_FAILED' : 'SUBTITLE_TIMEOUT' });
+    assert.equal((await f.coordinator.start(request)).subtitleError, unsent ? 'ADAPTER_FAILED' : 'SUBTITLE_TIMEOUT');
     assert.equal(f.state.adds.length, 1);
     if (unsent) {
       await f.coordinator.start(request);
       assert.equal(f.state.adds.length, 2);
-      assert.equal(f.state.ready.length, 1);
+      assert.equal(f.state.ready.length, 2);
     } else {
-      await assert.rejects(f.coordinator.start(request), { code: 'SUBTITLE_TIMEOUT' });
+      assert.equal((await f.coordinator.start(request)).subtitleError, 'SUBTITLE_TIMEOUT');
       assert.equal(f.state.adds.length, 1);
-      assert.equal(f.state.ready.length, 0);
+      assert.equal(f.state.ready.length, 2);
     }
   }
 });
@@ -628,24 +808,27 @@ test('handoff does not reissue an uncertain cancelled AddSubtitle without native
   await queued.promise;
   f.coordinator.cancel();
   await cancelled;
-  await assert.rejects(f.coordinator.start(request), { code: 'SUBTITLE_TIMEOUT' });
+  assert.equal((await f.coordinator.start(request)).subtitleError, 'SUBTITLE_TIMEOUT');
   assert.equal(f.state.adds.length, 1);
-  assert.equal(f.state.ready.length, 0);
+  assert.equal(f.state.ready.length, 1);
 });
 
-test('handoff rejects ambiguous new subtitle indices instead of binding guessed metadata', async () => {
+test('handoff preserves playing video on ambiguous new subtitle indices without binding guessed metadata', async () => {
   const f = fixture({ add: state => { state.tracks.push({ index: 0 }, { index: 1 }); } });
-  await assert.rejects(f.coordinator.start(media([track('pt-BR')])), { code: 'SUBTITLE_BINDING' });
+  const result = await f.coordinator.start(media([track('pt-BR')]));
+  assert.equal(result.subtitleError, 'SUBTITLE_BINDING');
+  assert.equal(result.selectedIndex, null);
+  assert.equal(result.catalog[0].index, null);
   assert.equal(f.state.adds.length, 1);
-  assert.equal(f.state.ready.length, 0);
+  assert.equal(f.state.ready.length, 1);
 });
 
 test('handoff bounds a missing subtitle registration without retrying AddSubtitle', async () => {
   const f = fixture({ add: () => {}, coordinator: { limits: { subtitleMs: 700 } } });
-  await assert.rejects(f.coordinator.start(media([track('pt-BR')])), { code: 'SUBTITLE_TIMEOUT' });
+  assert.equal((await f.coordinator.start(media([track('pt-BR')]))).subtitleError, 'SUBTITLE_TIMEOUT');
   assert.equal(f.state.adds.length, 1);
   assert.equal(f.state.time, 700);
-  assert.equal(f.state.ready.length, 0);
+  assert.equal(f.state.ready.length, 1);
 });
 
 test('handoff waits for the selected subtitle to be observed before showing the remote', async () => {
@@ -705,7 +888,7 @@ test('handoff validates and snapshots declared media, caps tracks, and never sur
   await assert.rejects(bad.coordinator.start({ ...media([]), url: 'https://user:secret@example.org/video.mp4' }), { code: 'INVALID_MEDIA' });
   await assert.rejects(bad.coordinator.start(media(Array.from({ length: 65 }, (_, index) => track('en', `track-${index}`)))), { code: 'INVALID_MEDIA' });
   assert.equal(bad.state.calls.length, 0);
-  const f = fixture({ open: () => { throw new Error(url); } });
-  await assert.rejects(f.coordinator.start(media([])), error => error instanceof HandoffError && error.code === 'ADAPTER_FAILED' && !error.message.includes(url) && error.cause === undefined);
+  const f = fixture({ neverActive: true, open: () => { throw new Error(url); }, coordinator: { limits: { activeMs: 700 } } });
+  await assert.rejects(f.coordinator.start(media([])), error => error instanceof HandoffError && error.code === 'VIDEO_TIMEOUT' && !error.message.includes(url) && error.cause === undefined);
   assert.ok(!JSON.stringify(f.state.statuses).includes(url));
 });
