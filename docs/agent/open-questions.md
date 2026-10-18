@@ -4,8 +4,9 @@
    or UPnP AVTransport) accepting arbitrary authorized media URLs? Chrome currently
    enables it for YouTube but disables it for frameXTV/general tab casting.
    The user has now opened Media Station X. A custom direct-play receiver and
-   dual-device remote are implemented; actual MSX HTTP bootstrap, media codecs,
-   CORS/subtitle rendering and phone-off continuation need device acceptance.
+   dual-device remote are implemented; physical MSX setup still fails with
+   status0. No TV HTTP/TLS request was established by the temporary Mac probe.
+   Media codecs, subtitles and phone-off continuation need device acceptance.
    See [MSX receiver](msx-receiver.md).
 2. Does frameXTV's existing native Cast control already satisfy the user in an
    ordinary uninstrumented Chrome session? Its code is present, discovery-gated.
@@ -36,11 +37,24 @@
    public MP4 and actual HLS/subtitles worked on version 21.2. Does built-in DLNA expose a usable
    MediaRenderer? Documented app interfaces are [here](receiver-apps.md), and
    manufacturer/commercial options are [here](luma-receiver-options.md).
-10. Which Matter endpoints/clusters/features does the Philips expose after
-    commissioning? Read-only discovery advertised Basic Video Player (`DT=40`),
-    but no pairing or cluster controls are verified. Establish power, navigation,
-    speaker volume and inputs separately from optional URL playback and existing
-    subtitle-track selection. See [Matter evidence](philips-matter.md).
+10. Does the installed0.4.0 phone reconnect after app/process restarts, navigate
+    the TV and enroll another phone through its transient QR window? Native
+    manual-code pairing completed with production trust enabled. Phone speaker
+    volume1→2→1 was independently read back from the Mac, restoring the start.
+    Mac pairing/inventory/Home status0 and an additional-controller window also
+    passed. The phone also opened a TV-accepted additional-phone window; its
+    code/QR cleared on dismiss/reopen. Second-phone enrollment, signed reinstall/
+    reconnect, navigation, power/input effects and camera scanning remain
+    pending. No ContentLauncher or
+    ApplicationLauncher appeared, so Matter does not establish website video or
+    external-subtitle delivery on this firmware. See [Matter evidence](philips-matter.md)
+    and [native phone handoff](session-handoffs/2026-10-18-native-matter-phone.md).
+11. Does final signed reinstall reconnect the existing phone fabric and retain
+    Kodi setup? Source recovery/lifecycle checks passed54 browser and18 final
+    focused native cases, plus26 earlier unaffected native cases. Confirmed
+    local-only recovery retains the encrypted CA/LUMA state, issues no TV command
+    and explains that it cannot remove an unreachable TV's controller entry.
+    A reset/unreachable household TV was not deliberately created for this test.
 
 Resolved: public reachability confirmed; same-origin embed + declared source
 found statically; existing-page CAF avoids an extension remote-SDK loader;

@@ -1,0 +1,7 @@
+{
+  "repository": "https://github.com/project-chip/connectedhomeip",
+  "revision": "3584c8c8552f4a0d471f2aad24a15b478959c230",
+  "kotlin": "2.1.10",
+  "abis": ["arm64-v8a"],
+  "minSdk": 24
+}

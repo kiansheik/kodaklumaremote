@@ -7,7 +7,8 @@ Research: [investigation](investigation.md), [site architecture](site-architectu
 [anti-debugging](anti-debugging.md), [network](network-analysis.md),
 [playback](playback-analysis.md), [Cast feasibility](chromecast-feasibility.md).
 Device follow-up: [Philips TV evidence](philips-tv.md),
-[Philips Matter control boundary](philips-matter.md),
+[Philips Matter inventory and control evidence](philips-matter.md),
+[native Android Matter build](matter-android-path.md),
 [mobile phone-off target](mobile-target.md),
 [Kodak LUMA options](luma-receiver-options.md),
 [Kodi/VLC receiver interfaces](receiver-apps.md).
@@ -25,6 +26,8 @@ Distribution: [signed releases and optional updates](../releasing.md),
 [GitHub/Pages handoff](session-handoffs/2026-10-18-github-release-updates.md).
 Dual receiver: [Philips MSX and LUMA selection](msx-receiver.md),
 [implementation handoff](session-handoffs/2026-10-18-dual-receiver-msx.md).
+Current phone work: [native Matter pairing and hardware remote](session-handoffs/2026-10-18-native-matter-phone.md).
+Mac evidence and isolated UI checks: [controller/browser handoff](session-handoffs/2026-10-18-matter-controller-browser.md).
 
 Execution: [decisions](decisions.md), [experiments](experiments.md),
 [progress](progress.md), [log](log.md), [handoff](handoff.md).

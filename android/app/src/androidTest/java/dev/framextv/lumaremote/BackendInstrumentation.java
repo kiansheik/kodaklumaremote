@@ -44,6 +44,7 @@ public final class BackendInstrumentation extends UiSmokeInstrumentation {
         }
     }
     @Override public void onStart() {
+        if ("matter".equals(args.getString("mode"))) { MatterInstrumentation.run(this); return; }
         if ("multi-receiver".equals(args.getString("mode"))) { MultiReceiverInstrumentation.run(this, args); return; }
         if ("msx".equals(args.getString("mode"))) { MsxInstrumentation.run(this); return; }
         if ("migration-seed".equals(args.getString("mode")) || "migration-check".equals(args.getString("mode"))) { SigningMigrationInstrumentation.run(this, args); return; }

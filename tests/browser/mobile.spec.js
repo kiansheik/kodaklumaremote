@@ -282,7 +282,7 @@ test('apps paginate as text and failed typing keeps its draft while clearing a l
   await page.getByLabel('Find an app').fill('App 11');
   await expect(page.locator('#app-list button')).toHaveText(['App 11']);
   await page.getByRole('button', { name: 'App 11', exact: true }).click();
-  expect(await page.locator('img').count()).toBe(0);
+  expect(await page.locator('#app-list img').count()).toBe(0);
   expect(await page.evaluate(() => window.appExecuted)).toBeUndefined();
   await page.getByRole('button', { name: 'Done', exact: true }).click();
   await page.getByRole('button', { name: 'More', exact: true }).click();

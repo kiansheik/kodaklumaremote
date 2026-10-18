@@ -16,19 +16,40 @@ The compact header switches between LUMA and Philips. Both can stay connected;
 switching selects the remote, Cast destination and notification/lock-screen
 controls without stopping either video. LUMA's saved Kodi login remains intact.
 
-For Philips, open **Media Station X** on the TV. In the phone app select
-**Philips → Set up TV**, then enter the displayed `IP:port` in MSX's
-**Settings → Start Parameter → Setup**. Open **Connect this TV** on the TV and
-tap **Allow this TV** on the phone. Keep the phone and TV on the same Wi-Fi.
-Later app opens restore the saved receiver listener; open its MSX receiver page
-again on the TV when needed. Settings can forget only that TV's pairing.
+In0.4.0, select **Philips** and pair its hardware remote by scanning the TV's
+Matter QR code or entering its manual setup code. The phone and TV must share
+the local network. Pairing is saved with Android Keystore authenticated
+encryption and reconnects without another code. Supported controls include
+Home/Back/D-pad, the speaker-volume slider and ±, inputs and confirmed Off.
+**More → TV pairing → Add another phone** opens a temporary QR/manual-code
+window for that phone's own pairing; closing/expiry removes the displayed code.
+The existing phone remains paired. Camera access is requested only for scanning.
 
-Cast from Browse as usual. The TV fetches video/subtitles directly; PT-BR is
-preferred, English is the fallback, and other languages load when selected.
-Philips controls cover playback, seek, subtitles and the player's volume.
-Hardware speaker volume, power/navigation and app launching still use the TV's
-remote. Philips playback, codecs/CORS, visible subtitles and phone-off operation
-need actual-TV confirmation; see [implementation](../docs/agent/msx-receiver.md).
+For a reset/unreachable TV, **Settings → Forget this TV → TV unavailable? Forget
+on this phone** is a separate explicit local recovery action. It retains LUMA
+setup and this phone's encrypted controller CA, clears only its saved TV node/
+cache and sends no command to the TV. The TV may still list this phone until
+that entry is removed there. It is never an automatic reset. Browser and final
+native fixtures cover this recovery path and subsequent clean control state.
+
+Video/subtitles use the separate **Video receiver** setup with **Media Station X**.
+The phone displays its listener `IP:port` for MSX's **Settings → Start Parameter →
+Setup**; the receiver then requires **Connect this TV** and phone approval.
+This implementation lets the TV fetch media directly with PT-BR preferred,
+English fallback and other languages on demand. **The physical Philips MSX setup
+still reports status0**, so TV playback/subtitles are not accepted yet. Matter
+adds no ContentLauncher or app-launch capability to this firmware.
+
+Mac Matter pairing and accepted Home passed. Actual phone manual-code pairing
+completed with production trust enabled; its speaker1→2→1 changes were
+independently read back and restored. The phone's **Add another phone** window
+was accepted by the TV; its code/QR cleared on dismiss/reopen. Phone navigation/
+input/Off effects, camera scanning, second-phone enrollment and final signed
+reinstall/reconnect remain pending. Version0.4.0 is
+installed locally; the public install page still serves0.3.1 until publication.
+See [Matter evidence](../docs/agent/philips-matter.md),
+[native handoff](../docs/agent/session-handoffs/2026-10-18-native-matter-phone.md)
+and [MSX implementation](../docs/agent/msx-receiver.md).
 
 ## Use
 
@@ -88,16 +109,30 @@ to come directly from its source without the phone or Mac relaying it.
 
 ## Build
 
-Requirements: Node/npm, JDK 17 or newer, Gradle 9.6.1, Android SDK platform 35
-and Build Tools 36.0.0. Android Gradle Plugin is pinned to 9.3.1. No Gradle
-wrapper binary or debug signing key is checked in.
+Requirements: Node/npm, JDK21 recommended, Gradle9.6.1, Android SDK platforms34
+and35, Build Tools36.0.0 and NDK30.0.16248370 (the validated SDK toolchain).
+Android Gradle Plugin is pinned to9.3.1. The app requires **Android7/API24+ and
+64-bit ARM**; the isolated emulator must also be ARM64. No Gradle wrapper binary,
+debug/release signing key or prebuilt Matter SDK is checked in.
 
 From the repository root:
 
 ```sh
 npm ci
+bash scripts/build-matter-sdk.sh
+node scripts/verify-matter-sdk.mjs
 gradle -p android :app:assembleDebug
 ```
+
+Before the first SDK build, set `JAVA_HOME` to JDK17/21, `ANDROID_HOME` to the
+installed Android SDK and `ANDROID_NDK_HOME` to its NDK directory. The helper
+downloads/builds the pinned official controller SDK once under ignored
+`.local/matter-sdk/`; subsequent app builds verify and reuse its97 hashed files.
+It pins Kotlin2.1.10, packages eight JARs/two ARM64 libraries plus production
+PAA/CD roots and notices, and checks16KB ELF alignment. Progress/detail native
+logging is compiled out to protect generated pairing codes. A missing or changed
+artifact fails `preBuild` rather than silently substituting another SDK.
+See [source pin, tools, provenance and upstream IPK boundary](../docs/agent/matter-android-path.md).
 
 Gradle bundles the local web assets using `scripts/build-mobile.mjs`. To build
 those assets separately, run `npm run build:mobile`. The installable output is
@@ -117,6 +152,8 @@ node scripts/test-android-ui.mjs
 node scripts/test-android-settings.mjs
 node scripts/test-android-msx.mjs
 node scripts/test-android-multi-receiver.mjs
+node scripts/test-android-matter.mjs
+node scripts/test-matter-qr.mjs
 ```
 
 The separate fixture application ID preserves an installed production-signed
@@ -145,8 +182,14 @@ before accessing playback. Do not use the emulator fixture modes on a phone.
 
 The mobile cases cover validated setup, saved-settings presentation,
 cancellation, reset/rescan, volume commits, session restoration, system-control
-launch and confirmed power commands. Current0.2.3 results and installed artifact
-are recorded in the [handoff](../docs/agent/session-handoffs/2026-10-18-phone-volume-power.md).
+launch, confirmed power commands and Matter code/QR privacy. The0.4.0 focused
+validation passed54 mobile browser,22 Node and7 QR JVM checks. The final focused
+native18 (Matter7/service6/UI5), debug/test APK and lint passed after recovery/
+lifecycle fixes;26 earlier unaffected native cases also passed (44 across runs).
+The final post-commit signed rebuild/install and publication remain pending.
+The7 native Matter checks load JNI/trust assets
+and verify encrypted storage, QR output and request guards; they do not pair a
+real TV. [Current handoff](../docs/agent/session-handoffs/2026-10-18-native-matter-phone.md).
 The user confirmed live casting with picture, sound and Portuguese subtitles
 on0.2.0, and system-control display/actions on0.2.2. Cold-start crashes/missing
 subtitles recurred on S1E3; that receiver failure and full phone-off acceptance
@@ -166,6 +209,6 @@ Source capture currently accepts only HTTPS `framextv.xyz` pages and readable
 same-origin players. Unsupported/encrypted/bare-blob sources and cross-origin
 players are rejected. The website WebView has no native JavaScript bridge. A
 separate local-only WebView hosts the trusted remote. No cookies or browser
-authorization headers are copied to Kodi. App pairing that requires a PIN,
+authorization headers are copied to Kodi. Kodak protocol pairing that requires a PIN,
 touchpad/reverse-screen view and projector boot/default-launcher changes remain
 outside this prototype. HLS seek stability remains unconfirmed on the device.

@@ -1,0 +1,7 @@
+Adds Philips TV remote pairing with a QR scanner or manual Matter setup code. This phone's pairing is saved with Android Keystore encryption and reconnects when the app opens.
+
+Adds supported TV navigation, speaker volume, input selection and confirmed power-off controls. “Add another phone” creates a temporary QR/setup code without removing existing phones.
+
+LUMA/Kodi and the Philips remote keep separate connections. Video and external subtitles still require a compatible playback app; Matter remote control does not add video-URL playback to this TV.
+
+Requires 64-bit ARM Android 7 or newer.

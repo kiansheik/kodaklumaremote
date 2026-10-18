@@ -1,0 +1,19 @@
+{
+  "name": "luma-matter-controller",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Local Philips Matter commissioning and read-only capability inventory",
+  "engines": {
+    "node": ">=20.19.0 <22.0.0 || >=22.13.0"
+  },
+  "dependencies": {
+    "@matter/main": "0.17.9",
+    "@matter/nodejs": "0.17.9"
+  },
+  "scripts": {
+    "check": "node controller.mjs check",
+    "commission": "node controller.mjs commission",
+    "inventory": "node controller.mjs inventory"
+  }
+}

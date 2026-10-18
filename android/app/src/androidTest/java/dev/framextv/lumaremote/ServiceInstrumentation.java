@@ -424,6 +424,30 @@ public final class ServiceInstrumentation {
             require(powerFixture.getInt("powerCommands") == 1 && powerFixture.getInt("mutations") == mutationsBeforePower
                     && powerFixture.getInt("volume") == 8, "Confirmed power-off wrote extra commands or changed unrelated playback controls");
             passed("confirmed power send tears down local controls, pauses automatic reconnect and retains saved setup");
+
+            phase = "matter_async_lifecycle";
+            java.lang.reflect.Field adapterField = ConnectionService.class.getDeclaredField("matter"); adapterField.setAccessible(true);
+            MatterControllerAdapter adapter = (MatterControllerAdapter) adapterField.get(service);
+            java.lang.reflect.Field stateField = MatterControllerAdapter.class.getDeclaredField("published"); stateField.setAccessible(true);
+            java.lang.reflect.Field listenerField = MatterControllerAdapter.class.getDeclaredField("listener"); listenerField.setAccessible(true);
+            MatterControllerAdapter.Listener listener = (MatterControllerAdapter.Listener) listenerField.get(adapter);
+            java.lang.reflect.Field foregroundField = ConnectionService.class.getDeclaredField("foreground"); foregroundField.setAccessible(true);
+            java.lang.reflect.Field pollField = ConnectionService.class.getDeclaredField("matterPoll"); pollField.setAccessible(true);
+            java.lang.reflect.Field handlerField = ConnectionService.class.getDeclaredField("main"); handlerField.setAccessible(true);
+            android.os.Handler handler = (android.os.Handler) handlerField.get(service);
+            java.lang.reflect.Method promote = ConnectionService.class.getDeclaredMethod("promote"); promote.setAccessible(true);
+            JSONObject matterOriginal = adapter.snapshot();
+            runner.runOnMainSync(() -> { try { promote.invoke(service); listener.onStateChanged(matterOriginal); } catch (Exception error) { throw new RuntimeException(error); } });
+            runner.waitForIdleSync();
+            require(foregroundField.getBoolean(service), "An initial healthy SDK callback demoted an active connection attempt");
+            JSONObject paired = new JSONObject(matterOriginal.toString()).put("paired", true).put("connected", true).put("pairing", false).put("paused", false).put("errorCode", JSONObject.NULL);
+            stateField.set(adapter, paired); runner.runOnMainSync(() -> listener.onStateChanged(paired)); runner.waitForIdleSync();
+            require(handler.hasCallbacks((Runnable) pollField.get(service)), "Asynchronous pairing completion did not schedule background status polling");
+            JSONObject failed = new JSONObject(matterOriginal.toString()).put("paired", false).put("connected", false).put("pairing", false).put("paused", false).put("errorCode", "MATTER_PAIRING");
+            stateField.set(adapter, failed); runner.runOnMainSync(() -> listener.onStateChanged(failed)); runner.waitForIdleSync();
+            require(!foregroundField.getBoolean(service) && !handler.hasCallbacks((Runnable) pollField.get(service)), "Failed background pairing retained the idle foreground service or polling timer");
+            stateField.set(adapter, matterOriginal);
+            passed("asynchronous Matter state starts background polling and failed pairing releases the idle foreground service");
             result.putInt("passed", checks); result.putInt("failures", 0); runner.finish(Activity.RESULT_OK, result);
         } catch (Throwable error) {
             result.putString("phase", phase); result.putInt("passed", checks); result.putInt("failures", 1); result.putString("failure", error.getClass().getSimpleName() + ": " + error.getMessage()); runner.finish(Activity.RESULT_CANCELED, result);

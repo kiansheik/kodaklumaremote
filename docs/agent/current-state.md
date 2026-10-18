@@ -314,10 +314,78 @@ native cases passed; isolated debug/test APK+lint and signed release+lintVital
 passed. Signed0.3.1 is installed/open on Samsung; read-only signer/decryption
 checks passed before/after, preserving Kodi login. Publication and the actual TV
 retry are tracked in the [setup handoff](session-handoffs/2026-10-18-msx-setup-matter.md).
+Source056b6c9 and signed releasev0.3.1 are published; APK965,037bytes with
+SHA-25689630f78e8fb41194aa9a3fb82513297e350a0589fad15f769b2e4b300342cec.
+Pages deploymentce82fa2 is built. HTTPS install page/feed returned200 with exact
+0.3.1 metadata; public APK returned200 and matched size/SHA-256.
+The user retried0.3.1 and still saw status0. A safe phone log has one generic400
+without origin; this can also be an abandoned TCP connection, so it does not
+establish a parser failure. A temporary Mac bootstrap diagnostic also failed on
+the TV and saw a zero-byte TCP timeout, no HTTP/TLS. The user declined further
+manual browser tests because the TV is outdoors in the sun and explicitly
+redirected work to Matter automation. Both temporary Mac listeners were stopped.
 
-The user also found the TV's Matter setting. The exact Philips datasheet lists
-Matter; bounded read-only DNS-SD observed PHILIPS TV advertising DT40/0x0028
-Basic Video Player. No commissioning or cluster commands occurred. Matter is a
-promising hardware/navigation control path; app launch, speaker volume and URL
-playback require paired capability inspection. External subtitle URL attachment
-is not established by Matter. [Evidence and next steps](philips-matter.md).
+The user redirected work to Matter automation to avoid repeated outdoor TV
+steps. A separately pinned Matter.js0.17.9 Mac controller commissioned the
+Philips and read three endpoints: Root, Basic Video Player and Speaker.
+KeypadInput/MediaInput/OnOff and speaker LevelControl are present; no
+ContentLauncher/ApplicationLauncher/ApplicationBasic server appeared. Matter
+therefore supplies a hardware remote path, without an established arbitrary
+website-video/app-launch/external-subtitle path. [Inventory](philips-matter.md).
+
+Actual Mac checks: Home returned status0; speaker volume was freshly observed
+1→2→1, restoring the starting level in `finally`, with both writes status0 and
+verified readback. A Right attempt failed before invoking its key; Left was not
+sent. A confirmed private IPv4/advertised-port hint succeeded after a bounded
+operational mDNS query returned no results; a subsequent CASE/descriptors/speaker
+read took4.4seconds.
+The Mac also successfully opened an enhanced commissioning window, so phone
+pairing did not require another visit to TV settings. Private codes/fabric and
+network details remain ignored. Mac commissioning used the library's default
+attestation policy and does not prove production PAA trust.
+
+Version0.4.0/code9 now implements the native Android Matter controller and is
+installed on Samsung. Read-only signer/decryption checks passed before/after,
+preserving existing Kodi login. Manual code/private camera-QR pairing saves an
+AES-GCM/Keystore-protected fabric; each phone enrolls separately. Capabilities
+drive navigation, speaker volume, inputs and confirmed Off. Add another phone
+requests a temporary QR/manual-code window; codes leave the UI on close/expiry.
+LUMA/Kodi remains independent, and Philips combines Matter hardware controls
+with MSX video controls. Actual phone manual-code pairing completed through the
+Mac-opened window with production trust enabled, without another TV setup step.
+Phone Volume+1→2 and Volume−2→1 were each independently read back from the Mac;
+starting volume is restored. Actual phone **Add another phone** opened a
+TV-accepted enhanced window and displayed a fresh manual code/QR/expiry notice;
+dismiss/reopen left no code or QR. No second phone was enrolled. Navigation/Power
+controls are enabled; phone key/Off/input effects, camera scan, second-phone
+enrollment and final signed reinstall/reconnect remain pending.
+
+The app now requires Android API24+/ARM64. Official CHIP SDK source is pinned
+to3584c8c8552f4a0d471f2aad24a15b478959c230 with Kotlin2.1.10; locally built
+JAR/JNI/trust artifacts are verified against97 hashes, with16KB ELF/ZIP alignment,
+eight JARs/two libraries/72 production PAA/five CD roots. Progress/detail SDK
+logging is disabled and checked to prevent pairing-code leakage. The upstream
+issuer's default test IPK remains documented in the [build path](matter-android-path.md).
+
+Final review adds an explicit **TV unavailable? Forget on this phone** recovery
+button in the Forget confirmation. It removes only the saved TV node/cache,
+retains the encrypted controller CA and LUMA setup, sends no TV command and
+reports local-only recovery; the TV may still retain this phone's controller
+entry. There is no automatic reset. The Matter-only Settings Disconnect button
+is also fixed. Async commissioning-state changes reschedule service polling and
+update foreground lifetime; per-attempt `stopDevicePairing(pairingNode)`
+preserves the shared I/O factory. Explicit null volume/input state clears old
+cache. The UI uses only a connected speaker-capable Matter volume or connected
+MSX player volume, so re-pairing to a no-speaker TV cannot show stale40%.
+
+Final source checks passed:54 mobile browser,22 focused Node and7 QR JVM;
+18 final focused native checks (Matter7/service6/packaged UI5), debug/test APK
+and lint. Earlier unaffected native26 (backend9/settings5/MSX8/dual receiver4)
+also passed:44 native checks across runs, not a fresh full44-case rerun. The
+precommit release build passed earlier; post-commit signed rebuild/install and
+publication remain pending.
+These fixtures are separate from the actual-phone
+pairing/speaker proof above. Source HEAD056b6c9/public Pages/release
+remain0.3.1;0.4.0 is currently installed locally, uncommitted and unpublished.
+No final0.4.0 APK hash is recorded before the post-commit release rebuild.
+See the [native phone handoff](session-handoffs/2026-10-18-native-matter-phone.md).

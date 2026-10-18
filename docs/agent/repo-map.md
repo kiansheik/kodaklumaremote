@@ -26,9 +26,11 @@
   and output/URL-boundary tests: `tests/discovery.test.mjs`.
 - `docs/agent/{philips-tv,mobile-target}.md`: actual TV evidence and final
   phone-powered-off retrieval requirement; physical mobile acceptance pending.
-- `docs/agent/philips-matter.md`: exact-model Matter documentation and bounded
-  Basic Video Player advertisement; unpaired control/launch/subtitle boundaries
-  and the required endpoint capability inspection before integration.
+- `docs/agent/philips-matter.md`: paired Philips endpoint inventory, accepted Home
+  and speaker-volume readback; phone acceptance and URL/subtitle boundaries.
+- `tools/matter-controller/`: separate pinned Matter.js0.17.9 Mac commissioner,
+  sanitized inventory, explicit keys/volume/window and cached private-IP hint.
+  Private fabric and pairing-window artifacts stay under ignored `.local/`.
 - `docs/agent/{luma-receiver-options,receiver-apps}.md`: manufacturer DLNA claims,
   existing Android receiver apps, Kodi/VLC control interfaces and proposed tests;
   Kodi public/actual HLS and Portuguese subtitle acceptance is in `tests/manual-kodi.md`.
@@ -66,6 +68,18 @@
 - `tests/msx-receiver.test.mjs`, `tests/browser/mobile-receivers.spec.js`,
   `MsxInstrumentation.java`: direct-fetch player/channel, dual-target phone UI
   and explicitly isolated emulator HTTP/approval/control tests.
+- `MatterControllerAdapter.java`: service-owned native Matter controller,
+  Keystore-encrypted fabric, per-phone pairing, capability-based hardware
+  navigation/volume/inputs, confirmed Off and additional-phone windows.
+- `ScanMatterActivity.java`, `MatterQrDecoder.java`: private camera scanner;
+  `tests/java/MatterQrDecoderTest.java` covers bounded YUV/QR decoding.
+- `tests/browser/mobile-matter.spec.js`, `MatterInstrumentation.java`: phone
+  pairing/secret lifecycle/composite remote/no-scroll and isolated native JNI,
+  trust initialization, encrypted storage and request guards.
+- `android/matter-sdk.json`, `scripts/{build-matter-sdk.sh,package-matter-sdk.mjs,
+  verify-matter-sdk.mjs}`: pinned official Android SDK build, hashed artifacts,
+  production trust assets, logging privacy guard and ARM64/16KB native checks.
+  SDK binaries stay ignored; [build details](matter-android-path.md).
 - `scripts/build-mobile.mjs`, `scripts/test-android-*.mjs`: mobile assets and
   explicit emulator-only native backend, UI, service/persistence and Keystore tests.
 - `LiveControlsInstrumentation.java`: separately confirmed actual-phone

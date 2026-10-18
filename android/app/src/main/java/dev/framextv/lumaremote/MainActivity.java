@@ -38,6 +38,8 @@ import java.util.concurrent.atomic.AtomicLong;
 public final class MainActivity extends Activity {
     private static final String LOCAL_ORIGIN = "https://luma.invalid";
     private static final String START_URL = "https://framextv.xyz/watch/284833/1/1";
+    private static final int SCAN_MATTER = 6031;
+    private String pendingMatterScan;
     private WebView controls, browser;
     private EditText address;
     private LinearLayout browserPanel;
@@ -402,7 +404,7 @@ public final class MainActivity extends Activity {
                 }
                 runOnUiThread(() -> {
                     if (connectionService == null) { reply(id, null, "BUSY", "The remote is starting. Try again in a moment."); return; }
-                    if (method.equals("device.connect") || method.equals("msx.start")) ensureNotificationPermission();
+                    if (method.equals("device.connect") || method.equals("msx.start") || method.equals("matter.pair")) ensureNotificationPermission();
                     connectionService.request(method, args, new ConnectionService.Callback() {
                         @Override public void success(JSONObject result) { reply(id, result, null, null); }
                         @Override public void failure(String code, String message) { requestFailure(id, code, message); }
@@ -419,6 +421,11 @@ public final class MainActivity extends Activity {
                 result.put("browserUrl", browser.getUrl());
                 if (capturedMedia != null) result.put("source", capturedMedia);
                 reply(id, result, null, null);
+            } else if (method.equals("app.scanMatterCode")) {
+                if (pendingMatterScan != null) { reply(id, null, "MATTER_BUSY", "A scan is already open."); return; }
+                pendingMatterScan = id;
+                try { startActivityForResult(new Intent(this, ScanMatterActivity.class), SCAN_MATTER); }
+                catch (RuntimeException unavailable) { pendingMatterScan = null; reply(id, null, "CAMERA_DENIED", "Enter the setup code instead."); }
             } else if (method.equals("app.checkUpdates")) {
                 if (updateManager == null) { reply(id, null, "BUSY", "Update checking is unavailable in this test session."); return; }
                 updateManager.checkNow();
@@ -481,6 +488,20 @@ public final class MainActivity extends Activity {
             else if (method.equals("app.showRemote")) { showBrowser(false); reply(id, new JSONObject().put("accepted", true), null, null); }
             else reply(id, null, "INVALID_REQUEST", "Unknown app action.");
         } catch (Exception ignored) { reply(id, null, "REQUEST_FAILED", "Could not complete the app action."); }
+    }
+
+    @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != SCAN_MATTER) return;
+        String id = pendingMatterScan; pendingMatterScan = null;
+        if (id == null || destroyed) return;
+        String code = resultCode == RESULT_OK && data != null ? data.getStringExtra(ScanMatterActivity.EXTRA_SETUP_CODE) : null;
+        if (code != null && code.startsWith("MT:") && code.length() <= 256) {
+            try { reply(id, new JSONObject().put("setupCode", code), null, null); }
+            catch (Exception ignored) { reply(id, null, "MATTER_CODE", "Scan a Matter setup QR code."); }
+        } else if (data != null && data.getBooleanExtra(ScanMatterActivity.EXTRA_MANUAL_ENTRY, false)) {
+            reply(id, new JSONObject(), null, null);
+        } else reply(id, null, "MATTER_SCAN_CANCELLED", "Scanning cancelled.");
     }
 
     private void reply(String id, JSONObject result, String code, String message) {

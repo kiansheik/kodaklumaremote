@@ -61,6 +61,8 @@ public final class ConnectionService extends Service {
             new ArrayBlockingQueue<>(16));
     private NativeBackend backend;
     private MsxServer television;
+    private MatterControllerAdapter matter;
+    private boolean matterPollQueued;
     private volatile String selectedTarget = "luma";
     private boolean televisionRunning, televisionStarting, televisionRestoreQueued;
     private volatile long televisionGeneration;
@@ -91,6 +93,15 @@ public final class ConnectionService extends Service {
         backend = newBackend();
         settings = new SettingsStore(getApplicationContext());
         television = new MsxServer(getApplicationContext());
+        matter = new MatterControllerAdapter(getApplicationContext(), value -> main.post(() -> {
+            if (destroyed) return;
+            updateTelevisionState(); scheduleMatterPoll();
+            JSONObject current = matter.snapshot(); String error = current.optString("errorCode");
+            boolean failedPairing = !current.optBoolean("paired") && !current.optBoolean("pairing")
+                    && ("MATTER_PAIRING".equals(error) || "MATTER_TIMEOUT".equals(error) || "MATTER_STORAGE".equals(error));
+            if (foreground && !connected() && (failedPairing || current.optBoolean("paused"))) demote();
+            publish();
+        }));
         television.setSourceGuard(token -> "philips".equals(authorizedTarget) && token != null && token.equals(authorizedToken));
         selectedTarget = getSharedPreferences("receiver-selection", MODE_PRIVATE).getString("target", "luma");
         if (!"philips".equals(selectedTarget)) selectedTarget = "luma";
@@ -99,7 +110,7 @@ public final class ConnectionService extends Service {
             put(state, "settings", object("hasReceiver", false, "hasKodi", false));
             put(state, "autoConnectPaused", false);
             put(state, "selectedTarget", selectedTarget);
-            put(state, "receivers", object("philips", television.status()));
+            put(state, "receivers", object("philips", televisionSnapshot()));
         }
         if (Build.VERSION.SDK_INT >= 26) {
             NotificationChannel channel = new NotificationChannel(CHANNEL, "Projector connection", NotificationManager.IMPORTANCE_LOW);
@@ -168,6 +179,7 @@ public final class ConnectionService extends Service {
     public JSONObject snapshot() { synchronized (stateLock) { return copy(state); } }
     public void restoreReceivers() {
         main.post(() -> {
+            if (!destroyed && matter.snapshot().optBoolean("paired")) request("matter.status", object("reconnect", true), null);
             if (destroyed || televisionRunning || televisionRestoreQueued || !television.hasSavedReceiver()) return;
             televisionRestoreQueued = true;
             request("msx.start", new JSONObject(), new Callback() {
@@ -224,6 +236,7 @@ public final class ConnectionService extends Service {
                 return;
             }
             if (method != null && method.startsWith("msx.")) { requestTelevision(method, args, callback); return; }
+            if (method != null && method.startsWith("matter.")) { requestMatter(method, args, callback); return; }
             if ("device.disconnect".equals(method)) { disconnect(callback); return; }
             boolean auto = "app.settings.autoConnect".equals(method), rescan = "app.settings.rescan".equals(method);
             if (auto && autoConnectPaused) { if (callback != null) callback.success(object("connected", connected(), "paused", true, "devices", new JSONArray())); return; }
@@ -258,7 +271,7 @@ public final class ConnectionService extends Service {
             JSONObject metadata = state.optJSONObject("settings");
             state = object("connection", object("connected", false, "configured", false, "host", "", "name", ""), "settings", metadata == null ? new JSONObject() : metadata, "autoConnectPaused", true);
             put(state, "selectedTarget", selectedTarget);
-            put(state, "receivers", object("philips", television.status()));
+            put(state, "receivers", object("philips", televisionSnapshot()));
         }
         notice = "Disconnected"; demote(); publish();
         if (callback != null) callback.success(object("connected", false));
@@ -340,7 +353,60 @@ public final class ConnectionService extends Service {
         }
     }
     private void disconnectSelected() {
+        if ("philips".equals(selectedTarget) && matter.snapshot().optBoolean("paired")) request("matter.disconnect", new JSONObject(), null);
         request("philips".equals(selectedTarget) ? "msx.disconnect" : "device.disconnect", new JSONObject(), null);
+    }
+    private void requestMatter(String method, JSONObject args, Callback callback) {
+        if (!java.util.Arrays.asList("matter.status", "matter.pair", "matter.key", "matter.volume", "matter.input",
+                "matter.powerOff", "matter.openWindow", "matter.forget", "matter.disconnect").contains(method)) {
+            reject(callback, "INVALID_REQUEST", "Unknown TV control."); return;
+        }
+        boolean needsConnection = "matter.pair".equals(method) || !"matter.disconnect".equals(method) && matter.snapshot().optBoolean("paired") && (!matter.snapshot().optBoolean("paused") || args.optBoolean("reconnect"));
+        if (needsConnection) {
+            if ("philips".equals(selectedTarget)) notice = "Connecting to TV…";
+            startRequested = true;
+            try {
+                Intent start = new Intent(this, ConnectionService.class).setAction(START);
+                if (Build.VERSION.SDK_INT >= 26) startForegroundService(start); else startService(start);
+                promote();
+            } catch (RuntimeException unavailable) {
+                reject(callback, "BACKGROUND_START", "Open the app to connect to the TV."); return;
+            }
+        }
+        matter.request(method, args, new MatterControllerAdapter.Callback() {
+            @Override public void success(JSONObject result) {
+                if (destroyed) return;
+                if ("philips".equals(selectedTarget)) notice = matter.snapshot().optBoolean("connected") ? "TV remote connected" : "Reconnecting to TV…";
+                updateTelevisionState(); publish();
+                scheduleMatterPoll();
+                if (!connected() && (!matter.snapshot().optBoolean("paired") || matter.snapshot().optBoolean("paused"))) demote();
+                if (callback != null) callback.success(result);
+            }
+            @Override public void failure(String code, String message) {
+                if (destroyed) return;
+                updateTelevisionState(); publish();
+                scheduleMatterPoll();
+                if (!connected() && (!matter.snapshot().optBoolean("paired") || matter.snapshot().optBoolean("paused"))) demote();
+                reject(callback, code, message);
+            }
+        });
+    }
+    private final Runnable matterPoll = () -> {
+        if (destroyed || matterPollQueued || !foreground || !matter.snapshot().optBoolean("paired") || matter.snapshot().optBoolean("pairing") || matter.snapshot().optBoolean("paused")) return;
+        matterPollQueued = true;
+        request("matter.status", object("background", true), new Callback() {
+            @Override public void success(JSONObject result) { matterPollQueued = false; scheduleMatterPoll(); }
+            @Override public void failure(String code, String message) { matterPollQueued = false; scheduleMatterPoll(); }
+        });
+    };
+    private void scheduleMatterPoll() {
+        main.removeCallbacks(matterPoll);
+        if (!destroyed && foreground && matter.snapshot().optBoolean("paired") && !matter.snapshot().optBoolean("paused")) main.postDelayed(matterPoll, 15000);
+    }
+    private JSONObject televisionSnapshot() {
+        JSONObject current = television.status();
+        if (matter != null) put(current, "matter", matter.snapshot());
+        return current;
     }
     private void requestTelevision(String method, JSONObject args, Callback callback) {
         if (!java.util.Arrays.asList("msx.start", "msx.status", "msx.confirm", "msx.open", "msx.playPause",
@@ -415,7 +481,7 @@ public final class ConnectionService extends Service {
         }
     }
     private void updateTelevisionState() {
-        JSONObject current = television.status(), playback = current.optJSONObject("playback");
+        JSONObject current = televisionSnapshot(), playback = current.optJSONObject("playback");
         String source = playback != null && playback.optBoolean("active") ? playback.optString("source") : "";
         if (!source.equals(televisionSource)) {
             televisionSource = source;
@@ -435,10 +501,10 @@ public final class ConnectionService extends Service {
     private JSONObject presentationSnapshot() {
         JSONObject all = snapshot();
         if (!"philips".equals(selectedTarget)) return all;
-        JSONObject tv = television.status(), observed = tv.optJSONObject("playback");
-        boolean ready = tv.optBoolean("connected");
+        JSONObject tv = televisionSnapshot(), observed = tv.optJSONObject("playback"), hardware = tv.optJSONObject("matter");
+        boolean ready = tv.optBoolean("connected") || hardware != null && hardware.optBoolean("connected");
         put(all, "connection", object("connected", ready, "configured", ready, "name", "Philips TV"));
-        if (observed == null) { all.remove("playback"); all.remove("remote"); all.remove("volume"); return all; }
+        if (observed == null) { all.remove("playback"); all.remove("remote"); all.remove("volume"); if (hardware != null && hardware.optBoolean("connected")) put(all, "volume", hardware.optJSONObject("volume")); return all; }
         JSONObject playback = copy(observed);
         put(playback, "sourceUrl", observed.optString("source"));
         put(playback, "playing", !observed.optBoolean("paused", true));
@@ -446,10 +512,20 @@ public final class ConnectionService extends Service {
         put(all, "remote", object("media", object("url", observed.optString("source"), "title", observed.optString("title", "TV video")),
                 "tracks", observed.optJSONArray("tracks"), "catalog", observed.optJSONArray("tracks")));
         put(all, "volume", observed.optJSONObject("volume"));
+        if (hardware != null && hardware.optBoolean("connected") && hardware.optJSONObject("volume") != null) put(all, "volume", hardware.optJSONObject("volume"));
         return all;
     }
     private void televisionMediaAction(String method) {
         final String revision = mediaRevision;
+        if ("volume-down".equals(method) || "volume-up".equals(method)) {
+            JSONObject hardware = matter.snapshot(), volume = hardware.optJSONObject("volume");
+            if (hardware.optBoolean("connected") && volume != null) {
+                int current = volume.optInt("current"), min = volume.optInt("min", 0), max = volume.optInt("max", 254);
+                int next = Math.max(min, Math.min(max, current + ("volume-up".equals(method) ? 1 : -1)));
+                if (next != current) request("matter.volume", object("value", next), null);
+                return;
+            }
+        }
         JSONObject current = television.status(), playback = current.optJSONObject("playback");
         if (!current.optBoolean("connected") || playback == null || !playback.optBoolean("active")) return;
         final String source = playback.optString("source");
@@ -691,7 +767,7 @@ public final class ConnectionService extends Service {
         }
     }
     private void demote() {
-        if (televisionRunning || televisionStarting) { main.removeCallbacks(poll); return; }
+        if (televisionRunning || televisionStarting || matter != null && (matter.snapshot().optBoolean("paired") && !matter.snapshot().optBoolean("paused") || matter.snapshot().optBoolean("pairing"))) { main.removeCallbacks(poll); return; }
         main.removeCallbacks(poll);
         cancelNotificationFlush();
         foreground = false; startRequested = false;
@@ -817,6 +893,7 @@ public final class ConnectionService extends Service {
         for (Work work : pending) work.cancel();
         if (backend != null) backend.close(); network.shutdownNow();
         if (television != null) television.close(); televisionNetwork.shutdownNow();
+        if (matter != null) matter.close();
         if (mediaSession != null) { mediaSession.setActive(false); mediaSession.release(); }
         getSystemService(NotificationManager.class).cancel(MEDIA_NOTIFICATION);
         if (foreground) removeForeground();

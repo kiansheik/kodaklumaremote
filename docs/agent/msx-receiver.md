@@ -52,13 +52,17 @@ the requesting peer, exposing the capability or approving a TV. A real Android
 WebView cross-origin fixture verifies OPTIONS followed by GET. Safe diagnostics
 distinguish TLS sent to the HTTP port, rejected origins and expired pairing.
 The phone displays only fixed guidance, never request URLs or tokens.
+The actual0.3.1 retry still failed with status0. A generic phone400 does not
+distinguish an abandoned connection from a parser rejection. A separate Mac
+bootstrap diagnostic also failed and recorded only a zero-byte TCP timeout,
+with no HTTP or TLS request. Direct TV browser connectivity is the next check.
 
 This fixes a reproduced compatibility gap; it does not establish the TV's exact
 failure. [MSX setup documentation](https://www.msx.benzac.de/wiki/index.php?title=Setup_Start_Parameter)
 explains that HTTPS-loaded MSX upgrades JSON/plugin requests to HTTPS. The phone
 listener currently serves HTTP only. A forced-HTTPS TV context needs a different
-entry path; CORS headers cannot fix a TLS mismatch. The physical retry remains
-pending. [Matter hardware control research](philips-matter.md) is separate and
+entry path; CORS headers cannot fix a TLS mismatch. The current physical failure
+has not been attributed to this policy. [Matter hardware control research](philips-matter.md) is separate and
 does not establish arbitrary video/subtitle playback.
 
 See the [session handoff](session-handoffs/2026-10-18-dual-receiver-msx.md) for exact

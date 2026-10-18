@@ -205,8 +205,63 @@
   Samsung, preserving encrypted Kodi login per read-only before/after checks.
   Actual TV retry and publication are tracked in the
   [handoff](session-handoffs/2026-10-18-msx-setup-matter.md).
+- 2026-10-18 setup patch publication: source056b6c9 and signedv0.3.1 published;
+  GitHub asset digest/size match the prepared APK. Pages deployment and physical
+  TV retry results follow in the setup handoff. No new MsxReceiver event was
+  recorded on the updated phone at the last read.
 - 2026-10-18 Matter assessment: exact-model Philips datasheet supports Matter;
   bounded read-only discovery observed PHILIPS TV, DT40 Basic Video Player.
   No pairing/control commands or Matter adapter implemented. Hardware/navigation
   capabilities require paired inspection; URL launch and external subtitles are
   not implied. Added [research notes](philips-matter.md).
+- 2026-10-18 live setup retest:0.3.1 still reports status0. Generic phone400
+  does not establish HTTP arrival; a Mac nonsecret bootstrap diagnostic also
+  failed and recorded only a zero-byte TCP timeout. No parser loosening or
+  additional APK was attempted. Direct TV browser connectivity test requested.
+  Pagesce82fa2 built; HTTPS page/feed and public APK verified200 with exact
+  0.3.1 manifest, size and hash. Physical playback remains unconfirmed.
+- 2026-10-18 user steering: TV is outdoors in sun; repeated physical setup checks
+  are burdensome. Stopped both temporary Mac listeners and switched priority to
+  Matter automation. Read-only refresh still observes commissioning mode1/DT40.
+  Preparing a separately pinned Mac controller before requesting one setup code.
+- 2026-10-18 Matter Mac proof: Matter.js0.17.9 commissioned/read the actual
+  Philips Root/Basic Video Player/Speaker endpoints. No ContentLauncher or app
+  launcher appeared. Home returned status0; speaker volume1→2→1 was verified
+  and restored. Confirmed private IPv4/announced-port cache gave a4.4-second
+  CASE/descriptor/speaker read. Enhanced commissioning window succeeded without
+  another outdoor TV setup step. Mac default attestation is not production PAA
+  verification. [Evidence](philips-matter.md).
+- 2026-10-18 native Matter phone:0.4.0/code9/API24+/ARM64 built and installed
+  with existing Kodi Keystore login preserved by before/after checks. Native
+  code/QR commissioning, encrypted fabric, supported hardware remote and
+  temporary additional-phone QR windows implemented. SDK pinned3584c8c8552f,
+  Kotlin2.1.10/NDK30,97 verified artifacts/16KB ELF, production PAA/CD roots and
+  pairing-log privacy guard.53 mobile browser,22 Node,7 QR JVM,42 native checks
+  and debug/release build/lint passed. Actual phone acceptance follows below;
+  MSX status0 unresolved. HEAD056b6c9/public release still0.3.1;0.4.0 source is
+  uncommitted/unpublished. [Handoff](session-handoffs/2026-10-18-native-matter-phone.md).
+- 2026-10-18 actual native phone proof: manual-code commissioning from the
+  Mac-opened window completed with production trust enabled, without a new TV
+  manual step. Phone speaker+1→2 and−2→1 were independently verified by Mac
+  reads and starting level restored. Home/D-pad/Power UI enabled; phone key,
+  Off/input effects and camera scan remain pending. APK16KB ELF and
+  ZIP alignment verified. No power/input command was sent.
+- 2026-10-18 actual phone sharing: **Add another phone** successfully opened a
+  TV-accepted enhanced commissioning window and showed its fresh manual code,
+  QR and expiry notice. Dismiss/reopen removed code/QR. No second phone was
+  enrolled and camera scanning was not attempted; final signed reinstall/
+  reconnect remains pending.
+- 2026-10-18 final recovery review:54 mobile browser cases passed after fixing
+  Matter-only Settings Disconnect and adding a separate confirmed local-only
+  forget path for an unreachable/reset TV. It retains the encrypted CA/LUMA
+  setup and explains that the TV may retain this controller. Native lifecycle
+  fixes synchronize async-pair polling/notification lifetime and replace global
+  commissioning shutdown with per-attempt cancellation; native checks and final
+  post-commit rebuild remain pending. Earlier42-native aggregate is retained.
+- 2026-10-18 final source validation: recovery fixtures exposed stale40% from a
+  disconnected MSX session after re-pairing to a no-speaker TV. Connected-target
+  volume routing and explicit null volume/input cache clearing fixed it. Final
+  browser54 passed; native Matter7/service6/UI5 passed18/18 with debug/test APK
+  and lint. Earlier unaffected26 also passed (44 total across runs). Async pair
+  polling/foreground lifetime, per-attempt cancellation and confirmed local-only
+  recovery are covered. Final committed-source signing/install/publication next.
