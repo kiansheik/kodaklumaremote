@@ -505,3 +505,16 @@ the fixtures with loopback permission. The first signing attempt selected an
 older Gradle8.11.1 cache; the project uses cached Gradle9.6.1. The existing
 production certificate matches. Final committed-source build and publication
 are tracked in the [maintenance release handoff](session-handoffs/2026-10-18-release-0.4.1.md).
+
+Release0.4.1/code10 is now public from source
+`a84dbb1ef360d1351861e076f68e00dcc784bb82`. Signed committed-source build and
+lintVital passed; production certificate and16KB ZIP alignment verified.
+APK9,631,440bytes, SHA-256
+`a650dd4d44c8413bcd01b38c7c8d68f13ce758fdccc222222e0f36b43bc008e7`.
+GitHub release assets are uploaded/public. Pages commit
+`f38fa65de56ee6a59045a45021fd4a88b4008b3a` is built; Chrome rendered0.4.1 and
+the exact download link. Anonymous HTTPS feed/APK returned200; served metadata
+and downloaded bytes/signature match the prepared release. The Python HTTPS
+client lacked a trusted CA bundle; system curl and Chrome verified successfully
+without trust changes. No installation, device commands or new phone features
+were part of this maintenance deployment.

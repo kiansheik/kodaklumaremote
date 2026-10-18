@@ -79,7 +79,7 @@
     device/media actions. The saved S1E2
     source HEAD and public configuration returned403, so fresh capture is also
     unresolved. Android JointSPACE/encrypted-credential/browser-handoff
-    integration follows only after this proof; published0.4.0 does not have it.
+    integration follows only after this proof; published0.4.1 does not have it.
     See [browser setup](session-handoffs/2026-10-18-philips-browser-setup.md).
 12. Can the physically confirmed DIAL route launch another supported receiver?
     Exact-TV multicast discovery supplied an `Application-URL`; Netflix state

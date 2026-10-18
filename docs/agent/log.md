@@ -352,3 +352,9 @@
   Corrected an initial older-Gradle selection to cached9.6.1. Production signing
   certificate matches. Committed-source build/publication verification follows
   in the [release handoff](session-handoffs/2026-10-18-release-0.4.1.md).
+- 2026-10-18 deployment complete: sourcea84dbb1, publicv0.4.1/code10, signed
+  build/lintVital/16KB alignment passed. Pagesf38fa65 is built and Chrome shows
+  version0.4.1 with its exact APK link. Anonymous feed/APK GET200; metadata,
+  9,631,440-byte APK/SHA-256 and production signature match. Python's CA-bundle
+  error was isolated to that client; curl/Chrome verified normal TLS. No phone
+  install or TV operation. Desktop probes remain separate from phone features.
