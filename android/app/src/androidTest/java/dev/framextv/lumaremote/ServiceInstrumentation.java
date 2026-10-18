@@ -222,6 +222,7 @@ public final class ServiceInstrumentation {
             launch.putExtra("dev.framextv.lumaremote.TEST_NO_AUTO_CONNECT", true);
             launch.setClassName(context, MainActivity.class.getName()); launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
             activity = (MainActivity) runner.startActivitySync(launch); quietBrowser(activity); bind();
+            call("app.selectTarget", "target", "luma");
             require(call("device.connect", "host", args.getString("targetHost")).getBoolean("connected"), "Fixture connection failed");
             ordinaryCard(waitNotification(true)); waitCard(42, false);
             notificationAction(waitNotification(true), "disconnect");

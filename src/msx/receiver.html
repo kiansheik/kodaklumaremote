@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>LUMA Remote TV receiver</title>
+  <link rel="stylesheet" href="receiver.css">
+</head>
+<body>
+  <video id="video" playsinline preload="auto"></video>
+  <div id="waiting"><div class="mark">▰</div><h1>LUMA Remote</h1><p id="status">Connecting to your phone…</p><p class="hint">Keep this receiver open. Choose a video on your phone.</p></div>
+  <div id="caption" aria-live="off"></div>
+  <div id="notice" hidden></div>
+  <script src="hls.min.js"></script>
+  <script src="receiver-core.js"></script>
+  <script src="receiver.js"></script>
+</body>
+</html>

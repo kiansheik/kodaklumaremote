@@ -1,0 +1,7 @@
+Choose LUMA or Philips from a compact device switcher. Both receivers can stay connected, and changing the selected remote leaves their videos playing.
+
+Adds an experimental Philips receiver using Media Station X. TV setup shows the phone's local address and asks you to approve the TV once. Videos play directly on the TV, with Brazilian Portuguese subtitles preferred and English as fallback; other languages remain available on demand.
+
+The Philips remote provides playback, seek, subtitles and player volume, including notification and lock-screen controls for the selected receiver. Existing LUMA projector controls stay available separately.
+
+Philips codec, subtitle and phone-off behavior still need confirmation on the actual TV.

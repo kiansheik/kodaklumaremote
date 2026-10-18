@@ -180,3 +180,16 @@
   bootstrap→public APK preserved decryption of the existing Kodi login and uses
   the production signer. User then requested simpler direct `gh-pages` deploy
   through `make deploy-gh-pages`; no native APK/feed contract change is required.
+- 2026-10-18 dual receiver: user confirmed Media Station X on Philips. Added
+  compact target selection, independent simultaneous LUMA/Philips connections,
+  direct-fetch TV player/subtitles, explicit local pairing and selected-target
+  system controls. Kept hardware-specific projector controls on LUMA.
+  154 Node/full84 browser/final41 mobile and35 native emulator checks
+  passed; final setup-copy narrow-layout check also passed. Debug build/lint
+  passed after an API23 compatibility fix. Signing, publication, installation
+  and remaining physical acceptance are tracked in the
+  [handoff](session-handoffs/2026-10-18-dual-receiver-msx.md).
+- 2026-10-18 dual receiver installation: production-signed0.3.0/code7 installed
+  and opened on Samsung. Read-only signer/decryption checks passed before/after
+  with encrypted Kodi login retained. User was given MSX startup/approval steps;
+  no actual Philips playback acceptance is recorded yet.

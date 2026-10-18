@@ -22,6 +22,8 @@ Latest: [playback reattachment and subtitle readiness](session-handoffs/2026-10-
 Current: [system volume, confirmed power and Kodi error receipts](session-handoffs/2026-10-18-phone-volume-power.md).
 Distribution: [signed releases and optional updates](../releasing.md),
 [GitHub/Pages handoff](session-handoffs/2026-10-18-github-release-updates.md).
+Dual receiver: [Philips MSX and LUMA selection](msx-receiver.md),
+[implementation handoff](session-handoffs/2026-10-18-dual-receiver-msx.md).
 
 Execution: [decisions](decisions.md), [experiments](experiments.md),
 [progress](progress.md), [log](log.md), [handoff](handoff.md).

@@ -56,6 +56,13 @@
   ConnectionService owns background TCP/UDP/Kodi, MediaSession/notification and
   cached state. NativeBackend implements transport; SettingsStore encrypts
   validated credentials and caches the receiver. Generated assets/APKs ignored.
+- `src/msx/`, `MsxServer.java`: TV-owned MSX player/subtitle renderer and
+  capability/peer-pinned phone LAN control server. No media proxy. Independent
+  service executor/heartbeat and selected-target system controls coexist with
+  LUMA/Kodi. See [receiver domain](msx-receiver.md).
+- `tests/msx-receiver.test.mjs`, `tests/browser/mobile-receivers.spec.js`,
+  `MsxInstrumentation.java`: direct-fetch player/channel, dual-target phone UI
+  and explicitly isolated emulator HTTP/approval/control tests.
 - `scripts/build-mobile.mjs`, `scripts/test-android-*.mjs`: mobile assets and
   explicit emulator-only native backend, UI, service/persistence and Keystore tests.
 - `LiveControlsInstrumentation.java`: separately confirmed actual-phone

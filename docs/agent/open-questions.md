@@ -3,6 +3,10 @@
 1. Can the Philips43PFG6910/78 expose a general media receiver (Google Cast app
    or UPnP AVTransport) accepting arbitrary authorized media URLs? Chrome currently
    enables it for YouTube but disables it for frameXTV/general tab casting.
+   The user has now opened Media Station X. A custom direct-play receiver and
+   dual-device remote are implemented; actual MSX HTTP bootstrap, media codecs,
+   CORS/subtitle rendering and phone-off continuation need device acceptance.
+   See [MSX receiver](msx-receiver.md).
 2. Does frameXTV's existing native Cast control already satisfy the user in an
    ordinary uninstrumented Chrome session? Its code is present, discovery-gated.
 3. Kodi 21.2 fetched/decoded the actual HLS and Portuguese subtitles. Can genuine

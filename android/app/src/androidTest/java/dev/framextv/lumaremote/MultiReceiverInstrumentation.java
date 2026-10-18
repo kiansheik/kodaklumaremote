@@ -1,0 +1,255 @@
+package dev.framextv.lumaremote;
+
+import android.app.Activity;
+import android.app.Instrumentation;
+import android.app.Notification;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
+import android.content.ComponentName;
+import android.content.Context;
+import android.content.Intent;
+import android.content.ServiceConnection;
+import android.media.session.MediaController;
+import android.media.session.PlaybackState;
+import android.net.Uri;
+import android.os.Build;
+import android.os.Bundle;
+import android.os.IBinder;
+import android.os.SystemClock;
+import android.service.notification.StatusBarNotification;
+import android.webkit.WebView;
+import org.json.JSONArray;
+import org.json.JSONObject;
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.Proxy;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
+
+/** Two transport fixtures in the isolated emulator application. No physical receivers. */
+public final class MultiReceiverInstrumentation {
+    private static final String PACKAGE = "dev.framextv.lumaremote.receiverfixture";
+    private static final String CLIENT = "multi_receiver_fixture_1234567890";
+    private static final String LUMA = "https://media.example/luma-first.m3u8";
+    private static final String FIRST = "https://media.example/tv-first.m3u8", SECOND = "https://media.example/tv-second.m3u8";
+    private static final String THIRD = "https://media.example/tv-third.m3u8", FOURTH = "https://media.example/tv-fourth.m3u8";
+    private final Instrumentation runner;
+    private final Bundle arguments;
+    private final Context context;
+    private final List<String> received = new ArrayList<>();
+    private MainActivity activity;
+    private ConnectionService service;
+    private ServiceConnection binding;
+    private String base, session, phase = "setup", tvSource = FIRST;
+    private boolean tvPaused;
+    private boolean fixtureAuthorized;
+    private long after;
+    private int checks;
+    private static final class PendingCall {
+        final CountDownLatch ready = new CountDownLatch(1);
+        final AtomicReference<JSONObject> result = new AtomicReference<>();
+        final AtomicReference<String> error = new AtomicReference<>();
+    }
+    private MultiReceiverInstrumentation(Instrumentation runner, Bundle arguments) {
+        this.runner = runner; this.arguments = arguments; context = runner.getTargetContext();
+    }
+    public static void run(Instrumentation runner, Bundle arguments) { new MultiReceiverInstrumentation(runner, arguments).execute(); }
+    private static void require(boolean condition, String message) { if (!condition) throw new AssertionError(message); }
+    private static JSONObject object(Object... fields) throws Exception {
+        JSONObject result = new JSONObject(); for (int i = 0; i < fields.length; i += 2) result.put((String) fields[i], fields[i + 1]); return result;
+    }
+    private void passed(String name) { Bundle progress = new Bundle(); progress.putString("test", name); progress.putInt("current", ++checks); runner.sendStatus(0, progress); }
+    private PendingCall submit(String method, Object... fields) throws Exception {
+        PendingCall call = new PendingCall();
+        service.request(method, object(fields), new ConnectionService.Callback() {
+            @Override public void success(JSONObject value) { call.result.set(value); call.ready.countDown(); }
+            @Override public void failure(String code, String message) { call.error.set(code); call.ready.countDown(); }
+        });
+        return call;
+    }
+    private JSONObject await(PendingCall call, long seconds) throws Exception {
+        require(call.ready.await(seconds, TimeUnit.SECONDS), "Service request timed out");
+        require(call.error.get() == null, "Service request failed: " + call.error.get()); return call.result.get();
+    }
+    private JSONObject call(String method, Object... fields) throws Exception { return await(submit(method, fields), 8); }
+    private JSONObject request(String address, JSONObject body) throws Exception {
+        HttpURLConnection connection = (HttpURLConnection) new URL(address).openConnection(Proxy.NO_PROXY);
+        try {
+            connection.setConnectTimeout(2000); connection.setReadTimeout(2000); connection.setInstanceFollowRedirects(false);
+            if (body != null) {
+                byte[] bytes = body.toString().getBytes(StandardCharsets.UTF_8); connection.setRequestMethod("POST"); connection.setDoOutput(true);
+                connection.setRequestProperty("Content-Type", "application/json"); connection.setFixedLengthStreamingMode(bytes.length);
+                try (java.io.OutputStream output = connection.getOutputStream()) { output.write(bytes); }
+            }
+            require(connection.getResponseCode() == 200, "Fixture HTTP rejected request");
+            try (InputStream input = connection.getInputStream(); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+                byte[] buffer = new byte[2048]; int count;
+                while ((count = input.read(buffer)) >= 0) { require(output.size() + count <= 65536, "Fixture response exceeded bound"); output.write(buffer, 0, count); }
+                return new JSONObject(output.toString("UTF-8"));
+            }
+        } finally { connection.disconnect(); }
+    }
+    private JSONObject fixture() throws Exception { return request("http://10.0.2.2:" + arguments.getString("kodiPort") + "/fixture", null); }
+    private void tvState() throws Exception {
+        request(base + "state", object("client", CLIENT, "sessionId", session, "playback", object("active", true, "source", tvSource,
+                "title", "TV fixture", "paused", tvPaused, "positionSeconds", 15, "durationSeconds", 120, "canSeek", true,
+                "volume", object("current", 40, "max", 100), "tracks", new JSONArray(), "selectedIndex", -1, "subtitlesEnabled", false)));
+    }
+    private JSONArray poll() throws Exception { return request(base + "poll?client=" + CLIENT + "&sessionId=" + session + "&after=" + after, null).getJSONArray("commands"); }
+    private JSONObject nextCommand() throws Exception {
+        long deadline = SystemClock.elapsedRealtime() + 4000;
+        while (SystemClock.elapsedRealtime() < deadline) {
+            JSONArray commands = poll();
+            if (commands.length() > 0) {
+                require(commands.length() == 1, "Unexpected extra TV command"); JSONObject command = commands.getJSONObject(0);
+                received.add(command.getString("method")); return command;
+            }
+            Thread.sleep(30);
+        }
+        throw new AssertionError("Expected TV command missing");
+    }
+    private void acknowledge(JSONObject command) throws Exception {
+        tvState(); after = command.getLong("id");
+        request(base + "ack", object("client", CLIENT, "sessionId", session, "id", after, "ok", true));
+    }
+    private void connectLuma() throws Exception {
+        call("device.connect", "host", "10.0.2.2");
+        call("kodi.configure", "username", "fixture", "password", "fixture", "port", Integer.parseInt(arguments.getString("kodiPort")));
+        require(call("kodi.connect").getBoolean("ready"), "Kodi API not ready"); call("kodi.status");
+    }
+    private void bothConnected() throws Exception {
+        require(service.snapshot().getJSONObject("connection").getBoolean("connected"), "LUMA transport disconnected");
+        require(call("msx.status").getBoolean("connected"), "TV transport disconnected");
+        require(call("kodi.status").getBoolean("active"), "Independent Kodi playback disappeared");
+    }
+    private PendingCall open(String source) throws Exception {
+        runner.runOnMainSync(() -> service.authorizeToken("multi-current", "philips"));
+        return submit("msx.open", "source", source, "mimeType", "application/vnd.apple.mpegurl", "title", "TV fixture",
+                "subtitles", new JSONArray(), "preferredLanguage", "pt-BR", "sourceToken", "multi-current");
+    }
+    private void rememberLuma() throws Exception {
+        JSONObject media = object("url", LUMA, "contentType", "application/vnd.apple.mpegurl", "title", "LUMA fixture video", "tracks", new JSONArray());
+        JSONObject result = object("tracks", new JSONArray(), "catalog", new JSONArray(), "selectedIndex", JSONObject.NULL, "subtitlesEnabled", false);
+        runner.runOnMainSync(() -> require(service.rememberHandoff(media, result), "LUMA handoff metadata rejected")); runner.waitForIdleSync();
+    }
+    private Notification waitCard(String title, String action) throws Exception {
+        long deadline = SystemClock.elapsedRealtime() + 6000;
+        while (SystemClock.elapsedRealtime() < deadline) {
+            for (StatusBarNotification entry : ((NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE)).getActiveNotifications()) {
+                Notification card = entry.getNotification();
+                if (entry.getId() == 42 && title.contentEquals(card.extras.getCharSequence(Notification.EXTRA_TITLE, "")) && card.actions != null) {
+                    for (Notification.Action button : card.actions) if (action.contentEquals(button.title)) return card;
+                }
+            }
+            Thread.sleep(60);
+        }
+        throw new AssertionError("Selected receiver media card missing");
+    }
+    private PendingIntent action(Notification card, String name) {
+        for (Notification.Action button : card.actions) if (name.contentEquals(button.title)) return button.actionIntent;
+        throw new AssertionError("Media action missing");
+    }
+    private void launchAndBind() throws Exception {
+        Intent launch = new Intent(Intent.ACTION_VIEW, Uri.parse("https://example.invalid/"));
+        launch.setClassName(context, MainActivity.class.getName()); launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+        launch.putExtra("dev.framextv.lumaremote.TEST_NO_AUTO_CONNECT", true);
+        activity = (MainActivity) runner.startActivitySync(launch);
+        runner.runOnMainSync(() -> {
+            WebView browser = activity.getWindow().getDecorView().findViewWithTag("luma-browser");
+            require(browser != null, "Owned browsing WebView missing"); browser.stopLoading(); browser.loadUrl("about:blank");
+        });
+        CountDownLatch ready = new CountDownLatch(1);
+        binding = new ServiceConnection() {
+            @Override public void onServiceConnected(ComponentName name, IBinder binder) { service = ((ConnectionService.LocalBinder) binder).getService(); ready.countDown(); }
+            @Override public void onServiceDisconnected(ComponentName name) { }
+        };
+        runner.runOnMainSync(() -> require(context.bindService(new Intent(context, ConnectionService.class), binding, Context.BIND_AUTO_CREATE), "Service bind rejected"));
+        require(ready.await(8, TimeUnit.SECONDS), "Service did not bind");
+    }
+    private void execute() {
+        Bundle result = new Bundle();
+        try {
+            require(PACKAGE.equals(context.getPackageName()), "Only the isolated receiver fixture package is supported");
+            require(Build.FINGERPRINT.startsWith("generic") || Build.FINGERPRINT.contains("emulator") || Build.MODEL.contains("sdk_gphone"), "Destructive setup requires an emulator");
+            require("10.0.2.2".equals(arguments.getString("targetHost")), "Only the explicit emulator loopback fixture is supported");
+            fixtureAuthorized = true;
+            new SettingsStore(context).clear("all"); new MsxServer(context).reset();
+            context.getSharedPreferences("receiver-selection", Context.MODE_PRIVATE).edit().clear().commit();
+            launchAndBind(); connectLuma();
+            JSONObject started = call("msx.start"); String origin = started.getString("startupUrl");
+            require(new URL(origin).getHost().startsWith("10.0.2."), "TV HTTP fixture escaped the emulator interface");
+            String home = request(origin + "/msx/start.json", null).getString("parameter").substring("content:".length());
+            base = home.substring(0, home.length() - "home.json".length());
+            session = request(base + "hello?client=" + CLIENT, null).getString("sessionId");
+            call("msx.confirm", "host", new URL(origin).getHost()); tvState();
+            for (String target : new String[] {"philips", "luma", "philips"}) { call("app.selectTarget", "target", target); bothConnected(); }
+            passed("both receiver transports survive selected-target changes with Kodi API ready");
+
+            phase = "independent queues";
+            PendingCall opening = open(SECOND); JSONObject delivered = nextCommand();
+            require("open".equals(delivered.getString("method")), "TV Open was not delivered");
+            long before = SystemClock.elapsedRealtime(); call("msx.status"); require(SystemClock.elapsedRealtime() - before < 1500, "MSX status blocked behind Open");
+            before = SystemClock.elapsedRealtime(); call("luma.status"); call("luma.key", "key", "right");
+            require(SystemClock.elapsedRealtime() - before < 2500, "LUMA controls blocked behind TV Open");
+            require(opening.ready.getCount() == 1, "Open completed before the TV receipt");
+            call("device.disconnect"); require(call("msx.status").getBoolean("connected"), "LUMA disconnect closed TV transport");
+            tvSource = SECOND; acknowledge(delivered); require(await(opening, 4).getBoolean("accepted"), "TV Open failed after LUMA disconnect");
+            require(fixture().getInt("stops") == 0, "LUMA disconnect sent Stop"); connectLuma(); bothConnected();
+            passed("pending TV Open permits status and LUMA controls; LUMA disconnect preserves its receipt");
+
+            phase = "selected system controls";
+            call("app.selectTarget", "target", "luma"); call("kodi.status"); rememberLuma();
+            Notification lumaCard = waitCard("LUMA fixture video", "Pause"); PendingIntent staleLumaPause = action(lumaCard, "Pause");
+            MediaController controller = new MediaController(context, service.getMediaSessionToken());
+            PlaybackState.CustomAction staleLumaStop = null;
+            for (PlaybackState.CustomAction candidate : controller.getPlaybackState().getCustomActions()) if ("Stop video".contentEquals(candidate.getName())) staleLumaStop = candidate;
+            require(staleLumaStop != null, "LUMA system Stop action missing");
+            int mutations = fixture().getInt("mutations");
+            call("app.selectTarget", "target", "philips"); waitCard("TV fixture", "Pause");
+            controller.getTransportControls().pause(); JSONObject pause = nextCommand();
+            require("playPause".equals(pause.getString("method")) && !pause.getJSONObject("params").getBoolean("play")
+                    && SECOND.equals(pause.getJSONObject("params").getString("expectedSourceUrl")), "MediaSession did not route a source-guarded TV pause");
+            tvPaused = true; acknowledge(pause); Notification tvCard = waitCard("TV fixture", "Play"); PendingIntent staleTvPlay = action(tvCard, "Play");
+            staleLumaPause.send(); controller.getTransportControls().sendCustomAction(staleLumaStop.getAction(), staleLumaStop.getExtras()); Thread.sleep(350);
+            require(poll().length() == 0 && fixture().getInt("mutations") == mutations, "Stale LUMA actions changed a receiver after target switch");
+            tvSource = THIRD; tvPaused = false; tvState(); call("msx.status"); staleTvPlay.send(); Thread.sleep(200);
+            require(poll().length() == 0, "Stale TV notification changed replacement video");
+            PendingCall staleSource = submit("msx.playPause", "play", false, "expectedSourceUrl", SECOND);
+            require(staleSource.ready.await(3, TimeUnit.SECONDS) && "SOURCE_CHANGED".equals(staleSource.error.get()), "TV source guard accepted a stale source");
+            call("app.selectTarget", "target", "luma"); waitCard("LUMA fixture video", "Pause"); controller.getTransportControls().pause();
+            long deadline = SystemClock.elapsedRealtime() + 4000;
+            while (fixture().getBoolean("playing") && SystemClock.elapsedRealtime() < deadline) Thread.sleep(50);
+            require(!fixture().getBoolean("playing") && fixture().getInt("mutations") == mutations + 1, "Selected LUMA system pause was not observed exactly once");
+            staleTvPlay.send(); Thread.sleep(200); require(poll().length() == 0 && fixture().getInt("mutations") == mutations + 1, "Stale TV action retargeted to LUMA");
+            passed("MediaSession routes the selected receiver and stale notifications/source identities cannot cross targets");
+
+            phase = "immediate TV disconnect";
+            call("app.selectTarget", "target", "philips"); PendingCall pending = open(FOURTH); JSONObject last = nextCommand();
+            require("open".equals(last.getString("method")), "Final Open not delivered"); tvSource = FOURTH; tvState();
+            before = SystemClock.elapsedRealtime(); call("msx.disconnect"); require(SystemClock.elapsedRealtime() - before < 1500, "TV disconnect blocked behind delivered Open");
+            require(pending.ready.await(3, TimeUnit.SECONDS) && pending.error.get() != null, "TV disconnect did not cancel pending caller");
+            require(service.snapshot().getJSONObject("connection").getBoolean("connected") && call("kodi.status").getBoolean("active"), "TV disconnect closed or stopped LUMA");
+            require(!received.contains("stop") && FOURTH.equals(tvSource) && fixture().getInt("stops") == 0, "Disconnect sent a playback Stop");
+            passed("TV disconnect immediately cancels its pending receipt while independent playback and LUMA survive");
+            result.putInt("passed", checks); result.putInt("failures", 0);
+        } catch (Throwable failure) {
+            result.putInt("passed", checks); result.putInt("failures", 1);
+            result.putString("failure", phase + ": " + failure.getClass().getSimpleName() + ": " + String.valueOf(failure.getMessage()));
+        } finally {
+            // These resets are reachable only after all emulator/package guards passed.
+            if (service != null) {
+                try { call("msx.reset"); call("device.disconnect"); service.revokeTokens(); } catch (Exception ignored) { }
+            }
+            if (binding != null) runner.runOnMainSync(() -> context.unbindService(binding));
+            if (activity != null) runner.runOnMainSync(activity::finish);
+            if (fixtureAuthorized) context.stopService(new Intent(context, ConnectionService.class));
+        }
+        runner.finish(result.getInt("failures") == 0 ? Activity.RESULT_OK : Activity.RESULT_CANCELED, result);
+    }
+}

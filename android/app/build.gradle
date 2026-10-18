@@ -5,6 +5,7 @@ def bundleMobileAssets = tasks.register('bundleMobileAssets', Exec) {
     workingDir mobileRepository
     commandLine 'node', new File(mobileRepository, 'scripts/build-mobile.mjs').absolutePath
     inputs.files(fileTree(new File(mobileRepository, 'src/mobile')),
+        fileTree(new File(mobileRepository, 'src/msx')),
         fileTree(new File(mobileRepository, 'src/handoff')),
         new File(mobileRepository, 'src/shared/media.js'),
         new File(mobileRepository, 'scripts/build-mobile.mjs'),
@@ -22,8 +23,8 @@ android {
         applicationId 'dev.framextv.lumaremote'
         minSdk 23
         targetSdk 35
-        versionCode 6
-        versionName '0.2.4'
+        versionCode 7
+        versionName '0.3.0'
         testInstrumentationRunner 'dev.framextv.lumaremote.BackendInstrumentation'
     }
     compileOptions {
@@ -43,6 +44,10 @@ android {
         }
     }
     buildTypes {
+        debug {
+            // Keep emulator fixture state separate from installed signed releases.
+            if (project.findProperty('receiverFixture') == 'true') applicationIdSuffix '.receiverfixture'
+        }
         release {
             minifyEnabled false
             signingConfig signingConfigs.release

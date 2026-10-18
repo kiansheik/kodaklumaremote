@@ -42,6 +42,7 @@ public final class MainActivity extends Activity {
     private EditText address;
     private LinearLayout browserPanel;
     private ProgressBar progress;
+    private Button castButton;
     private ConnectionService connectionService;
     private UpdateManager updateManager;
     private boolean serviceBound;
@@ -49,6 +50,7 @@ public final class MainActivity extends Activity {
     private boolean autoConnectEnabled = true;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ConnectionService.Listener serviceListener = snapshot -> {
+        updateCastTarget(snapshot);
         event("onConnectionState", snapshot);
         scheduleAutoConnect(5000);
     };
@@ -57,6 +59,7 @@ public final class MainActivity extends Activity {
             connectionService = ((ConnectionService.LocalBinder) binder).getService();
             if (foregroundStarted) connectionService.allowAutoConnect();
             connectionService.addListener(serviceListener);
+            if (autoConnectEnabled && foregroundStarted) connectionService.restoreReceivers();
             event("onConnectionState", connectionService.snapshot());
             scheduleAutoConnect(0);
         }
@@ -156,8 +159,8 @@ public final class MainActivity extends Activity {
         actions.setPadding(dp(8), 0, dp(8), dp(4));
         Button remote = button("Remote", actions);
         remote.setOnClickListener(v -> showBrowser(false));
-        Button cast = button("Cast to LUMA", actions);
-        cast.setOnClickListener(v -> capture(null));
+        castButton = button("Cast to LUMA", actions);
+        castButton.setOnClickListener(v -> capture(null));
         browserPanel.addView(actions);
         progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         progress.setMax(100);
@@ -175,6 +178,9 @@ public final class MainActivity extends Activity {
     }
 
     private int dp(int value) { return Math.round(value * getResources().getDisplayMetrics().density); }
+    private void updateCastTarget(JSONObject snapshot) {
+        if (castButton != null) castButton.setText("philips".equals(snapshot.optString("selectedTarget")) ? "Cast to Philips" : "Cast to LUMA");
+    }
     private Button button(String title, LinearLayout parent) {
         Button result = new Button(this);
         result.setText(title);
@@ -396,7 +402,7 @@ public final class MainActivity extends Activity {
                 }
                 runOnUiThread(() -> {
                     if (connectionService == null) { reply(id, null, "BUSY", "The remote is starting. Try again in a moment."); return; }
-                    if (method.equals("device.connect")) ensureNotificationPermission();
+                    if (method.equals("device.connect") || method.equals("msx.start")) ensureNotificationPermission();
                     connectionService.request(method, args, new ConnectionService.Callback() {
                         @Override public void success(JSONObject result) { reply(id, result, null, null); }
                         @Override public void failure(String code, String message) { requestFailure(id, code, message); }
@@ -417,7 +423,7 @@ public final class MainActivity extends Activity {
                 if (updateManager == null) { reply(id, null, "BUSY", "Update checking is unavailable in this test session."); return; }
                 updateManager.checkNow();
                 reply(id, new JSONObject().put("accepted", true), null, null);
-            } else if (method.startsWith("app.settings.") || method.equals("app.rememberRemote")) {
+            } else if (method.startsWith("app.settings.") || method.equals("app.rememberRemote") || method.equals("app.selectTarget")) {
                 if (connectionService == null) { reply(id, null, "BUSY", "The remote is starting. Try again in a moment."); return; }
                 connectionService.request(method, params, new ConnectionService.Callback() {
                     @Override public void success(JSONObject result) { reply(id, result, null, null); }
@@ -444,7 +450,7 @@ public final class MainActivity extends Activity {
                 }
                 // Keep the capture identity stable, but authorize each attempt separately.
                 capturedToken = captureSession + ":" + capturedGeneration + ":" + captureSequence.incrementAndGet();
-                connectionService.authorizeToken(capturedToken);
+                connectionService.authorizeToken(capturedToken, params.optString("target", "luma"));
                 reply(id, new JSONObject().put("sourceToken", capturedToken), null, null);
             }
             else if (method.equals("app.cancelHandoff")) {
@@ -458,7 +464,7 @@ public final class MainActivity extends Activity {
                 if (!token.equals(capturedToken) || capturedGeneration != pageGeneration.get() || capturedMedia == null) {
                     reply(id, null, "SOURCE_CHANGED", "The page changed. The projector is playing independently."); return;
                 }
-                if (connectionService != null && params.optJSONObject("remote") != null) {
+                if (!"philips".equals(params.optString("target")) && connectionService != null && params.optJSONObject("remote") != null) {
                     if (!connectionService.rememberHandoff(capturedMedia, params.getJSONObject("remote"))) {
                         android.util.Log.i("LumaHandoff", "remote metadata rejected INVALID_SUBTITLE");
                         reply(id, null, "INVALID_SUBTITLE", "Could not retain the subtitle catalog. The projector is playing independently."); return;
@@ -522,13 +528,17 @@ public final class MainActivity extends Activity {
         if (updateManager != null) updateManager.onResume();
         resumed = true;
         if (connectionService != null) event("onConnectionState", connectionService.snapshot());
+        if (autoConnectEnabled && connectionService != null) connectionService.restoreReceivers();
         scheduleAutoConnect(0);
     }
 
     @Override protected void onStart() {
         super.onStart();
         foregroundStarted = true;
-        if (connectionService != null) connectionService.allowAutoConnect();
+        if (connectionService != null) {
+            connectionService.allowAutoConnect();
+            if (autoConnectEnabled) connectionService.restoreReceivers();
+        }
     }
 
     @Override protected void onPause() {

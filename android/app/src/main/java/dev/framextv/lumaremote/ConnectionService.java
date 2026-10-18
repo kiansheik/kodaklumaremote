@@ -57,7 +57,14 @@ public final class ConnectionService extends Service {
     private final CopyOnWriteArraySet<Work> pending = new CopyOnWriteArraySet<>();
     private final ThreadPoolExecutor network = new ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS,
             new ArrayBlockingQueue<>(32));
+    private final ThreadPoolExecutor televisionNetwork = new ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS,
+            new ArrayBlockingQueue<>(16));
     private NativeBackend backend;
+    private MsxServer television;
+    private volatile String selectedTarget = "luma";
+    private boolean televisionRunning, televisionStarting, televisionRestoreQueued;
+    private volatile long televisionGeneration;
+    private String televisionSource = "";
     private SettingsStore settings;
     private volatile JSONObject candidateKodi;
     private volatile long candidateGeneration = -1;
@@ -68,6 +75,7 @@ public final class ConnectionService extends Service {
     private VolumeProvider volumeProvider;
     private JSONObject state = new JSONObject();
     private volatile String authorizedToken;
+    private volatile String authorizedTarget = "luma";
     private volatile String mediaRevision = UUID.randomUUID().toString();
     private boolean foreground, pollQueued, startRequested, autoConnectPaused;
     private long lastHeartbeat;
@@ -82,10 +90,16 @@ public final class ConnectionService extends Service {
         super.onCreate();
         backend = newBackend();
         settings = new SettingsStore(getApplicationContext());
+        television = new MsxServer(getApplicationContext());
+        television.setSourceGuard(token -> "philips".equals(authorizedTarget) && token != null && token.equals(authorizedToken));
+        selectedTarget = getSharedPreferences("receiver-selection", MODE_PRIVATE).getString("target", "luma");
+        if (!"philips".equals(selectedTarget)) selectedTarget = "luma";
         synchronized (stateLock) {
             put(state, "connection", object("connected", false, "configured", false, "host", "", "name", ""));
             put(state, "settings", object("hasReceiver", false, "hasKodi", false));
             put(state, "autoConnectPaused", false);
+            put(state, "selectedTarget", selectedTarget);
+            put(state, "receivers", object("philips", television.status()));
         }
         if (Build.VERSION.SDK_INT >= 26) {
             NotificationChannel channel = new NotificationChannel(CHANNEL, "Projector connection", NotificationManager.IMPORTANCE_LOW);
@@ -106,7 +120,7 @@ public final class ConnectionService extends Service {
                 if (VOLUME_DOWN.equals(action)) mediaAction("volume-down");
                 else if (VOLUME_UP.equals(action)) mediaAction("volume-up");
                 else if (STOP.equals(action)) mediaAction("kodi.stop");
-                else if (DISCONNECT.equals(action)) request("device.disconnect", new JSONObject(), null);
+                else if (DISCONNECT.equals(action)) disconnectSelected();
             }
         }, main);
         volumeProvider = new VolumeProvider(VolumeProvider.VOLUME_CONTROL_RELATIVE, 30, 0) {
@@ -128,8 +142,8 @@ public final class ConnectionService extends Service {
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
         String action = intent == null ? null : intent.getAction();
         if (START.equals(action)) { if (startRequested && !foreground) promote(); else if (!startRequested) stopSelf(startId); }
-        else if (DISCONNECT.equals(action)) request("device.disconnect", new JSONObject(), null);
         else if (intent != null && mediaRevision.equals(intent.getStringExtra("revision"))) {
+            if (DISCONNECT.equals(action)) disconnectSelected();
             if (PLAY.equals(action)) mediaAction("kodi.resume");
             else if (PAUSE.equals(action)) mediaAction("kodi.pause");
             else if (VOLUME_DOWN.equals(action)) mediaAction("volume-down");
@@ -140,18 +154,34 @@ public final class ConnectionService extends Service {
         return START_NOT_STICKY;
     }
     public MediaSession.Token getMediaSessionToken() { return mediaSession.getSessionToken(); }
-    public void authorizeToken(String token) { synchronized (stateLock) { authorizedToken = token != null && token.length() <= 200 ? token : null; } }
+    public void authorizeToken(String token) { authorizeToken(token, "luma"); }
+    public void authorizeToken(String token, String target) {
+        synchronized (stateLock) {
+            authorizedTarget = "philips".equals(target) ? "philips" : "luma";
+            authorizedToken = token != null && token.length() <= 200 ? token : null;
+        }
+    }
     public void revokeToken(String token) { synchronized (stateLock) { if (token != null && token.equals(authorizedToken)) authorizedToken = null; } }
     public void revokeTokens() { synchronized (stateLock) { authorizedToken = null; } }
     public void addListener(Listener listener) { if (listener != null) { listeners.add(listener); main.post(() -> { if (listeners.contains(listener)) listener.onStateChanged(snapshot()); }); } }
     public void removeListener(Listener listener) { listeners.remove(listener); }
     public JSONObject snapshot() { synchronized (stateLock) { return copy(state); } }
+    public void restoreReceivers() {
+        main.post(() -> {
+            if (destroyed || televisionRunning || televisionRestoreQueued || !television.hasSavedReceiver()) return;
+            televisionRestoreQueued = true;
+            request("msx.start", new JSONObject(), new Callback() {
+                @Override public void success(JSONObject result) { televisionRestoreQueued = false; }
+                @Override public void failure(String code, String message) { televisionRestoreQueued = false; }
+            });
+        });
+    }
     public void allowAutoConnect() {
         main.post(() -> { if (!destroyed) { autoConnectPaused = false; synchronized (stateLock) { put(state, "autoConnectPaused", false); } publish(); } });
     }
     private NativeBackend newBackend() {
         NativeBackend transport = new NativeBackend(getApplicationContext());
-        transport.setSourceGuard(token -> token != null && token.equals(authorizedToken));
+        transport.setSourceGuard(token -> "luma".equals(authorizedTarget) && token != null && token.equals(authorizedToken));
         return transport;
     }
     private interface NetworkAction { void run(Work work); }
@@ -182,6 +212,18 @@ public final class ConnectionService extends Service {
         JSONObject args = params == null ? new JSONObject() : copy(params);
         main.post(() -> {
             if (destroyed) { reject(callback, "NOT_CONNECTED", "Connect to the projector first."); return; }
+            if ("app.selectTarget".equals(method)) {
+                String target = args.optString("target");
+                if (!"luma".equals(target) && !"philips".equals(target)) { reject(callback, "INVALID_REQUEST", "Choose a receiver."); return; }
+                selectedTarget = target;
+                getSharedPreferences("receiver-selection", MODE_PRIVATE).edit().putString("target", target).apply();
+                mediaRevision = UUID.randomUUID().toString();
+                synchronized (stateLock) { put(state, "selectedTarget", selectedTarget); }
+                publish();
+                if (callback != null) callback.success(snapshot());
+                return;
+            }
+            if (method != null && method.startsWith("msx.")) { requestTelevision(method, args, callback); return; }
             if ("device.disconnect".equals(method)) { disconnect(callback); return; }
             boolean auto = "app.settings.autoConnect".equals(method), rescan = "app.settings.rescan".equals(method);
             if (auto && autoConnectPaused) { if (callback != null) callback.success(object("connected", connected(), "paused", true, "devices", new JSONArray())); return; }
@@ -205,7 +247,8 @@ public final class ConnectionService extends Service {
         });
     }
     private void disconnect(Callback callback) {
-        revokeTokens(); generation++; mediaRevision = UUID.randomUUID().toString();
+        if ("luma".equals(authorizedTarget)) revokeTokens();
+        generation++; mediaRevision = UUID.randomUUID().toString();
         candidateKodi = null; candidateGeneration = -1; autoConnectPaused = true;
         NativeBackend old = backend; backend = null;
         if (old != null) old.close();
@@ -214,6 +257,8 @@ public final class ConnectionService extends Service {
         synchronized (stateLock) {
             JSONObject metadata = state.optJSONObject("settings");
             state = object("connection", object("connected", false, "configured", false, "host", "", "name", ""), "settings", metadata == null ? new JSONObject() : metadata, "autoConnectPaused", true);
+            put(state, "selectedTarget", selectedTarget);
+            put(state, "receivers", object("philips", television.status()));
         }
         notice = "Disconnected"; demote(); publish();
         if (callback != null) callback.success(object("connected", false));
@@ -293,6 +338,138 @@ public final class ConnectionService extends Service {
         } catch (RuntimeException ignored) {
             work.post(() -> { notice = "Could not complete the control. Try again."; publish(); work.complete(null, "CONNECTION_FAILED", notice); });
         }
+    }
+    private void disconnectSelected() {
+        request("philips".equals(selectedTarget) ? "msx.disconnect" : "device.disconnect", new JSONObject(), null);
+    }
+    private void requestTelevision(String method, JSONObject args, Callback callback) {
+        if (!java.util.Arrays.asList("msx.start", "msx.status", "msx.confirm", "msx.open", "msx.playPause",
+                "msx.seek", "msx.volume", "msx.subtitle", "msx.stop", "msx.disconnect", "msx.reset").contains(method)) {
+            reject(callback, "INVALID_REQUEST", "Unknown television control."); return;
+        }
+        // Reads and disconnect must remain available while a slow TV Open awaits
+        // its receipt. They never share Kodi's queue or wait behind TV playback.
+        if ("msx.status".equals(method)) {
+            updateTelevisionState();
+            if (callback != null) callback.success(television.status());
+            return;
+        }
+        if ("msx.disconnect".equals(method)) {
+            televisionGeneration++;
+            television.disconnect(); televisionRunning = false;
+            televisionNetwork.getQueue().clear();
+            mediaRevision = UUID.randomUUID().toString();
+            updateTelevisionState(); publish();
+            if (!connected()) demote();
+            if (callback != null) callback.success(television.status());
+            return;
+        }
+        if ("msx.start".equals(method)) {
+            televisionStarting = true;
+            startRequested = true;
+            try {
+                Intent start = new Intent(this, ConnectionService.class).setAction(START);
+                if (Build.VERSION.SDK_INT >= 26) startForegroundService(start); else startService(start);
+                notice = "Open Media Station X on Philips";
+                promote();
+            } catch (RuntimeException ignored) { televisionStarting = false; reject(callback, "BACKGROUND_START", "Open the app to connect the TV."); return; }
+        }
+        if ("msx.open".equals(method)) {
+            String token = args.optString("sourceToken");
+            if (token.isEmpty() || !token.equals(authorizedToken)) { reject(callback, "SOURCE_CHANGED", "Choose the video again."); return; }
+            mediaRevision = UUID.randomUUID().toString();
+        }
+        final long session = televisionGeneration;
+        try {
+            televisionNetwork.execute(() -> {
+                JSONObject result = null; String code = null;
+                try {
+                    if (destroyed || session != televisionGeneration) throw new IllegalStateException();
+                    if ("msx.start".equals(method)) result = television.start();
+                    else if ("msx.status".equals(method)) result = television.status();
+                    else if ("msx.confirm".equals(method)) result = television.confirmPairing(args.optString("host"));
+                    else if ("msx.disconnect".equals(method)) { television.disconnect(); result = television.status(); }
+                    else if ("msx.reset".equals(method)) { television.reset(); result = television.status(); }
+                    else result = television.command(method.substring(4), args);
+                } catch (MsxServer.MsxException failure) { code = failure.code; }
+                catch (Exception ignored) { code = "MSX_UNAVAILABLE"; }
+                final JSONObject response = result; final String error = code;
+                main.post(() -> {
+                    if (destroyed || session != televisionGeneration) { reject(callback, "NOT_CONNECTED", "The TV connection changed."); return; }
+                    if ("msx.start".equals(method)) { televisionStarting = false; televisionRunning = error == null; }
+                    if ("msx.disconnect".equals(method) || "msx.reset".equals(method)) {
+                        televisionRunning = false; televisionGeneration++;
+                        mediaRevision = UUID.randomUUID().toString();
+                    }
+                    updateTelevisionState();
+                    publish();
+                    if (televisionRunning) scheduleTelevisionPoll();
+                    else if (!connected()) demote();
+                    if (error == null) { if (callback != null) callback.success(response == null ? television.status() : response); }
+                    else reject(callback, error, "Could not complete the TV control. Check Media Station X and try again.");
+                });
+            });
+        } catch (RejectedExecutionException ignored) {
+            if ("msx.start".equals(method)) { televisionStarting = false; if (!connected()) demote(); }
+            reject(callback, "BUSY", "Wait for the current TV control to finish.");
+        }
+    }
+    private void updateTelevisionState() {
+        JSONObject current = television.status(), playback = current.optJSONObject("playback");
+        String source = playback != null && playback.optBoolean("active") ? playback.optString("source") : "";
+        if (!source.equals(televisionSource)) {
+            televisionSource = source;
+            if ("philips".equals(selectedTarget)) mediaRevision = UUID.randomUUID().toString();
+        }
+        synchronized (stateLock) { put(state, "receivers", object("philips", current)); }
+    }
+    private final Runnable televisionPoll = () -> {
+        if (destroyed || !televisionRunning) return;
+        updateTelevisionState(); publish(); scheduleTelevisionPoll();
+    };
+    private void scheduleTelevisionPoll() {
+        main.removeCallbacks(televisionPoll);
+        if (televisionRunning && !destroyed) main.postDelayed(televisionPoll, 2500);
+    }
+    /** A target switch changes the displayed system remote, never either transport. */
+    private JSONObject presentationSnapshot() {
+        JSONObject all = snapshot();
+        if (!"philips".equals(selectedTarget)) return all;
+        JSONObject tv = television.status(), observed = tv.optJSONObject("playback");
+        boolean ready = tv.optBoolean("connected");
+        put(all, "connection", object("connected", ready, "configured", ready, "name", "Philips TV"));
+        if (observed == null) { all.remove("playback"); all.remove("remote"); all.remove("volume"); return all; }
+        JSONObject playback = copy(observed);
+        put(playback, "sourceUrl", observed.optString("source"));
+        put(playback, "playing", !observed.optBoolean("paused", true));
+        put(all, "playback", playback);
+        put(all, "remote", object("media", object("url", observed.optString("source"), "title", observed.optString("title", "TV video")),
+                "tracks", observed.optJSONArray("tracks"), "catalog", observed.optJSONArray("tracks")));
+        put(all, "volume", observed.optJSONObject("volume"));
+        return all;
+    }
+    private void televisionMediaAction(String method) {
+        final String revision = mediaRevision;
+        JSONObject current = television.status(), playback = current.optJSONObject("playback");
+        if (!current.optBoolean("connected") || playback == null || !playback.optBoolean("active")) return;
+        final String source = playback.optString("source");
+        String action; JSONObject args = object("expectedSourceUrl", source);
+        if ("kodi.resume".equals(method) || "kodi.pause".equals(method)) {
+            action = "playPause"; put(args, "play", "kodi.resume".equals(method));
+        } else if ("kodi.stop".equals(method)) action = "stop";
+        else if ("volume-down".equals(method) || "volume-up".equals(method)) {
+            JSONObject volume = playback.optJSONObject("volume"); if (volume == null) return;
+            action = "volume"; put(args, "value", Math.max(0, Math.min(100, volume.optInt("current") + ("volume-up".equals(method) ? 5 : -5))));
+        } else return;
+        final String command = action;
+        try {
+            televisionNetwork.execute(() -> {
+                if (destroyed || !"philips".equals(selectedTarget) || !revision.equals(mediaRevision)) return;
+                try { television.command(command, args); }
+                catch (Exception ignored) { /* Fresh state removes controls when the TV is unavailable. */ }
+                main.post(() -> { if (!destroyed) { updateTelevisionState(); publish(); } });
+            });
+        } catch (RejectedExecutionException ignored) { }
     }
     private JSONObject connectReceiver(Work work, String host) throws NativeBackend.BackendException, SettingsStore.SettingsException {
         JSONObject current = work.transport.connectionSnapshot(), result;
@@ -437,6 +614,7 @@ public final class ConnectionService extends Service {
     /** Never retarget a stale notification to another controller's new video. */
     private void mediaAction(String method) {
         if (Looper.myLooper() != Looper.getMainLooper()) { main.post(() -> mediaAction(method)); return; }
+        if ("philips".equals(selectedTarget)) { televisionMediaAction(method); return; }
         String expected = rememberedSource();
         String revision = mediaRevision;
         if (expected.isEmpty() || !connected() || !configured()) return;
@@ -505,7 +683,7 @@ public final class ConnectionService extends Service {
         if (destroyed) return;
         if (!foreground) {
             JSONObject all; String revision;
-            synchronized (stateLock) { all = copy(state); revision = mediaRevision; }
+            synchronized (stateLock) { all = presentationSnapshot(); revision = mediaRevision; }
             Notification notification = notification(false, all, revision);
             if (Build.VERSION.SDK_INT >= 29) startForeground(NOTIFICATION, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE);
             else startForeground(NOTIFICATION, notification);
@@ -513,6 +691,7 @@ public final class ConnectionService extends Service {
         }
     }
     private void demote() {
+        if (televisionRunning || televisionStarting) { main.removeCallbacks(poll); return; }
         main.removeCallbacks(poll);
         cancelNotificationFlush();
         foreground = false; startRequested = false;
@@ -527,7 +706,7 @@ public final class ConnectionService extends Service {
     }
     private void updatePresentation() {
         if (mediaSession == null) return;
-        JSONObject all = snapshot(), connection = all.optJSONObject("connection"), remote = all.optJSONObject("remote"), playback = all.optJSONObject("playback");
+        JSONObject all = presentationSnapshot(), connection = all.optJSONObject("connection"), remote = all.optJSONObject("remote"), playback = all.optJSONObject("playback");
         boolean verified = connection != null && connection.optBoolean("connected") && matches(remote, playback);
         long actions = verified ? PlaybackState.ACTION_PLAY | PlaybackState.ACTION_PAUSE | PlaybackState.ACTION_STOP : 0;
         int status = verified ? (playback.optBoolean("playing") ? PlaybackState.STATE_PLAYING : PlaybackState.STATE_PAUSED) : PlaybackState.STATE_NONE;
@@ -577,7 +756,7 @@ public final class ConnectionService extends Service {
         notificationFlushQueued = false;
         if (destroyed || !foreground) return;
         JSONObject all; String revision;
-        synchronized (stateLock) { all = copy(state); revision = mediaRevision; }
+        synchronized (stateLock) { all = presentationSnapshot(); revision = mediaRevision; }
         String signature = notificationSignature(all, revision);
         if (signature.equals(lastNotificationSignature)) return;
         long now = SystemClock.elapsedRealtime();
@@ -629,7 +808,7 @@ public final class ConnectionService extends Service {
     }
     private PendingIntent pending(String action, int requestCode, String revision) {
         Intent intent = new Intent(this, ConnectionService.class).setAction(action);
-        if (!DISCONNECT.equals(action)) intent.setData(Uri.fromParts("luma-control", revision + ":" + action, null)).putExtra("revision", revision);
+        intent.setData(Uri.fromParts("luma-control", revision + ":" + action, null)).putExtra("revision", revision);
         return PendingIntent.getService(this, requestCode, intent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
     }
     @Override public void onDestroy() {
@@ -637,6 +816,7 @@ public final class ConnectionService extends Service {
         destroyed = true; generation++; revokeTokens(); main.removeCallbacksAndMessages(null); listeners.clear();
         for (Work work : pending) work.cancel();
         if (backend != null) backend.close(); network.shutdownNow();
+        if (television != null) television.close(); televisionNetwork.shutdownNow();
         if (mediaSession != null) { mediaSession.setActive(false); mediaSession.release(); }
         getSystemService(NotificationManager.class).cancel(MEDIA_NOTIFICATION);
         if (foreground) removeForeground();

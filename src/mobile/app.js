@@ -31,6 +31,14 @@ const errors = {
   SOURCE_CHANGED: 'The selected video changed. Choose it again in Browse.',
   STORAGE_UNAVAILABLE: 'Settings could not be saved on this phone. Try setup again.',
   SETUP_TIMEOUT: 'Kodi did not become ready. Check its HTTP control setting and try again.',
+  MSX_NOT_CONNECTED: 'Open Media Station X on the Philips TV and connect it in TV setup.',
+  MSX_TIMEOUT: 'The TV did not finish this request. Refresh its connection and check the TV screen.',
+  MSX_PLAYBACK: 'The TV could not play this video. Check the TV screen and try another source.',
+  MSX_SUBTITLE: 'The TV could not load the selected subtitles. Choose another language and try again.',
+  MSX_NETWORK: 'Could not start the TV connection. Check this phone’s Wi-Fi and try TV setup again.',
+  MSX_PAIRING: 'Allow your TV in TV connection setup before using its remote.',
+  MSX_UNAVAILABLE: 'Media Station X is not connected. Open it on the TV and refresh the connection.',
+  MSX_REJECTED: 'The TV could not finish this request. Check playback or try another subtitle language.',
 };
 const state = {
   native: false, busy: false, handoff: false, configured: false, connected: false,
@@ -39,6 +47,8 @@ const state = {
   appPage: 0, subtitlePage: 0, sheet: null, sourceGeneration: 0, sourceChanged: false, autoStart: false, setupError: null,
   jobToken: null, flowController: null, setupFlow: false, volume: null, skipNextLaunch: false, subtitleFlow: false, subtitleError: null,
   settings: { hasReceiver: false, hasKodi: false, autoConnect: true },
+  target: 'luma', pendingTarget: 'luma',
+  philips: { connected: false, host: '', name: 'Philips TV', startupUrl: '', awaitingApproval: false, pendingHost: '', playback: null, activeMedia: null, tracks: [], catalog: [], selectedIndex: null, subtitlesEnabled: false, volume: null, subtitlePage: 0 },
 };
 const pending = new Map();
 let requestId = 0;
@@ -46,6 +56,109 @@ let flowId = 0;
 let lastKeyTime = -Infinity;
 let returnFocus;
 let keyboardCompact = false;
+let msxPolling = false;
+let deferredNativeTarget = null;
+let changingTarget = false;
+
+function receiver(target = state.target) { return target === 'philips' ? state.philips : state; }
+function msxParams(extra = {}) { return state.philips.activeMedia ? { ...extra, expectedSourceUrl: state.philips.activeMedia.url } : extra; }
+function renderRemote() {
+  const remote = receiver();
+  $('#media-title').textContent = remote.activeMedia ? title(remote.activeMedia.title) : remote.playback?.active ? 'Now playing' : 'Ready to cast';
+  const snapshot = remote.playback;
+  if (!snapshot) $('#playback-status').textContent = 'Choose a video in Browse.';
+  else if (!snapshot.active) $('#playback-status').textContent = 'No video playing.';
+  else {
+    const label = typeof snapshot.playing === 'boolean' ? (snapshot.playing ? 'Playing' : 'Paused') : 'Video active';
+    const timing = Number.isFinite(snapshot.positionSeconds) && Number.isFinite(snapshot.durationSeconds)
+      ? ` · ${clock(snapshot.positionSeconds)} / ${clock(snapshot.durationSeconds)}` : '';
+    $('#playback-status').textContent = label + timing;
+  }
+  $('#play-toggle').textContent = snapshot?.playing === false ? 'Resume' : 'Pause';
+  const value = remote.volume;
+  $('#volume-level').textContent = value ? state.target === 'philips' ? `${Math.round(value.current / value.max * 100)}%` : `${value.current} / ${value.max}` : '—';
+  $('#volume-range').max = String(value?.max || 1);
+  $('#volume-range').value = String(value?.current || 0);
+  $('#volume-range').setAttribute('aria-valuetext', value ? `${value.current} of ${value.max}` : 'Unavailable');
+}
+function msxState(value) {
+  if (!value || typeof value !== 'object') return;
+  const remote = state.philips;
+  const wasConnected = remote.connected;
+  if (typeof value.connected === 'boolean') remote.connected = value.connected;
+  if (typeof value.host === 'string' && privateHost(value.host)) remote.host = value.host;
+  if (typeof value.name === 'string') remote.name = safeText(value.name) || 'Philips TV';
+  if (typeof value.awaitingApproval === 'boolean') remote.awaitingApproval = value.awaitingApproval;
+  remote.pendingCommand = value.pendingCommand || null;
+  if (remote.openUncertain && !remote.pendingCommand && (value.lastCommand || Object.hasOwn(value, 'pendingCommand'))) remote.openUncertain = false;
+  remote.pendingHost = privateHost(value.pendingHost || '') ? value.pendingHost : '';
+  if (typeof value.startupUrl === 'string') {
+    if (!value.startupUrl) remote.startupUrl = '';
+    try {
+      const url = new URL(value.startupUrl);
+      if (url.protocol === 'http:' && privateHost(url.hostname) && !url.username && !url.password) remote.startupUrl = url.origin;
+    } catch { /* Only show the native listener's local address. */ }
+  }
+  const snapshot = value.playback;
+  if (snapshot && typeof snapshot.active === 'boolean') {
+    const sourceUrl = snapshot.sourceUrl || snapshot.source;
+    if (remote.activeMedia && snapshot.active && sourceUrl && sourceUrl !== remote.activeMedia.url) {
+      remote.activeMedia = null; remote.catalog = []; remote.tracks = [];
+    }
+    remote.playback = { ...snapshot, sourceUrl, playing: typeof snapshot.playing === 'boolean' ? snapshot.playing : snapshot.paused !== true };
+    if (snapshot.active && !remote.activeMedia && typeof sourceUrl === 'string') remote.activeMedia = { url: sourceUrl, title: title(snapshot.title) };
+    if (Array.isArray(snapshot.tracks)) {
+      remote.tracks = snapshot.tracks.slice(0, 128).filter(track => Number.isInteger(track?.index)).map(track => ({ index: track.index, language: safeText(track.language, 64), label: safeText(track.label, 200) }));
+      if (!remote.catalog.length) remote.catalog = remote.tracks;
+    }
+    if (typeof snapshot.subtitlesEnabled === 'boolean') remote.subtitlesEnabled = snapshot.subtitlesEnabled;
+    if (snapshot.selectedIndex === null || Number.isInteger(snapshot.selectedIndex)) remote.selectedIndex = snapshot.selectedIndex;
+    volume(snapshot, 'philips');
+  }
+  volume(value, 'philips');
+  if (state.target === 'philips') renderTracks();
+  renderControls();
+  if (!wasConnected && remote.connected && state.target === 'philips' && $('#page-devices').hidden === false) {
+    page('remote');
+    message('Philips TV connected. Your remote is ready.');
+    if (state.pendingMedia && state.pendingTarget === 'philips') {
+      state.autoStart = true;
+      if (!state.busy && !state.handoff) queueMicrotask(() => void startCasting());
+    }
+  }
+}
+
+async function selectTarget(target) {
+  if (!['luma', 'philips'].includes(target) || target === state.target || state.busy || state.handoff) return;
+  changingTarget = true;
+  try { await command('app.selectTarget', { target }, '', result => {
+    state.target = target;
+    deferredNativeTarget = null;
+    if (result?.receivers?.philips) msxState(result.receivers.philips);
+    closeSheet();
+    $('#subtitle-search').value = '';
+    renderTracks();
+    if (target === 'philips' && !state.philips.connected) page('devices'); else page('remote');
+    message(target === 'philips' ? (state.philips.connected ? `Philips TV selected.${state.connected ? ' LUMA stays connected.' : ''}` : 'Connect Media Station X to use the Philips TV.') : `LUMA selected.${state.philips.connected ? ' Your TV stays connected.' : ''}`);
+  }); } finally { changingTarget = false; deferredNativeTarget = null; }
+}
+function restoreSelectedTarget(target) {
+  if (!['luma', 'philips'].includes(target) || changingTarget) return false;
+  if (state.busy || state.handoff) { deferredNativeTarget = target; return false; }
+  if (target === state.target) { deferredNativeTarget = null; return false; }
+  state.target = target;
+  closeSheet();
+  $('#subtitle-search').value = '';
+  renderTracks();
+  page(target === 'philips' && !state.philips.connected ? 'devices' : 'remote');
+  return true;
+}
+function applyDeferredTarget() {
+  if (!deferredNativeTarget || state.busy || state.handoff) return;
+  const target = deferredNativeTarget;
+  deferredNativeTarget = null;
+  restoreSelectedTarget(target);
+}
 
 function fixedError(code) {
   const error = new Error(errors[code] || 'That request could not be completed. Try again.');
@@ -184,23 +297,54 @@ function sheet(name) {
   if (name === 'power') $('#cancel-power').focus();
   if (name === 'typing') $('#remote-text').focus();
   if (name === 'seek') {
-    $('#seek-range').max = String(Math.max(1, state.playback?.durationSeconds || 1));
-    $('#seek-range').value = String(state.playback?.positionSeconds || 0);
+    $('#seek-range').max = String(Math.max(1, receiver().playback?.durationSeconds || 1));
+    $('#seek-range').value = String(receiver().playback?.positionSeconds || 0);
     $('#seek-time').textContent = clock($('#seek-range').value);
   }
   renderControls();
 }
 function renderControls() {
   const free = state.native && !state.busy && !state.handoff;
-  const luma = free && state.connected;
-  const kodi = free && state.configured;
-  const active = kodi && state.playback?.active === true;
-  const saved = state.settings.hasReceiver && state.settings.hasKodi;
+  const tv = state.target === 'philips';
+  const remote = receiver();
+  const luma = free && !tv && state.connected;
+  const kodi = free && (tv ? remote.connected : state.configured);
+  const active = kodi && remote.playback?.active === true;
+  const saved = tv ? remote.connected : state.settings.hasReceiver && state.settings.hasKodi;
+  renderRemote();
+  for (const target of ['luma', 'philips']) {
+    $(`#target-${target}`).disabled = !free;
+    $(`#target-${target}`).setAttribute('aria-pressed', String(state.target === target));
+    $(`#target-${target}`).dataset.connected = String(receiver(target).connected);
+  }
   $('#tab-devices').hidden = saved;
   $('#show-settings').hidden = !saved;
   $('#show-settings').disabled = !free;
-  $('#device-badge').textContent = state.connected ? (state.name || 'Projector connected') : 'No projector connected';
-  $('#device-badge').dataset.connected = String(state.connected);
+  $('#device-badge').textContent = tv ? (remote.connected ? 'Media Station X connected' : 'TV not connected') : state.connected ? (state.name || 'Projector connected') : 'No projector connected';
+  $('#device-badge').dataset.connected = String(remote.connected);
+  $('#msx-panel').hidden = !tv;
+  $('.device-steps').hidden = tv;
+  $('#receiver-panel').hidden ||= tv;
+  $('#kodi-panel').hidden ||= tv;
+  if (!tv && $('#receiver-panel').hidden && $('#kodi-panel').hidden) deviceStep('receiver');
+  $('#msx-startup').hidden = !remote.startupUrl;
+  $('#msx-startup').textContent = remote.startupUrl ? new URL(remote.startupUrl).host : '';
+  $('#msx-pairing').textContent = remote.awaitingApproval && remote.pendingHost ? `Allow the TV at ${remote.pendingHost} if it is yours.` : remote.connected ? 'TV connected. You can choose a video in Browse.' : remote.startupUrl ? 'Enter this address on the TV, then allow the connection here.' : 'Use the same Wi-Fi network on both devices.';
+  $('#msx-start').disabled = !free;
+  $('#msx-start').textContent = remote.startupUrl ? 'Restart TV setup' : 'Set up TV';
+  $('#msx-refresh').hidden = !remote.startupUrl;
+  $('#msx-refresh').disabled = !free;
+  $('#msx-confirm').hidden = !remote.awaitingApproval || !remote.pendingHost;
+  $('#msx-confirm').disabled = !free;
+  $('.dpad').hidden = tv;
+  $('#tv-remote').hidden = !tv;
+  $('#tv-remote-hint').textContent = remote.connected ? 'Media Station X is ready. Playback controls apply to this TV.' : 'Open Media Station X on the TV and complete TV setup.';
+  $('#show-tv-setup').disabled = !free;
+  $('#browse-hint').textContent = `Find a video, then tap Cast in the browser toolbar. ${tv ? 'Philips TV' : 'Your projector'} plays it.`;
+  $('.volume-row').setAttribute('aria-label', tv ? 'TV player volume' : 'Projector volume');
+  $('#volume-range').setAttribute('aria-label', tv ? 'TV player volume level' : 'Projector volume level');
+  $('.volume-control label').firstChild.textContent = tv ? 'Player volume ' : 'Volume ';
+  $('#cast-selected').textContent = `Cast selected video${tv ? ' to Philips' : ''}`;
   $('#receiver-host').disabled = !free || state.connected;
   $('#discover').disabled = !free || state.connected;
   $('#connect-device').disabled = !free || state.connected;
@@ -208,25 +352,36 @@ function renderControls() {
   $('#disconnect-device').disabled = !free;
   $('#configure-kodi').disabled = !luma;
   for (const input of $('#kodi-form').querySelectorAll('input')) input.disabled = !free;
-  for (const button of document.querySelectorAll('[data-key]')) button.disabled = !luma;
-  $('#refresh-volume').disabled = !luma;
-  for (const id of ['volume-range', 'volume-down', 'volume-up']) $(`#${id}`).disabled = !luma || !state.volume;
-  if (state.volume) {
-    $('#volume-down').disabled ||= state.volume.current <= 0;
-    $('#volume-up').disabled ||= state.volume.current >= state.volume.max;
+  for (const button of document.querySelectorAll('[data-key]')) { button.disabled = !luma; if (button.closest('.topline')) button.style.visibility = tv ? 'hidden' : ''; }
+  $('#refresh-volume').disabled = !(tv ? kodi : luma);
+  for (const id of ['volume-range', 'volume-down', 'volume-up']) $(`#${id}`).disabled = !(tv ? kodi : luma) || !remote.volume;
+  if (remote.volume) {
+    $('#volume-down').disabled ||= remote.volume.current <= 0;
+    $('#volume-up').disabled ||= remote.volume.current >= remote.volume.max;
   }
-  $('#settings-disconnect').disabled = !luma;
+  $('#settings-disconnect').disabled = !(tv ? kodi : luma);
+  $('#show-power').hidden = tv;
   $('#show-power').disabled = !luma;
   $('#confirm-power').disabled = !luma;
   for (const button of $('#panel-settings').querySelectorAll('button:not(#settings-disconnect)')) button.disabled = !free;
+  $('#settings-hint').textContent = tv ? 'TV setup and LUMA settings are kept separately. Switching devices leaves both connected.' : 'Your projector and verified Kodi login are saved on this phone. Opening the app reconnects automatically.';
+  $('#edit-receiver').textContent = tv ? 'TV connection' : 'Projector connection';
+  $('#edit-kodi').hidden = tv;
+  $('#rescan-projectors').hidden = tv;
+  $('#show-reset').textContent = tv ? 'Forget this TV' : 'Forget saved setup';
+  $('#reset-hint').textContent = tv ? 'Forget the Philips TV pairing on this phone? LUMA setup stays saved.' : 'Choose what to forget on this phone. A playing video stays on the projector.';
   for (const button of document.querySelectorAll('[data-reset]')) button.disabled = !free;
+  for (const button of document.querySelectorAll('[data-reset]')) {
+    button.hidden = tv && button.dataset.reset !== 'all';
+    button.textContent = tv ? 'Forget Philips TV pairing' : { kodi: 'Forget Kodi login', receiver: 'Forget projector', all: 'Forget all saved settings' }[button.dataset.reset];
+  }
   $('#play-toggle').disabled = !active;
   $('#refresh-playback').disabled = !kodi;
   $('#show-subtitles').disabled = !active;
-  $('#show-more').disabled = !free || (!state.connected && !state.configured);
+  $('#show-more').disabled = !free || (tv ? !remote.connected : !state.connected && !state.configured);
   $('#open-kodi').disabled = !luma;
   $('#stop-video').disabled = !active;
-  $('#seek-video').disabled = !active || !state.playback?.durationSeconds || state.playback?.canSeek === false;
+  $('#seek-video').disabled = !active || !remote.playback?.durationSeconds || remote.playback?.canSeek === false;
   $('#seek-range').disabled = $('#seek-video').disabled;
   $('#remote-text').disabled = !luma;
   $('#send-text').disabled = !luma || !$('#remote-text').value.trim();
@@ -234,43 +389,33 @@ function renderControls() {
   $('#subtitles-off').disabled = !active;
   for (const button of $('#app-list').querySelectorAll('button')) button.disabled = !luma;
   for (const button of $('#subtitle-list').querySelectorAll('button')) button.disabled = !active;
-  for (const button of document.querySelectorAll('[data-panel]')) button.disabled = !free;
+  for (const button of document.querySelectorAll('button[data-panel]')) { button.disabled = !free; button.hidden = tv && ['typing', 'apps'].includes(button.dataset.panel); }
+  $('#open-kodi').hidden = tv;
+  $('#menu-key').hidden = tv;
   $('#capture-video').disabled = !free;
   $('#choose-video').disabled = !state.native;
   $('#cast-selected').hidden = !state.pendingMedia;
-  $('#cast-selected').disabled = !free;
+  $('#cast-selected').disabled = !free || state.pendingTarget !== state.target || (tv && remote.openUncertain === true);
   $('#cancel-handoff').hidden = !state.handoff;
   $('#cancel-handoff').textContent = state.setupFlow ? 'Cancel waiting' : 'Cancel casting';
   $('#retry-handoff').hidden = state.handoff || !state.pendingMedia || state.setupFlow;
 }
-function playback(snapshot) {
+function playback(snapshot, target = 'luma') {
   if (!snapshot || typeof snapshot.active !== 'boolean') return;
-  if (state.activeMedia && snapshot.active && snapshot.sourceUrl && snapshot.sourceUrl !== state.activeMedia.url) {
-    state.activeMedia = null;
-    state.tracks = [];
-    state.catalog = [];
-    $('#media-title').textContent = 'Now playing';
+  const remote = receiver(target);
+  if (remote.activeMedia && snapshot.active && snapshot.sourceUrl && snapshot.sourceUrl !== remote.activeMedia.url) {
+    remote.activeMedia = null;
+    remote.tracks = [];
+    remote.catalog = [];
   }
-  state.playback = snapshot;
-  if (snapshot.active && !state.activeMedia) $('#media-title').textContent = 'Now playing';
-  if (!snapshot.active) $('#playback-status').textContent = 'No video playing.';
-  else {
-    const label = typeof snapshot.playing === 'boolean' ? (snapshot.playing ? 'Playing' : 'Paused') : 'Video active';
-    const timing = Number.isFinite(snapshot.positionSeconds) && Number.isFinite(snapshot.durationSeconds)
-      ? ` · ${clock(snapshot.positionSeconds)} / ${clock(snapshot.durationSeconds)}` : '';
-    $('#playback-status').textContent = label + timing;
-  }
-  $('#play-toggle').textContent = snapshot.playing === false ? 'Resume' : 'Pause';
+  remote.playback = snapshot;
   renderControls();
 }
-function volume(result) {
+function volume(result, target = 'luma') {
   const value = result?.volume;
   if (value && Number.isInteger(value.current) && Number.isInteger(value.max) && value.max > 0 && value.current >= 0 && value.current <= value.max) {
-    state.volume = { current: value.current, max: value.max };
-    $('#volume-level').textContent = `${value.current} / ${value.max}`;
-    $('#volume-range').max = String(value.max);
-    $('#volume-range').value = String(value.current);
-    $('#volume-range').setAttribute('aria-valuetext', `${value.current} of ${value.max}`);
+    receiver(target).volume = { current: value.current, max: value.max };
+    renderRemote();
   }
 }
 function remoteParams(extra = {}) {
@@ -320,6 +465,8 @@ function restoredRemote(value, observedPlayback) {
 }
 function connectionState(snapshot, { initial = false } = {}) {
   if (!snapshot || typeof snapshot !== 'object') return;
+  if (initial && ['luma', 'philips'].includes(snapshot.selectedTarget)) state.target = snapshot.selectedTarget;
+  if (snapshot.receivers?.philips) msxState(snapshot.receivers.philips);
   if (snapshot.settings && typeof snapshot.settings === 'object') {
     for (const key of ['hasReceiver', 'hasKodi', 'autoConnect']) if (typeof snapshot.settings[key] === 'boolean') state.settings[key] = snapshot.settings[key];
   }
@@ -358,7 +505,11 @@ function connectionState(snapshot, { initial = false } = {}) {
     playback(snapshot.playback);
   }
   renderControls();
-  if (initial && (state.connected || (state.settings.hasReceiver && state.settings.hasKodi))) {
+  if (!initial) restoreSelectedTarget(snapshot.selectedTarget);
+  if (initial && state.target === 'philips') {
+    page(state.philips.connected ? 'remote' : 'devices');
+    message(state.philips.connected ? 'Philips TV connected. Your remote is ready.' : 'Connect Media Station X to use the Philips TV.');
+  } else if (initial && (state.connected || (state.settings.hasReceiver && state.settings.hasKodi))) {
     page('remote');
     message(state.connected ? 'Projector connected. Your remote is ready.' : 'Connecting to your saved projector…');
   } else if (initial && state.settings.hasReceiver) {
@@ -383,6 +534,7 @@ async function command(method, params, success, consume) {
       $('#volume-level').textContent = '—';
       renderApps();
     }
+    if (typeof method === 'string' && method.startsWith('msx.') && ['MSX_NOT_CONNECTED', 'NOT_CONNECTED', 'CONNECTION_FAILED'].includes(error.code)) state.philips.connected = false;
     if (['KODI_AUTH', 'KODI_CONFIG'].includes(error.code)) {
       state.configured = false;
       closeSheet();
@@ -393,6 +545,7 @@ async function command(method, params, success, consume) {
     return false;
   } finally {
     state.busy = false;
+    applyDeferredTarget();
     renderControls();
     if (state.autoStart) void startCasting();
   }
@@ -460,6 +613,11 @@ const coordinator = createHandoffCoordinator({
 async function startCasting() {
   if (!state.pendingMedia || state.handoff || state.busy) return;
   state.autoStart = false;
+  if (state.pendingTarget === 'philips') { await startMsxCasting(); return; }
+  if (state.target !== 'luma') {
+    message('This selected video belongs to LUMA. Select LUMA to continue.', true);
+    return;
+  }
   if (!state.connected || !state.configured) {
     reportStatus('setup');
     page('devices');
@@ -500,7 +658,71 @@ async function startCasting() {
     }
     message(text, error.code !== 'CANCELLED');
     $('#handoff-label').textContent = text;
-  } finally { if (id === flowId) { state.handoff = false; state.flowController = null; renderControls(); } }
+  } finally { if (id === flowId) { state.handoff = false; state.flowController = null; applyDeferredTarget(); renderControls(); } }
+}
+async function startMsxCasting() {
+  if (state.target !== 'philips') { message('Select Philips to continue casting this video.', true); return; }
+  if (state.philips.openUncertain) { message('Refresh playback while the TV finishes the previous request.'); return; }
+  if (!state.philips.connected) { page('devices'); message('Connect Media Station X to start this video.'); return; }
+  const selected = state.pendingMedia;
+  const generation = state.sourceGeneration;
+  const id = ++flowId;
+  const controller = new AbortController();
+  state.flowController = controller;
+  state.sourceChanged = false;
+  state.handoff = true;
+  sheet('handoff');
+  $('#handoff-label').textContent = 'Starting this video on Philips TV…';
+  $('#handoff-progress').value = 2;
+  let jobToken;
+  try {
+    // The capture token and destination stay fixed for the entire handoff.
+    const begun = await rpc('app.beginHandoff', { sourceToken: selected.captureToken || selected.sourceToken, target: 'philips' }, { signal: controller.signal });
+    if (typeof begun?.sourceToken !== 'string' || !begun.sourceToken) throw fixedError('SOURCE_CHANGED');
+    jobToken = begun.sourceToken;
+    state.jobToken = jobToken;
+    if (generation !== state.sourceGeneration || selected !== state.pendingMedia) throw fixedError('SOURCE_CHANGED');
+    const result = await rpc('msx.open', {
+      sourceToken: jobToken, source: selected.url, mimeType: selected.contentType,
+      title: title(selected.title), subtitles: (selected.tracks || []).map(track => ({ url: track.url, language: track.language, label: track.label })),
+      preferredLanguage: 'pt-BR',
+    }, { signal: controller.signal, timeoutMs: 60000 });
+    if (id !== flowId) return;
+    state.philips.activeMedia = { url: selected.url, contentType: selected.contentType, title: title(selected.title) };
+    state.philips.catalog = (selected.tracks || []).map((track, index) => ({ ...track, index }));
+    msxState(result);
+    state.pendingMedia = null;
+    await rpc('app.handoffReady', { target: 'philips', sourceToken: jobToken }, { timeoutMs: 2000 }).catch(() => {});
+    closeSheet(); page('remote');
+    message('Ready on Philips TV. You can use the remote.');
+  } catch (error) {
+    cancelNative(jobToken);
+    if (id !== flowId) return;
+    const uncertain = ['TIMEOUT', 'MSX_TIMEOUT', 'CANCELLED'].includes(error.code);
+    // Even an explicit subtitle rejection can leave a correctly playing video.
+    // Reconcile every failed Open before offering a retry of the whole handoff.
+    const result = await rpc('msx.status', {}, { timeoutMs: 5000 }).catch(() => null);
+    if (result) msxState(result);
+    const snapshot = state.philips.playback;
+    if (result && snapshot?.active && snapshot.sourceUrl === selected.url && !result.pendingCommand) {
+      state.philips.activeMedia = { url: selected.url, contentType: selected.contentType, title: title(selected.title) };
+      state.philips.catalog = (selected.tracks || []).map((track, index) => ({ ...track, index }));
+      state.pendingMedia = null;
+      await rpc('app.handoffReady', { target: 'philips', sourceToken: jobToken }, { timeoutMs: 2000 }).catch(() => {});
+      closeSheet(); page('remote');
+      message(state.philips.subtitlesEnabled ? 'Video is playing on Philips TV.' : 'Video is playing. Choose subtitles in the remote to retry them.');
+    } else {
+      // A delivered command may finish after the phone's timeout. Do not offer a
+      // second Open while its result is unknown; refresh observes the first one.
+      state.philips.openUncertain = uncertain && (!result || Boolean(result.pendingCommand));
+      const text = state.philips.openUncertain ? 'The TV is still checking this video. Refresh playback before trying again.' : error.message;
+      message(text, error.code !== 'CANCELLED');
+      $('#handoff-label').textContent = text;
+      if (state.philips.openUncertain) { closeSheet(); page('remote'); }
+    }
+  } finally {
+    if (id === flowId) { state.handoff = false; state.flowController = null; applyDeferredTarget(); renderControls(); }
+  }
 }
 window.LumaApp = Object.freeze({
   onConnectionState(snapshot) { connectionState(snapshot); },
@@ -514,17 +736,22 @@ window.LumaApp = Object.freeze({
     if (state.setupFlow) {
       state.sourceGeneration++;
       state.pendingMedia = { ...media, captureToken: media.sourceToken, title: title(media.title) };
+      state.pendingTarget = state.target;
       state.autoStart = true;
       return;
     }
+    const interruptedMsx = state.handoff && state.pendingTarget === 'philips';
+    if (interruptedMsx) state.philips.openUncertain = true;
     state.flowController?.abort();
     coordinator.cancel();
     flowId++;
     state.handoff = false;
     state.sourceGeneration++;
     state.pendingMedia = { ...media, captureToken: media.sourceToken, title: title(media.title) };
+    state.pendingTarget = state.target;
     state.autoStart = true;
     void startCasting();
+    if (interruptedMsx) void rpc('msx.status', {}, { timeoutMs: 5000 }).then(msxState).catch(() => {});
   },
   onSourceChanged() {
     state.sourceGeneration++;
@@ -572,12 +799,13 @@ function renderApps() {
   renderControls();
 }
 function renderTracks() {
-  const tracks = [...(state.catalog.length ? state.catalog : state.tracks)].sort((a, b) => languageRank(a) - languageRank(b) || safeText(a.label).localeCompare(safeText(b.label))).map(track => ({ ...track, name: safeText(track.label) || safeText(track.language) || (Number.isInteger(track.index) ? `Track ${track.index + 1}` : 'Subtitle track') }));
-  const result = paged(tracks, $('#subtitle-search').value, state.subtitlePage);
-  state.subtitlePage = result.current;
-  $('#subtitle-list').replaceChildren(...result.items.map(track => listButton(track.name, () => selectSubtitle(track), Number.isInteger(track.index) && state.subtitlesEnabled && state.selectedIndex === track.index)));
+  const remote = receiver();
+  const tracks = [...(remote.catalog.length ? remote.catalog : remote.tracks)].sort((a, b) => languageRank(a) - languageRank(b) || safeText(a.label).localeCompare(safeText(b.label))).map(track => ({ ...track, name: safeText(track.label) || safeText(track.language) || (Number.isInteger(track.index) ? `Track ${track.index + 1}` : 'Subtitle track') }));
+  const result = paged(tracks, $('#subtitle-search').value, remote.subtitlePage);
+  remote.subtitlePage = result.current;
+  $('#subtitle-list').replaceChildren(...result.items.map(track => listButton(track.name, () => selectSubtitle(track), Number.isInteger(track.index) && remote.subtitlesEnabled && remote.selectedIndex === track.index)));
   if (!result.items.length) $('#subtitle-list').textContent = 'No matching subtitle tracks.';
-  $('#subtitles-off').setAttribute('aria-pressed', String(!state.subtitlesEnabled));
+  $('#subtitles-off').setAttribute('aria-pressed', String(!remote.subtitlesEnabled));
   $('#subtitles-page').textContent = `${result.current + 1} / ${result.total}`;
   $('#subtitles-previous').disabled = result.current === 0;
   $('#subtitles-next').disabled = result.current >= result.total - 1;
@@ -594,6 +822,10 @@ function remoteDescriptor() {
 }
 async function selectSubtitle(track) {
   if (state.busy || state.handoff) return;
+  if (state.target === 'philips') {
+    await command('msx.subtitle', msxParams({ index: track.index, enabled: true }), 'Subtitle selected. Check the TV.', result => { state.philips.selectedIndex = track.index; state.philips.subtitlesEnabled = true; msxState(result); renderTracks(); });
+    return;
+  }
   if (!track.url) {
     void command('kodi.setSubtitle', remoteParams({ index: track.index }), 'Subtitle selected. Check the projector.', () => { state.selectedIndex = track.index; state.subtitlesEnabled = true; renderTracks(); });
     return;
@@ -639,11 +871,32 @@ async function browse(navigate = false) {
 $('#tab-browse').addEventListener('click', () => browse());
 $('#tab-remote').addEventListener('click', () => { closeSheet(); page('remote'); });
 $('#tab-devices').addEventListener('click', () => { closeSheet(); page('devices'); });
+for (const target of ['luma', 'philips']) $(`#target-${target}`).addEventListener('click', () => void selectTarget(target));
+$('#show-tv-setup').addEventListener('click', () => { closeSheet(); page('devices'); });
+$('#msx-start').addEventListener('click', () => command('msx.start', {}, 'Enter this phone’s address in Media Station X on the TV.', msxState));
+$('#msx-refresh').addEventListener('click', () => command('msx.status', {}, '', msxState));
+$('#msx-confirm').addEventListener('click', async () => {
+  const host = state.philips.pendingHost;
+  if (!host) return;
+  if (await command('msx.confirm', { host }, 'TV allowed. Waiting for Media Station X…', msxState)) {
+    if (state.philips.connected) { page('remote'); if (state.pendingMedia) void startCasting(); }
+  }
+});
 $('#show-settings').addEventListener('click', () => sheet('settings'));
 $('#edit-receiver').addEventListener('click', () => { closeSheet(); page('devices'); deviceStep('receiver'); });
 $('#edit-kodi').addEventListener('click', () => { closeSheet(); page('devices'); deviceStep('kodi'); });
-$('#show-reset').addEventListener('click', () => sheet('reset'));
+$('#show-reset').addEventListener('click', () => {
+  if (state.target === 'philips') { sheet('reset'); return; }
+  sheet('reset');
+});
 for (const button of document.querySelectorAll('[data-reset]')) button.addEventListener('click', async () => {
+  if (state.target === 'philips') {
+    if (await command('msx.reset', {}, 'TV pairing forgotten. Set up Media Station X again.', result => {
+      state.philips = { connected: false, host: '', name: 'Philips TV', startupUrl: '', awaitingApproval: false, pendingHost: '', playback: null, activeMedia: null, tracks: [], catalog: [], selectedIndex: null, subtitlesEnabled: false, volume: null, subtitlePage: 0 };
+      msxState(result);
+    })) { closeSheet(); page('devices'); }
+    return;
+  }
   const scope = button.dataset.reset;
   const success = await command('app.settings.reset', { scope }, 'Saved settings forgotten. A playing video stays on the projector.', result => {
     if (scope !== 'receiver') {
@@ -730,6 +983,7 @@ $('#rescan-projectors').addEventListener('click', async () => {
   });
 });
 function disconnect() {
+  if (state.target === 'philips') return command('msx.disconnect', {}, 'TV controls disconnected.', result => { state.philips.connected = false; msxState(result); });
   return command('device.disconnect', {}, 'Disconnected. A playing video stays on the projector.', () => { state.connected = false; state.configured = false; state.apps = []; state.volume = null; $('#volume-level').textContent = '—'; renderApps(); });
 }
 $('#disconnect-device').addEventListener('click', disconnect);
@@ -796,6 +1050,7 @@ async function configureKodi() {
     state.setupFlow = false;
     state.handoff = false;
     state.flowController = null;
+    applyDeferredTarget();
     renderControls();
     if (success && state.pendingMedia) void startCasting();
   }
@@ -805,21 +1060,28 @@ $('#kodi-form').addEventListener('submit', async event => {
   void configureKodi();
 });
 $('#play-toggle').addEventListener('click', () => {
+  if (state.target === 'philips') {
+    const play = state.philips.playback?.playing === false;
+    void command('msx.playPause', msxParams({ play }), play ? 'Resume requested.' : 'Pause requested.', msxState);
+    return;
+  }
   const action = state.playback?.playing === false ? 'resume' : 'pause';
   void command(`kodi.${action}`, remoteParams(), action === 'pause' ? 'Pause requested.' : 'Resume requested.', async () => playback(await rpc('kodi.status', remoteParams())));
 });
-$('#refresh-playback').addEventListener('click', () => command('kodi.status', remoteParams(), 'Playback refreshed.', playback));
-$('#refresh-volume').addEventListener('click', () => command('luma.status', {}, 'Volume refreshed.', volume));
+$('#refresh-playback').addEventListener('click', () => state.target === 'philips' ? command('msx.status', {}, 'Playback refreshed.', msxState) : command('kodi.status', remoteParams(), 'Playback refreshed.', playback));
+$('#refresh-volume').addEventListener('click', () => state.target === 'philips' ? command('msx.status', {}, 'Volume refreshed.', msxState) : command('luma.status', {}, 'Volume refreshed.', volume));
 function setVolume(value) {
-  if (!state.volume || !Number.isInteger(value) || value < 0 || value > state.volume.max) return;
+  const remote = receiver();
+  if (!remote.volume || !Number.isInteger(value) || value < 0 || value > remote.volume.max) return;
+  if (state.target === 'philips') { void command('msx.volume', msxParams({ value }), 'Volume refreshed.', msxState); return; }
   void command('luma.setVolume', { value }, 'Volume refreshed.', async result => volume(result?.volume ? result : await rpc('luma.status')));
 }
 $('#volume-range').addEventListener('change', () => setVolume(Number($('#volume-range').value)));
-$('#volume-down').addEventListener('click', () => setVolume(state.volume.current - 1));
-$('#volume-up').addEventListener('click', () => setVolume(state.volume.current + 1));
+$('#volume-down').addEventListener('click', () => setVolume(receiver().volume.current - 1));
+$('#volume-up').addEventListener('click', () => setVolume(receiver().volume.current + 1));
 function key(name) {
   const now = performance.now();
-  if (!state.connected || state.busy || state.handoff || now - lastKeyTime < 100) return;
+  if (state.target !== 'luma' || !state.connected || state.busy || state.handoff || now - lastKeyTime < 100) return;
   lastKeyTime = now;
   void command('luma.key', { key: name }, 'Remote command sent.', () => {
     if (['volume-up', 'volume-down', 'mute'].includes(name)) $('#volume-level').textContent = '—';
@@ -834,6 +1096,7 @@ document.querySelectorAll('[data-panel]').forEach(button => button.addEventListe
 $('#show-subtitles').addEventListener('click', () => {
   sheet('subtitles');
   renderTracks();
+  if (state.target === 'philips') { void command('msx.status', {}, '', msxState); return; }
   void command('kodi.getSubtitles', remoteParams(), '', result => {
     state.subtitlesEnabled = result.enabled === true;
     state.selectedIndex = result.currentIndex ?? null;
@@ -841,12 +1104,12 @@ $('#show-subtitles').addEventListener('click', () => {
     renderTracks();
   });
 });
-$('#subtitles-off').addEventListener('click', () => command('kodi.setSubtitle', remoteParams({ index: 'off' }), 'Subtitles turned off.', async () => {
+$('#subtitles-off').addEventListener('click', () => state.target === 'philips' ? command('msx.subtitle', msxParams({ index: state.philips.selectedIndex ?? 0, enabled: false }), 'Subtitles turned off.', result => { state.philips.subtitlesEnabled = false; state.philips.selectedIndex = null; msxState(result); renderTracks(); }) : command('kodi.setSubtitle', remoteParams({ index: 'off' }), 'Subtitles turned off.', async () => {
   state.subtitlesEnabled = false; state.selectedIndex = null; renderTracks();
   if (state.activeMedia && state.catalog.length) await rpc('app.rememberRemote', { expectedSourceUrl: state.activeMedia.url, remote: remoteDescriptor() });
 }));
 $('#open-kodi').addEventListener('click', () => command('luma.launchKodi', {}, 'Kodi launch sent. Check the projector.'));
-$('#stop-video').addEventListener('click', () => command('kodi.stop', remoteParams(), 'Stop requested.', result => { playback(result?.active === false ? result : { active: false }); closeSheet(); }));
+$('#stop-video').addEventListener('click', () => state.target === 'philips' ? command('msx.stop', msxParams(), 'Stop requested.', result => { msxState(result); closeSheet(); }) : command('kodi.stop', remoteParams(), 'Stop requested.', result => { playback(result?.active === false ? result : { active: false }); closeSheet(); }));
 $('#remote-text').addEventListener('input', renderControls);
 $('#clear-text').addEventListener('click', () => { $('#remote-text').value = ''; renderControls(); $('#remote-text').focus(); });
 $('#text-form').addEventListener('submit', async event => {
@@ -858,10 +1121,10 @@ $('#text-form').addEventListener('submit', async event => {
   renderControls();
 });
 $('#seek-range').addEventListener('input', () => { $('#seek-time').textContent = clock($('#seek-range').value); });
-$('#seek-video').addEventListener('click', () => command('kodi.seek', remoteParams({ position: Number($('#seek-range').value) }), 'Seek requested. Check playback on the projector.', async () => playback(await rpc('kodi.status', remoteParams()))));
+$('#seek-video').addEventListener('click', () => state.target === 'philips' ? command('msx.seek', msxParams({ seconds: Number($('#seek-range').value) }), 'Seek requested. Check playback on the TV.', msxState) : command('kodi.seek', remoteParams({ position: Number($('#seek-range').value) }), 'Seek requested. Check playback on the projector.', async () => playback(await rpc('kodi.status', remoteParams()))));
 for (const kind of ['apps', 'subtitles']) {
-  $(`#${kind === 'apps' ? 'app' : 'subtitle'}-search`).addEventListener('input', () => { state[kind === 'apps' ? 'appPage' : 'subtitlePage'] = 0; kind === 'apps' ? renderApps() : renderTracks(); });
-  for (const [direction, delta] of [['previous', -1], ['next', 1]]) $(`#${kind}-${direction}`).addEventListener('click', () => { state[kind === 'apps' ? 'appPage' : 'subtitlePage'] += delta; kind === 'apps' ? renderApps() : renderTracks(); });
+  $(`#${kind === 'apps' ? 'app' : 'subtitle'}-search`).addEventListener('input', () => { (kind === 'apps' ? state : receiver())[kind === 'apps' ? 'appPage' : 'subtitlePage'] = 0; kind === 'apps' ? renderApps() : renderTracks(); });
+  for (const [direction, delta] of [['previous', -1], ['next', 1]]) $(`#${kind}-${direction}`).addEventListener('click', () => { (kind === 'apps' ? state : receiver())[kind === 'apps' ? 'appPage' : 'subtitlePage'] += delta; kind === 'apps' ? renderApps() : renderTracks(); });
 }
 $('#close-sheet').addEventListener('click', closeSheet);
 $('#show-power').addEventListener('click', () => sheet('power'));
@@ -869,7 +1132,7 @@ $('#check-updates').addEventListener('click', () => command('app.checkUpdates', 
 $('#cancel-power').addEventListener('click', closeSheet);
 $('#power-backdrop').addEventListener('click', closeSheet);
 $('#confirm-power').addEventListener('click', async () => {
-  if (state.sheet !== 'power' || !state.connected || state.busy || state.handoff) return;
+  if (state.target !== 'luma' || state.sheet !== 'power' || !state.connected || state.busy || state.handoff) return;
   if (await command('luma.powerOff', { confirmed: true }, 'Power command sent.')) closeSheet();
 });
 $('#cancel-handoff').addEventListener('click', () => { if (state.setupFlow) state.autoStart = false; state.flowController?.abort(); coordinator.cancel(); cancelNative(state.jobToken); });
@@ -892,6 +1155,15 @@ document.addEventListener('keydown', event => {
 });
 window.addEventListener('error', () => message('The remote could not finish that action. Try again.', true));
 window.addEventListener('unhandledrejection', event => { event.preventDefault(); message('The remote could not finish that action. Try again.', true); });
+
+setInterval(() => {
+  if (!state.native || !state.philips.startupUrl || msxPolling || state.busy || state.handoff || document.visibilityState === 'hidden') return;
+  msxPolling = true;
+  void rpc('msx.status', {}, { timeoutMs: 2500 }).then(msxState).catch(() => {
+    state.philips.connected = false;
+    renderControls();
+  }).finally(() => { msxPolling = false; });
+}, 3000);
 
 renderApps();
 renderTracks();

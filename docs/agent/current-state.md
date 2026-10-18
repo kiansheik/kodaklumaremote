@@ -270,3 +270,31 @@ The real Make target passed; Pages now has `build_type=legacy`, source
 `gh-pages:/`, HTTPS enforced and a successful branch build. Seven focused
 release/deploy checks passed. Public files are the five site assets,
 `update.json` and `.nojekyll`; no APK/key/wiki is pushed to that branch.
+
+Dual receiver follow-up: user opened **Media Station X** on the Philips and
+requested a compact LUMA/Philips switcher with both connected simultaneously.
+Version0.3.0/code7 adds independent target state/transports, private saved target
+selection and selected-target notification/MediaSession controls. LUMA retains
+its projector/Kodi controls. Philips provides playback, seek, subtitles and
+player volume, with unsupported hardware controls hidden.
+
+The phone hosts a private-interface MSX asset/control listener, normally4178;
+MSX Start Parameter setup uses the displayed IP:port. The user opens Connect
+this TV, then approves the pinned TV on the phone. Pairing/capability/port are
+saved privately. TV media and subtitles are fetched directly from their public
+origins. A TV-owned SRT/WebVTT renderer loads PT-BR first, English fallback and
+other languages on demand. Command receipts and independent heartbeat avoid
+replaying unknown Opens; failed subtitles preserve correctly playing media.
+
+Checks so far:154 Node, full84 browser plus final41 mobile (including9 receiver
+cases) passed; the final added setup instruction also passed the narrow-layout
+case. Final native regression checks passed35 (backend9, service5, settings5,
+packaged UI5, MSX7, dual-service4). APK/debug lint passed
+after replacing an API24-only Map call for API23 compatibility. Isolated
+`.receiverfixture` builds preserve the emulator's existing production-signed
+app. Final publication/install and complete native regression results are in
+the [dual-receiver handoff](session-handoffs/2026-10-18-dual-receiver-msx.md).
+Signed0.3.0 is installed/open on Samsung. The existing read-only signer and
+credential-decryption check passed before/after; encrypted Kodi login survived.
+Actual Philips playback, subtitle appearance, HTTP/mixed-content behavior and
+phone-off continuation remain unconfirmed. [Domain notes](msx-receiver.md).

@@ -10,6 +10,26 @@ updates; **Settings → Check for updates** checks immediately. A new version
 offers Later/Update, downloads only on request, verifies the APK and opens
 Android's installation confirmation. See [release guide](../docs/releasing.md).
 
+## LUMA and Philips
+
+The compact header switches between LUMA and Philips. Both can stay connected;
+switching selects the remote, Cast destination and notification/lock-screen
+controls without stopping either video. LUMA's saved Kodi login remains intact.
+
+For Philips, open **Media Station X** on the TV. In the phone app select
+**Philips → Set up TV**, then enter the displayed `IP:port` in MSX's
+**Settings → Start Parameter → Setup**. Open **Connect this TV** on the TV and
+tap **Allow this TV** on the phone. Keep the phone and TV on the same Wi-Fi.
+Later app opens restore the saved receiver listener; open its MSX receiver page
+again on the TV when needed. Settings can forget only that TV's pairing.
+
+Cast from Browse as usual. The TV fetches video/subtitles directly; PT-BR is
+preferred, English is the fallback, and other languages load when selected.
+Philips controls cover playback, seek, subtitles and the player's volume.
+Hardware speaker volume, power/navigation and app launching still use the TV's
+remote. Philips playback, codecs/CORS, visible subtitles and phone-off operation
+need actual-TV confirmation; see [implementation](../docs/agent/msx-receiver.md).
+
 ## Use
 
 Install the locally built debug APK on the Samsung phone. Keep the phone and
@@ -89,14 +109,20 @@ those assets separately, run `npm run build:mobile`. The installable output is
 desktop transports with fixtures. For native Android transport fixtures:
 
 ```sh
-gradle -p android :app:assembleDebug :app:assembleDebugAndroidTest
+gradle -p android -PreceiverFixture=true :app:assembleDebug :app:assembleDebugAndroidTest
+export ANDROID_TEST_PACKAGE=dev.framextv.lumaremote.receiverfixture
 node scripts/test-android-backend.mjs
 node scripts/test-android-service.mjs
 node scripts/test-android-ui.mjs
 node scripts/test-android-settings.mjs
+node scripts/test-android-msx.mjs
+node scripts/test-android-multi-receiver.mjs
 ```
 
-The native runner installs only on the explicitly selected emulator and uses
+The separate fixture application ID preserves an installed production-signed
+app and its data. Runners verify the intended APK package before installing.
+Never install a fixture build on a household phone. The native runner installs
+only on the explicitly selected emulator and uses
 Mac loopback fixtures via `10.0.2.2`; it does not discover or contact the actual
 projector. See [phone implementation and acceptance](../docs/agent/phone-app.md)
 for recorded results and physical tests still required.
