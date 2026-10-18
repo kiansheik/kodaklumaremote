@@ -296,5 +296,8 @@ app. Final publication/install and complete native regression results are in
 the [dual-receiver handoff](session-handoffs/2026-10-18-dual-receiver-msx.md).
 Signed0.3.0 is installed/open on Samsung. The existing read-only signer and
 credential-decryption check passed before/after; encrypted Kodi login survived.
+Published from72a600e; public APK/download digest matches the963,544-byte signed
+file. Pages build590e0b2 completed; HTTPS install page/feed returned200 and the
+feed exactly matches0.3.0 metadata. Production signing material remains local.
 Actual Philips playback, subtitle appearance, HTTP/mixed-content behavior and
 phone-off continuation remain unconfirmed. [Domain notes](msx-receiver.md).

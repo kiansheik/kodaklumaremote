@@ -193,3 +193,7 @@
   and opened on Samsung. Read-only signer/decryption checks passed before/after
   with encrypted Kodi login retained. User was given MSX startup/approval steps;
   no actual Philips playback acceptance is recorded yet.
+- 2026-10-18 dual receiver publication: main72a600e, signed releasev0.3.0 and
+  Pages590e0b2 live. HTTPS page/feed returned200 with exact0.3.0 metadata;
+  public GitHub/CDN APK matched963,544bytes/SHA-256. Actual TV setup/playback is
+  still awaiting user confirmation.

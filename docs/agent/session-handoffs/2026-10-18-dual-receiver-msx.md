@@ -54,6 +54,14 @@ Local signing configuration was read privately without printing values.
   before and after `adb install -r`; saved Kodi login remains decryptable. Opened
   installed0.3.0 and asked user to complete MSX setup/approval on the TV.
 - `git diff --check`; source review; viewed 320×592 LUMA/Philips screenshots.
+- Source committed/pushed as72a600e1529465255cee75bfc1b73cc3cc8cf23d.
+  `npm run publish:android -- --directory .local/releases/v0.3.0` published the
+  signed APK/update.json and deployed `gh-pages`. Release API reports exact
+  artifact size/digest; Pages590e0b29cf14e1d10eb6bd6c63dfd6b6a71a8a4e is built.
+  HTTPS page/feed returned200, feed matches the local manifest, and the public
+  GitHub/CDN APK returned200 with the same SHA-256/963,544bytes. Python's initial
+  standalone CA configuration failed; verification succeeded with the Mac's
+  system CA bundle, without disabling certificate verification.
 
 ## What worked
 
