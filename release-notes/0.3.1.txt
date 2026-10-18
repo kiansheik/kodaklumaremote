@@ -1,0 +1,5 @@
+Fixes browser preflight handling during Media Station X setup. Approved MSX origins can check the setup endpoint before loading it, without claiming or approving a TV.
+
+Adds clearer setup diagnostics for HTTPS requests, rejected connections and expired setup windows. The TV instructions now explain the MSX padlock setting.
+
+The Philips playback test remains in progress; existing LUMA/Kodi controls and saved login stay available.

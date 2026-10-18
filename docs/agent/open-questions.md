@@ -36,6 +36,11 @@
    public MP4 and actual HLS/subtitles worked on version 21.2. Does built-in DLNA expose a usable
    MediaRenderer? Documented app interfaces are [here](receiver-apps.md), and
    manufacturer/commercial options are [here](luma-receiver-options.md).
+10. Which Matter endpoints/clusters/features does the Philips expose after
+    commissioning? Read-only discovery advertised Basic Video Player (`DT=40`),
+    but no pairing or cluster controls are verified. Establish power, navigation,
+    speaker volume and inputs separately from optional URL playback and existing
+    subtitle-track selection. See [Matter evidence](philips-matter.md).
 
 Resolved: public reachability confirmed; same-origin embed + declared source
 found statically; existing-page CAF avoids an extension remote-SDK loader;

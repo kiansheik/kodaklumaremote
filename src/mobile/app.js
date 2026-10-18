@@ -2,6 +2,12 @@ import { createHandoffCoordinator } from '../handoff/coordinator.mjs';
 
 const $ = selector => document.querySelector(selector);
 const DEFAULT_SITE = 'https://framextv.xyz/watch/284833/1/1';
+const MSX_SETUP_HINTS = Object.freeze({
+  HTTPS_REQUEST: 'The TV is trying a secure connection. In Media Station X setup, leave the padlock open.',
+  ORIGIN_REJECTED: 'The TV reached this phone, but its app connection was rejected. Share the error shown on the TV.',
+  PAIRING_EXPIRED: 'Tap Restart TV setup, then try the setup again on the TV.',
+  BOOTSTRAP_READY: 'The TV loaded the setup. Open “Connect this TV” on the TV next.',
+});
 const errors = {
   NATIVE_UNAVAILABLE: 'Open this page in the LUMA app to use the remote.',
   TIMEOUT: 'The projector did not reply. Check its connection and try again.',
@@ -85,6 +91,17 @@ function msxState(value) {
   if (!value || typeof value !== 'object') return;
   const remote = state.philips;
   const wasConnected = remote.connected;
+  if (value.diagnostics && typeof value.diagnostics === 'object') {
+    // Native diagnostics are reduced to fixed reasons and counts. Never copy
+    // request origins, URLs, capability tokens or server messages into the UI.
+    remote.diagnostics = {};
+    for (const key of ['connections', 'tlsRequests', 'bootstrapRequests', 'bootstrapAccepted', 'lastStatus', 'lastRequestMsAgo']) {
+      const count = value.diagnostics[key];
+      if (Number.isSafeInteger(count) && count >= 0) remote.diagnostics[key] = count;
+    }
+    const reason = value.diagnostics.lastReason;
+    if (Object.hasOwn(MSX_SETUP_HINTS, reason)) remote.diagnostics.lastReason = reason;
+  }
   if (typeof value.connected === 'boolean') remote.connected = value.connected;
   if (typeof value.host === 'string' && privateHost(value.host)) remote.host = value.host;
   if (typeof value.name === 'string') remote.name = safeText(value.name) || 'Philips TV';
@@ -330,6 +347,10 @@ function renderControls() {
   $('#msx-startup').hidden = !remote.startupUrl;
   $('#msx-startup').textContent = remote.startupUrl ? new URL(remote.startupUrl).host : '';
   $('#msx-pairing').textContent = remote.awaitingApproval && remote.pendingHost ? `Allow the TV at ${remote.pendingHost} if it is yours.` : remote.connected ? 'TV connected. You can choose a video in Browse.' : remote.startupUrl ? 'Enter this address on the TV, then allow the connection here.' : 'Use the same Wi-Fi network on both devices.';
+  const setupHint = !remote.connected && !remote.awaitingApproval ? MSX_SETUP_HINTS[remote.diagnostics?.lastReason] : '';
+  $('#msx-diagnostic').textContent = setupHint || '';
+  $('#msx-diagnostic').hidden = !setupHint;
+  $('#msx-panel').dataset.diagnostic = String(Boolean(setupHint));
   $('#msx-start').disabled = !free;
   $('#msx-start').textContent = remote.startupUrl ? 'Restart TV setup' : 'Set up TV';
   $('#msx-refresh').hidden = !remote.startupUrl;

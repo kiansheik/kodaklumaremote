@@ -7,6 +7,7 @@ Research: [investigation](investigation.md), [site architecture](site-architectu
 [anti-debugging](anti-debugging.md), [network](network-analysis.md),
 [playback](playback-analysis.md), [Cast feasibility](chromecast-feasibility.md).
 Device follow-up: [Philips TV evidence](philips-tv.md),
+[Philips Matter control boundary](philips-matter.md),
 [mobile phone-off target](mobile-target.md),
 [Kodak LUMA options](luma-receiver-options.md),
 [Kodi/VLC receiver interfaces](receiver-apps.md).

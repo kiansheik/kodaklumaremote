@@ -9,6 +9,7 @@ import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.os.SystemClock;
 import android.util.Base64;
+import android.util.Log;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.json.JSONTokener;
@@ -16,6 +17,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.PushbackInputStream;
 import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
@@ -74,6 +76,9 @@ public final class MsxServer implements AutoCloseable {
     private String host = "", token, approvedHost, approvedClient, pendingHost, pendingClient, sessionId;
     private int port;
     private long pairingUntil, lastSeen, lastState, sequence;
+    private long connections, tlsRequests, bootstrapRequests, bootstrapAccepted, lastRequestAt;
+    private int lastStatus;
+    private String lastReason = "NONE", lastOrigin = "";
     private JSONObject playback = new JSONObject();
     private JSONObject lastCommand = new JSONObject();
     private boolean approved;
@@ -90,7 +95,9 @@ public final class MsxServer implements AutoCloseable {
     }
     private static final class HttpFailure extends Exception {
         final int status;
-        HttpFailure(int status) { this.status = status; }
+        final String reason;
+        HttpFailure(int status) { this(status, "REQUEST_REJECTED"); }
+        HttpFailure(int status, String reason) { this.status = status; this.reason = reason; }
     }
     private static final class Request {
         String method, target;
@@ -210,7 +217,10 @@ public final class MsxServer implements AutoCloseable {
                 "startupUrl", running ? origin() : "", "port", port,
                 "awaitingApproval", pendingClient != null && !approved && pairingOpen(),
                 "pendingHost", pendingClient != null && !approved && pairingOpen() ? pendingHost : "",
-                "pairingOpen", running && pairingOpen(), "playback", copy(playback), "lastCommand", copy(lastCommand));
+                "pairingOpen", running && pairingOpen(), "playback", copy(playback), "lastCommand", copy(lastCommand),
+                "diagnostics", object("connections", connections, "tlsRequests", tlsRequests, "bootstrapRequests", bootstrapRequests,
+                        "bootstrapAccepted", bootstrapAccepted, "lastStatus", lastStatus, "lastReason", lastReason,
+                        "lastOrigin", lastOrigin, "lastRequestMsAgo", lastRequestAt == 0 ? -1 : Math.max(0, now - lastRequestAt)));
         for (Pending pending : commands.values()) if (!pending.done) { put(result, "pendingCommand", object("id", pending.id, "method", pending.command.optString("method"), "delivered", pending.delivered)); break; }
         return result;
     }
@@ -249,6 +259,7 @@ public final class MsxServer implements AutoCloseable {
             Socket socket = null;
             try {
                 socket = owned.accept(); socket.setSoTimeout(3500);
+                synchronized (lock) { connections++; }
                 if (!privateAddress(socket.getInetAddress().getHostAddress())) { socket.close(); continue; }
                 synchronized (lock) { if (listener != owned) { socket.close(); continue; } clients.add(socket); }
                 final Socket accepted = socket; pool.execute(() -> serve(accepted, owned));
@@ -258,9 +269,17 @@ public final class MsxServer implements AutoCloseable {
     }
 
     private void serve(Socket socket, ServerSocket owner) {
+        Request request = null;
         try {
             Socket accepted = socket;
-            Request request = readRequest(accepted.getInputStream());
+            PushbackInputStream input = new PushbackInputStream(accepted.getInputStream(), 1);
+            int first = input.read();
+            if (first == 22) {
+                synchronized (lock) { tlsRequests++; }
+                throw new HttpFailure(400, "HTTPS_REQUEST");
+            }
+            if (first < 0) throw new HttpFailure(400);
+            input.unread(first); request = readRequest(input);
             String peer = accepted.getInetAddress().getHostAddress();
             synchronized (lock) { if (listener != owner) throw new HttpFailure(503); }
             URI target;
@@ -268,44 +287,53 @@ public final class MsxServer implements AutoCloseable {
             if (target.isAbsolute() || target.getFragment() != null || target.getRawPath() == null || target.getRawPath().contains("%")) throw new HttpFailure(400);
             String path = target.getRawPath(); Map<String, String> query = query(target.getRawQuery());
             String requestedHost = request.headers.get("host");
-            synchronized (lock) { if (!((host + ":" + port).equals(requestedHost))) throw new HttpFailure(403); }
-            if ("/msx/start.json".equals(path) && "GET".equals(request.method)) {
+            synchronized (lock) { if (!((host + ":" + port).equals(requestedHost))) throw new HttpFailure(403, "HOST_REJECTED"); }
+            if ("/msx/start.json".equals(path) && ("GET".equals(request.method) || "OPTIONS".equals(request.method))) {
+                synchronized (lock) { bootstrapRequests++; }
                 requireBootstrapOrigin(request.headers.get("origin"));
                 JSONObject config;
                 synchronized (lock) {
-                    if (!approvedHost.isEmpty()) { if (!approvedHost.equals(peer)) throw new HttpFailure(403); }
+                    if (!approvedHost.isEmpty()) { if (!approvedHost.equals(peer)) throw new HttpFailure(403, "PEER_REJECTED"); }
                     else {
-                        if (!pairingOpen() || (pendingHost != null && !pendingHost.equals(peer))) throw new HttpFailure(403);
-                        pendingHost = peer;
+                        if (!pairingOpen()) throw new HttpFailure(403, "PAIRING_EXPIRED");
+                        if (pendingHost != null && !pendingHost.equals(peer)) throw new HttpFailure(403, "PEER_REJECTED");
+                        if ("GET".equals(request.method)) pendingHost = peer;
                     }
-                    config = object("name", "LUMA Remote", "version", "0.3.0", "parameter", "content:" + origin() + "/" + token + "/home.json", "welcome", "content");
+                    config = object("name", "LUMA Remote", "version", "0.3.1", "parameter", "content:" + origin() + "/" + token + "/home.json", "welcome", "content");
                 }
+                if ("OPTIONS".equals(request.method)) { preflight(accepted, request); return; }
+                synchronized (lock) { bootstrapAccepted++; }
+                record(200, "BOOTSTRAP_READY", request.headers.get("origin"));
                 respond(accepted, 200, "application/json", config.toString().getBytes(StandardCharsets.UTF_8), true); return;
             }
             String relative;
             synchronized (lock) {
                 String prefix = "/" + token + "/";
                 if (!path.startsWith(prefix)) throw new HttpFailure(404);
-                if ((!approvedHost.isEmpty() && !approvedHost.equals(peer)) || (approvedHost.isEmpty() && (!pairingOpen() || pendingHost == null || !pendingHost.equals(peer)))) throw new HttpFailure(403);
+                if (approvedHost.isEmpty() && !pairingOpen()) throw new HttpFailure(403, "PAIRING_EXPIRED");
+                if ((!approvedHost.isEmpty() && !approvedHost.equals(peer)) || (approvedHost.isEmpty() && (pendingHost == null || !pendingHost.equals(peer)))) throw new HttpFailure(403, "PEER_REJECTED");
                 relative = path.substring(prefix.length());
             }
-            if ("GET".equals(request.method) && "home.json".equals(relative)) {
+            if (("GET".equals(request.method) || "OPTIONS".equals(request.method)) && "home.json".equals(relative)) {
                 requireBootstrapOrigin(request.headers.get("origin"));
+                if ("OPTIONS".equals(request.method)) { preflight(accepted, request); return; }
                 JSONObject home;
                 synchronized (lock) {
                     home = object("type", "pages", "headline", "LUMA Remote", "template", object("type", "separate", "layout", "0,0,12,4", "icon", "play-circle-outline", "color", "msx-glass"),
                             "items", new JSONArray().put(object("title", "Connect this TV", "playerLabel", "LUMA Remote", "description", "Open the receiver, then approve this TV on your phone.", "action", "video:plugin:" + origin() + "/" + token + "/receiver.html")));
                 }
+                record(200, "HOME_READY", request.headers.get("origin"));
                 respond(accepted, 200, "application/json", home.toString().getBytes(StandardCharsets.UTF_8), true); return;
             }
             if ("GET".equals(request.method) && ASSETS.contains(relative)) {
                 byte[] bytes;
-                try (InputStream input = context.getAssets().open("msx/" + relative)) { bytes = readAsset(input); }
+                try (InputStream asset = context.getAssets().open("msx/" + relative)) { bytes = readAsset(asset); }
                 String type = relative.endsWith(".html") ? "text/html; charset=utf-8" : relative.endsWith(".css") ? "text/css; charset=utf-8" : "text/javascript; charset=utf-8";
+                record(200, "ASSET_READY", request.headers.get("origin"));
                 respond(accepted, 200, type, bytes, false); return;
             }
             String origin = request.headers.get("origin");
-            synchronized (lock) { if (origin != null && !origin.equals(origin())) throw new HttpFailure(403); }
+            synchronized (lock) { if (origin != null && !origin.equals(origin())) throw new HttpFailure(403, "ORIGIN_REJECTED"); }
             JSONObject body = request.body.length == 0 ? new JSONObject() : parseObject(request.body);
             JSONObject result;
             synchronized (lock) {
@@ -331,9 +359,15 @@ public final class MsxServer implements AutoCloseable {
                     lastSeen = SystemClock.elapsedRealtime(); result = object("ok", true);
                 } else throw new HttpFailure(404);
             }
+            record(200, "CONTROL_READY", request.headers.get("origin"));
             respond(accepted, 200, "application/json", result.toString().getBytes(StandardCharsets.UTF_8), false);
-        } catch (HttpFailure failure) { try { respond(socket, failure.status, "application/json", "{\"error\":\"REQUEST_REJECTED\"}".getBytes(StandardCharsets.UTF_8), false); } catch (IOException ignored) { } }
-        catch (Exception ignored) { try { respond(socket, 400, "application/json", "{\"error\":\"REQUEST_REJECTED\"}".getBytes(StandardCharsets.UTF_8), false); } catch (IOException ignoredAgain) { } }
+        } catch (HttpFailure failure) {
+            String origin = request == null ? null : request.headers.get("origin"); record(failure.status, failure.reason, origin);
+            try { respond(socket, failure.status, "application/json", "{\"error\":\"REQUEST_REJECTED\"}".getBytes(StandardCharsets.UTF_8), origin != null && allowedBootstrapOrigin(origin)); } catch (IOException ignored) { }
+        } catch (Exception ignored) {
+            String origin = request == null ? null : request.headers.get("origin"); record(400, "REQUEST_REJECTED", origin);
+            try { respond(socket, 400, "application/json", "{\"error\":\"REQUEST_REJECTED\"}".getBytes(StandardCharsets.UTF_8), origin != null && allowedBootstrapOrigin(origin)); } catch (IOException ignoredAgain) { }
+        }
         finally { synchronized (lock) { clients.remove(socket); } try { socket.close(); } catch (IOException ignored) { } }
     }
 
@@ -428,8 +462,46 @@ public final class MsxServer implements AutoCloseable {
     }
     private static boolean clientId(String value) { return value != null && value.matches("[A-Za-z0-9_-]{16,128}"); }
     private void requireBootstrapOrigin(String value) throws HttpFailure {
-        if (value == null || "null".equals(value) || value.equals(origin()) || value.matches("https?://(?:www\\.)?msx\\.benzac\\.de")) return;
-        throw new HttpFailure(403);
+        if (!allowedBootstrapOrigin(value)) throw new HttpFailure(403, "ORIGIN_REJECTED");
+    }
+    private boolean allowedBootstrapOrigin(String value) {
+        return value == null || "null".equals(value) || value.equals(origin()) || value.matches("https?://(?:www\\.)?msx\\.benzac\\.de");
+    }
+    private void preflight(Socket socket, Request request) throws Exception {
+        String origin = request.headers.get("origin");
+        if (origin == null || !"GET".equals(request.headers.get("access-control-request-method"))) throw new HttpFailure(400, "PREFLIGHT_REJECTED");
+        requireBootstrapOrigin(origin);
+        String requested = request.headers.get("access-control-request-headers");
+        if (requested != null) for (String header : requested.split(",", -1)) {
+            String name = header.trim().toLowerCase(Locale.ROOT);
+            if (!("accept".equals(name) || "content-type".equals(name) || "x-requested-with".equals(name))) throw new HttpFailure(400, "PREFLIGHT_REJECTED");
+        }
+        String privateNetwork = request.headers.get("access-control-request-private-network");
+        if (privateNetwork != null && !"true".equalsIgnoreCase(privateNetwork)) throw new HttpFailure(400, "PREFLIGHT_REJECTED");
+        String headers = "Access-Control-Allow-Methods: GET, OPTIONS\r\nAccess-Control-Allow-Headers: Accept, Content-Type, X-Requested-With\r\n" +
+                (privateNetwork == null ? "" : "Access-Control-Allow-Private-Network: true\r\n");
+        record(200, "PREFLIGHT_READY", origin);
+        respond(socket, 200, "application/json", "{}".getBytes(StandardCharsets.UTF_8), true, headers);
+    }
+    private void record(int status, String reason, String origin) {
+        String sanitized = "";
+        if ("null".equals(origin)) sanitized = "null";
+        else if (origin != null) {
+            try {
+                URI parsed = new URI(origin);
+                if (("http".equals(parsed.getScheme()) || "https".equals(parsed.getScheme())) && parsed.getHost() != null) sanitized = parsed.getScheme() + "://" + parsed.getHost().toLowerCase(Locale.ROOT);
+                else sanitized = "invalid";
+            } catch (Exception ignored) { sanitized = "invalid"; }
+        }
+        synchronized (lock) { lastStatus = status; lastReason = reason; lastOrigin = sanitized; lastRequestAt = SystemClock.elapsedRealtime(); }
+        if (status >= 400 || "BOOTSTRAP_READY".equals(reason) || "PREFLIGHT_READY".equals(reason)) {
+            // Log only fixed event codes and a known origin class; never request
+            // targets, private addresses, capabilities, source URLs or bodies.
+            String originClass = "";
+            if (origin != null && origin.matches("https?://(?:www\\.)?msx\\.benzac\\.de")) originClass = sanitized;
+            else if (origin != null) originClass = "null".equals(origin) ? "null" : "other";
+            Log.i("MsxReceiver", reason + " status=" + status + " origin=" + originClass);
+        }
     }
     private static JSONObject object(Object... values) { JSONObject object = new JSONObject(); for (int i = 0; i < values.length; i += 2) put(object, (String) values[i], values[i + 1]); return object; }
     private static void put(JSONObject object, String key, Object value) { try { object.put(key, value); } catch (Exception ignored) { } }
@@ -438,7 +510,7 @@ public final class MsxServer implements AutoCloseable {
     private static Request readRequest(InputStream input) throws Exception {
         Request request = new Request(); long deadline = SystemClock.elapsedRealtime() + 4000;
         String first = line(input, deadline, 4096); String[] parts = first.split(" ", -1);
-        if (parts.length != 3 || !("GET".equals(parts[0]) || "POST".equals(parts[0])) || !parts[1].startsWith("/") || !("HTTP/1.1".equals(parts[2]) || "HTTP/1.0".equals(parts[2]))) throw new HttpFailure(400);
+        if (parts.length != 3 || !("GET".equals(parts[0]) || "POST".equals(parts[0]) || "OPTIONS".equals(parts[0])) || !parts[1].startsWith("/") || !("HTTP/1.1".equals(parts[2]) || "HTTP/1.0".equals(parts[2]))) throw new HttpFailure(400);
         request.method = parts[0]; request.target = parts[1]; int size = first.length() + 2;
         while (true) {
             String header = line(input, deadline, MAX_HEADER); size += header.length() + 2; if (size > MAX_HEADER) throw new HttpFailure(431); if (header.isEmpty()) break;
@@ -449,7 +521,7 @@ public final class MsxServer implements AutoCloseable {
         if (request.headers.containsKey("transfer-encoding")) throw new HttpFailure(400);
         String rawLength = request.headers.get("content-length"); int length = 0;
         if (rawLength != null) { if (!rawLength.matches("[0-9]{1,6}")) throw new HttpFailure(400); length = Integer.parseInt(rawLength); }
-        if (length > MAX_BODY) throw new HttpFailure(413); if ("GET".equals(request.method) && length > 0) throw new HttpFailure(400);
+        if (length > MAX_BODY) throw new HttpFailure(413); if (!"POST".equals(request.method) && length > 0) throw new HttpFailure(400);
         String contentType = request.headers.get("content-type");
         if ("POST".equals(request.method) && !"application/json".equals((contentType == null ? "" : contentType).split(";", 2)[0].trim().toLowerCase(Locale.ROOT))) throw new HttpFailure(415);
         request.body = new byte[length]; int offset = 0;
@@ -483,7 +555,10 @@ public final class MsxServer implements AutoCloseable {
         while ((size = input.read(bytes)) >= 0) { if (out.size() + size > 2 * 1024 * 1024) throw new IOException(); out.write(bytes, 0, size); } return out.toByteArray();
     }
     private static void respond(Socket socket, int status, String type, byte[] body, boolean bootstrapCors) throws IOException {
-        String headers = "HTTP/1.1 " + status + (status == 200 ? " OK" : " Error") + "\r\nContent-Type: " + type + "\r\nContent-Length: " + body.length + "\r\nConnection: close\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\n" + (bootstrapCors ? "Access-Control-Allow-Origin: *\r\n" : "") + "\r\n";
+        respond(socket, status, type, body, bootstrapCors, "");
+    }
+    private static void respond(Socket socket, int status, String type, byte[] body, boolean bootstrapCors, String extraHeaders) throws IOException {
+        String headers = "HTTP/1.1 " + status + (status == 200 ? " OK" : " Error") + "\r\nContent-Type: " + type + "\r\nContent-Length: " + body.length + "\r\nConnection: close\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\n" + (bootstrapCors ? "Access-Control-Allow-Origin: *\r\n" : "") + extraHeaders + "\r\n";
         OutputStream output = socket.getOutputStream(); output.write(headers.getBytes(StandardCharsets.US_ASCII)); output.write(body); output.flush();
     }
 }

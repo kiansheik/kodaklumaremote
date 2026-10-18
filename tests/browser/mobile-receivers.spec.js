@@ -69,7 +69,9 @@ async function openApp(page, { selectedTarget = 'luma', tvConnected = true } = {
       throw new Error(`Unexpected fixture request: ${method}`);
     };
     const respond = request => {
-      if (request.method === 'msx.open' && window.__subtitleFailure) {
+      if (request.method === 'msx.status' && window.__statusError) {
+        window.LumaRPC.receive({ id: request.id, ok: false, error: { code: window.__statusError, message: 'https://private.example.org/source?token=private-diagnostic-token' } });
+      } else if (request.method === 'msx.open' && window.__subtitleFailure) {
         result(request);
         tv.playback.selectedIndex = null; tv.playback.subtitlesEnabled = false;
         tv.lastCommand = { id: 1, method: 'open', ok: false, error: 'SUBTITLE_FAILED' };
@@ -253,4 +255,51 @@ test('Philips setup, approval and remote panels fit a narrow phone without scrol
   await expect(page.getByRole('button', { name: 'Type text', exact: true })).toBeHidden();
   await page.getByRole('button', { name: 'Go to time', exact: true }).click();
   await fits(page);
+});
+
+test('TV setup diagnostics show only observed fixed guidance and keep narrow-phone controls visible', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 592 });
+  await openApp(page, { selectedTarget: 'philips', tvConnected: false });
+  await expect(page.locator('.msx-steps')).toContainText('padlock open');
+  await expect(page.locator('#msx-diagnostic')).toBeHidden();
+  const cases = [
+    ['HTTPS_REQUEST', 'TV is trying a secure connection'],
+    ['ORIGIN_REJECTED', 'app connection was rejected'],
+    ['PAIRING_EXPIRED', 'Tap Restart TV setup'],
+    ['BOOTSTRAP_READY', 'Open “Connect this TV”'],
+  ];
+  for (const [lastReason, hint] of cases) {
+    await page.evaluate(reason => window.LumaApp.onConnectionState({ receivers: { philips: {
+      ...window.__tv, startupUrl: 'http://192.168.1.10:4178',
+      diagnostics: { connections: 1, lastReason: reason, lastOrigin: 'https://private-origin.example.org/path?token=private-diagnostic-token', lastMessage: '<img src=x onerror="window.diagnosticExecuted=true">' },
+    } } }), lastReason);
+    await expect(page.locator('#msx-diagnostic')).toContainText(hint);
+    await fits(page);
+  }
+  await page.evaluate(() => window.LumaApp.onConnectionState({ receivers: { philips: {
+    ...window.__tv, startupUrl: 'http://192.168.1.10:4178', diagnostics: { connections: 0, lastReason: 'https://private-origin.example.org/unknown?token=private-diagnostic-token' },
+  } } }));
+  await expect(page.locator('#msx-diagnostic')).toBeHidden();
+  await expect(page.locator('#msx-pairing')).toHaveText('Enter this address on the TV, then allow the connection here.');
+  expect(await page.locator('body').innerText()).not.toContain('private-origin');
+  expect(await page.locator('body').innerText()).not.toContain('private-diagnostic-token');
+  expect(await page.evaluate(() => window.diagnosticExecuted)).toBeUndefined();
+});
+
+test('read-only MSX status errors use fixed messages without replacing LUMA connection state', async ({ page }) => {
+  await openApp(page, { selectedTarget: 'philips', tvConnected: false });
+  await page.evaluate(() => window.LumaApp.onConnectionState({ receivers: { philips: { ...window.__tv, startupUrl: 'http://192.168.1.10:4178' } } }));
+  for (const [code, text] of [
+    ['MSX_NETWORK', 'Check this phone’s Wi-Fi'],
+    ['MSX_PAIRING', 'Allow your TV'],
+    ['MSX_UNAVAILABLE', 'Media Station X is not connected'],
+    ['MSX_REJECTED', 'TV could not finish this request'],
+  ]) {
+    await page.evaluate(value => { window.__statusError = value; }, code);
+    await page.locator('#msx-refresh').click();
+    await expect(page.locator('#message')).toContainText(text);
+    await expect(page.locator('#target-luma')).toHaveAttribute('data-connected', 'true');
+  }
+  expect(await page.locator('body').innerText()).not.toContain('private-diagnostic-token');
+  expect(await page.locator('body').innerText()).not.toContain('private.example.org');
 });

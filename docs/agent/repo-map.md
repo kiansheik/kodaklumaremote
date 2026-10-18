@@ -26,6 +26,9 @@
   and output/URL-boundary tests: `tests/discovery.test.mjs`.
 - `docs/agent/{philips-tv,mobile-target}.md`: actual TV evidence and final
   phone-powered-off retrieval requirement; physical mobile acceptance pending.
+- `docs/agent/philips-matter.md`: exact-model Matter documentation and bounded
+  Basic Video Player advertisement; unpaired control/launch/subtitle boundaries
+  and the required endpoint capability inspection before integration.
 - `docs/agent/{luma-receiver-options,receiver-apps}.md`: manufacturer DLNA claims,
   existing Android receiver apps, Kodi/VLC control interfaces and proposed tests;
   Kodi public/actual HLS and Portuguese subtitle acceptance is in `tests/manual-kodi.md`.

@@ -4,6 +4,9 @@ import android.app.Activity;
 import android.app.Instrumentation;
 import android.os.Build;
 import android.os.Bundle;
+import android.webkit.JavascriptInterface;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import java.io.ByteArrayOutputStream;
@@ -14,12 +17,14 @@ import java.net.Socket;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 /** Emulator-only private-interface HTTP fixtures. Never discovers or controls a TV. */
 public final class MsxInstrumentation {
@@ -45,13 +50,50 @@ public final class MsxInstrumentation {
         } finally { connection.disconnect(); }
     }
     private static int rawStatus(String origin, String request) throws Exception {
+        return Integer.parseInt(rawResponse(origin, request).split(" ")[1]);
+    }
+    private static String rawResponse(String origin, String request) throws Exception {
         URL url = new URL(origin);
         try (Socket socket = new Socket(url.getHost(), url.getPort())) {
             socket.setSoTimeout(3000); socket.getOutputStream().write(request.getBytes(StandardCharsets.US_ASCII)); socket.getOutputStream().flush();
-            ByteArrayOutputStream first = new ByteArrayOutputStream(); int next;
-            while ((next = socket.getInputStream().read()) >= 0 && next != '\n' && first.size() < 128) first.write(next);
-            return Integer.parseInt(first.toString("US-ASCII").split(" ")[1]);
+            ByteArrayOutputStream response = new ByteArrayOutputStream(); int next;
+            while ((next = socket.getInputStream().read()) >= 0 && response.size() < 4096) {
+                response.write(next); String received = response.toString("US-ASCII"); int boundary = received.indexOf("\r\n\r\n");
+                if (boundary >= 0) {
+                    java.util.regex.Matcher length = java.util.regex.Pattern.compile("(?i)Content-Length: ([0-9]+)\\r\\n").matcher(received.substring(0, boundary + 2));
+                    if (length.find() && response.size() >= boundary + 4 + Integer.parseInt(length.group(1))) break;
+                }
+            }
+            return response.toString("US-ASCII");
         }
+    }
+    private static void tlsProbe(String origin) throws Exception {
+        URL url = new URL(origin);
+        try (Socket socket = new Socket(url.getHost(), url.getPort())) { socket.getOutputStream().write(new byte[] { 22, 3, 3 }); socket.getOutputStream().flush(); }
+    }
+    public static final class BrowserReceipt {
+        final CountDownLatch complete = new CountDownLatch(1);
+        volatile boolean success;
+        @JavascriptInterface public void finish(boolean ok) { success = ok; complete.countDown(); }
+    }
+    private static void browserCors(Instrumentation runner, String origin) throws Exception {
+        BrowserReceipt receipt = new BrowserReceipt(); AtomicReference<WebView> browser = new AtomicReference<>();
+        try {
+            runner.runOnMainSync(() -> {
+                WebView view = new WebView(runner.getTargetContext()); browser.set(view);
+                view.getSettings().setJavaScriptEnabled(true); view.addJavascriptInterface(receipt, "FixtureReceipt");
+                view.setWebViewClient(new WebViewClient());
+                // Entire document is fixture-owned. It fetches only the explicit
+                // private listener, never the remote base URL or any media.
+                String html = "<!doctype html><meta charset=utf-8><script>" +
+                        "fetch(" + JSONObject.quote(origin + "/msx/start.json") + ",{headers:{'Content-Type':'application/json'}})" +
+                        ".then(function(r){if(r.status!==200)throw Error();return r.json();})" +
+                        ".then(function(d){if(typeof d.parameter!=='string')throw Error();return fetch(" + JSONObject.quote(origin + "/fixture-missing") + ");})" +
+                        ".then(function(r){FixtureReceipt.finish(r.status===404);}).catch(function(){FixtureReceipt.finish(false);});</script>";
+                view.loadDataWithBaseURL("http://msx.benzac.de/", html, "text/html", "UTF-8", null);
+            });
+            require(receipt.complete.await(12, TimeUnit.SECONDS) && receipt.success, "Owned WebView CORS bootstrap or visible error response failed");
+        } finally { runner.runOnMainSync(() -> { if (browser.get() != null) { browser.get().stopLoading(); browser.get().removeJavascriptInterface("FixtureReceipt"); browser.get().destroy(); } }); }
     }
     private static JSONObject state(String session, boolean active) throws Exception {
         return object("client", CLIENT, "sessionId", session, "playback", object("active", active, "source", active ? SOURCE : "", "title", "Fixture video",
@@ -81,9 +123,28 @@ public final class MsxInstrumentation {
             AtomicBoolean authorized = new AtomicBoolean(true); server.setSourceGuard(token -> authorized.get() && "fixture-current".equals(token));
             server.reset(); JSONObject started = server.start(); String origin = started.getString("startupUrl");
             require(origin.matches("http://[0-9.]+:[0-9]+"), "Setup URL contains a capability or nonprivate host");
+            String hostHeader = new URL(origin).getAuthority();
+            String preflight = "OPTIONS /msx/start.json HTTP/1.1\r\nHost: " + hostHeader + "\r\nOrigin: http://msx.benzac.de\r\nAccess-Control-Request-Method: GET\r\nAccess-Control-Request-Headers: Content-Type, Accept, X-Requested-With\r\nAccess-Control-Request-Private-Network: true\r\n\r\n";
+            String cors = rawResponse(origin, preflight);
+            require(cors.startsWith("HTTP/1.1 200 ") && cors.contains("Access-Control-Allow-Origin: *\r\n") && cors.contains("Access-Control-Allow-Private-Network: true\r\n"), "MSX preflight headers missing");
+            require(!cors.contains("content:") && !server.status().getBoolean("awaitingApproval") && server.status().getJSONObject("diagnostics").getLong("bootstrapAccepted") == 0, "Preflight claimed or disclosed pairing");
+            require(rawStatus(origin, preflight.replace("Content-Type, Accept, X-Requested-With", "Authorization")) == 400, "Unapproved CORS header accepted");
+            String denied = rawResponse(origin, preflight.replace("http://msx.benzac.de", "https://attacker.example"));
+            require(denied.startsWith("HTTP/1.1 403 ") && !denied.contains("Access-Control-Allow-Origin:") && !denied.contains("content:") && !denied.contains("\"parameter\""), "Foreign preflight accepted or disclosed setup");
+            require(rawStatus(origin, preflight.replace("Access-Control-Request-Method: GET", "Access-Control-Request-Method: POST")) == 400, "Mutation preflight accepted");
+            require(rawStatus(origin, preflight.replace("Origin: http://msx.benzac.de\r\n", "")) == 400, "Originless preflight accepted");
+            require(!server.status().getBoolean("awaitingApproval") && !server.hasSavedReceiver() && server.status().getJSONObject("diagnostics").getLong("bootstrapAccepted") == 0, "Denied preflights changed pairing");
+            tlsProbe(origin);
+            for (int i = 0; i < 40 && !"HTTPS_REQUEST".equals(server.status().getJSONObject("diagnostics").getString("lastReason")); i++) Thread.sleep(25);
+            require(server.status().getJSONObject("diagnostics").getLong("tlsRequests") == 1 && "HTTPS_REQUEST".equals(server.status().getJSONObject("diagnostics").getString("lastReason")), "TLS mismatch was not classified safely");
+            long beforeBrowser = server.status().getJSONObject("diagnostics").getLong("bootstrapRequests");
+            browserCors(runner, origin);
+            require(server.status().getJSONObject("diagnostics").getLong("bootstrapRequests") >= beforeBrowser + 2, "Owned browser did not perform both OPTIONS and GET");
+            passed(runner, ++checks, "real owned WebView performs MSX CORS preflight; pairing stays explicit and HTTP errors remain visible");
             JSONObject configuration = request(origin + "/msx/start.json", null, 200);
             String home = configuration.getString("parameter").substring("content:".length()), base = home.substring(0, home.length() - "home.json".length());
-            String hostHeader = new URL(origin).getAuthority();
+            require(rawResponse(origin, preflight.replace("/msx/start.json", new URL(home).getPath())).startsWith("HTTP/1.1 200 "), "Home-page CORS preflight rejected");
+            require(rawStatus(origin, preflight.replace("/msx/start.json", new URL(base).getPath() + "state")) == 403, "Control endpoint allowed cross-origin preflight");
             require(rawStatus(origin, "GET /msx/start.json HTTP/1.1\r\nHost: attacker.example\r\n\r\n") == 403, "Host spoof accepted");
             require(rawStatus(origin, "GET /msx/start.json HTTP/1.1\r\nHost: " + hostHeader + "\r\nOrigin: https://attacker.example\r\n\r\n") == 403, "Foreign origin bootstrap accepted");
             require(rawStatus(origin, "POST /invalid HTTP/1.1\r\nHost: " + hostHeader + "\r\nContent-Type: application/json\r\nContent-Length: 0\r\nContent-Length: 0\r\n\r\n") == 400, "Ambiguous framing accepted");

@@ -15,7 +15,8 @@ target is saved privately; existing encrypted Kodi credentials remain separate.
 
 **Philips → TV connection → Set up TV** starts a listener on the phone's private
 Wi-Fi/Ethernet IPv4 address, normally port4178. In MSX, Settings → Start Parameter
-→ Setup takes the displayed `IP:port`. MSX reads `/msx/start.json`, opens the
+→ Setup takes the displayed `IP:port` with its security padlock open for HTTP.
+MSX reads `/msx/start.json`, opens the
 generated home page, and the user selects **Connect this TV**. The phone displays
 the requesting TV address and requires **Allow TV** before controls are accepted.
 Setup expires after five minutes. The server pins the approved peer/client,
@@ -43,6 +44,22 @@ are not automatically resent; ACK receipts survive transient control failures.
 An independent heartbeat keeps the connection fresh during slow video startup.
 
 ## Evidence and limits
+
+The first physical0.3.0 attempt failed with **Server responded with status0**.
+The phone listener was reachable from the Mac, but an OPTIONS browser preflight
+was rejected.0.3.1 accepts restricted bootstrap/home preflights without claiming
+the requesting peer, exposing the capability or approving a TV. A real Android
+WebView cross-origin fixture verifies OPTIONS followed by GET. Safe diagnostics
+distinguish TLS sent to the HTTP port, rejected origins and expired pairing.
+The phone displays only fixed guidance, never request URLs or tokens.
+
+This fixes a reproduced compatibility gap; it does not establish the TV's exact
+failure. [MSX setup documentation](https://www.msx.benzac.de/wiki/index.php?title=Setup_Start_Parameter)
+explains that HTTPS-loaded MSX upgrades JSON/plugin requests to HTTPS. The phone
+listener currently serves HTTP only. A forced-HTTPS TV context needs a different
+entry path; CORS headers cannot fix a TLS mismatch. The physical retry remains
+pending. [Matter hardware control research](philips-matter.md) is separate and
+does not establish arbitrary video/subtitle playback.
 
 See the [session handoff](session-handoffs/2026-10-18-dual-receiver-msx.md) for exact
 build/test/publication and device results. Code/fixtures establish behavior only

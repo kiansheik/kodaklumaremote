@@ -197,3 +197,16 @@
   Pages590e0b2 live. HTTPS page/feed returned200 with exact0.3.0 metadata;
   public GitHub/CDN APK matched963,544bytes/SHA-256. Actual TV setup/playback is
   still awaiting user confirmation.
+- 2026-10-18 MSX setup follow-up: user reported status0. The phone listener was
+  reachable, but0.3.0 rejected a browser OPTIONS preflight.0.3.1/code8 adds scoped
+  bootstrap CORS/preflight support, TLS/rejection diagnostics and fixed no-scroll
+  setup hints. Native8 MSX+4 dual-service,43 mobile browser and22 focused Node
+  checks passed; debug/release build and lint passed. Installed signed0.3.1 on
+  Samsung, preserving encrypted Kodi login per read-only before/after checks.
+  Actual TV retry and publication are tracked in the
+  [handoff](session-handoffs/2026-10-18-msx-setup-matter.md).
+- 2026-10-18 Matter assessment: exact-model Philips datasheet supports Matter;
+  bounded read-only discovery observed PHILIPS TV, DT40 Basic Video Player.
+  No pairing/control commands or Matter adapter implemented. Hardware/navigation
+  capabilities require paired inspection; URL launch and external subtitles are
+  not implied. Added [research notes](philips-matter.md).

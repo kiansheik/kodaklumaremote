@@ -301,3 +301,23 @@ file. Pages build590e0b2 completed; HTTPS install page/feed returned200 and the
 feed exactly matches0.3.0 metadata. Production signing material remains local.
 Actual Philips playback, subtitle appearance, HTTP/mixed-content behavior and
 phone-off continuation remain unconfirmed. [Domain notes](msx-receiver.md).
+
+MSX physical follow-up failed: the TV reports **Server responded with status0**.
+The actual phone listener is reachable, but0.3.0 rejected browser OPTIONS.
+Version0.3.1/code8 adds restricted CORS preflights, safe TLS/bootstrap diagnostics
+and fixed setup hints with explicit HTTP padlock instructions. Preflights cannot
+claim a pending TV or return a capability. Actual TV failure cause remains
+unconfirmed until a diagnostic retry; forced HTTPS is still a possible cause.
+
+Final checks:22 focused Node,43 mobile browser,8 MSX native and4 dual-service
+native cases passed; isolated debug/test APK+lint and signed release+lintVital
+passed. Signed0.3.1 is installed/open on Samsung; read-only signer/decryption
+checks passed before/after, preserving Kodi login. Publication and the actual TV
+retry are tracked in the [setup handoff](session-handoffs/2026-10-18-msx-setup-matter.md).
+
+The user also found the TV's Matter setting. The exact Philips datasheet lists
+Matter; bounded read-only DNS-SD observed PHILIPS TV advertising DT40/0x0028
+Basic Video Player. No commissioning or cluster commands occurred. Matter is a
+promising hardware/navigation control path; app launch, speaker volume and URL
+playback require paired capability inspection. External subtitle URL attachment
+is not established by Matter. [Evidence and next steps](philips-matter.md).
