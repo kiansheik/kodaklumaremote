@@ -551,7 +551,14 @@ the original emulator lock setting. Final review also caught and fixed a
 same-URL recast blocked by an earlier unknown response: only an actual native
 completion receipt plus prior matching playback can release that cached attempt.
 Late bridge receipts are bounded and never justify overlapping unknown writes.
-Version0.4.2 signing/publication is not yet established here. No
+Release0.4.2/code11 is public from source
+`976a1c3b643193ca0bf5f92ecdef8fcd1a4d96e7`. Committed-source signed build,
+lintVital, production certificate and16KB ZIP alignment passed. The APK is
+9,632,212bytes, SHA-256
+`886e1711953a88257f8dbd0fdbc5c2dd85d859cc11c2cf469ee8eb7609a9032f`.
+Pages commit`f87edf802420f0a71e0bf55342dcc6e691f28378` is built/no error.
+Anonymous feed/APK returned200; served metadata and downloaded bytes/signature
+match the prepared release. Chrome rendered0.4.2 with the exact APK link. No
 physical phone/projector/TV actions were sent during this repair. Motorola
 locked-screen controls, the exact Bly Manor episode and visible subtitles still
 need physical acceptance. See the

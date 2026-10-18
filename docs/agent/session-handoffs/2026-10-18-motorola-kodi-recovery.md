@@ -54,7 +54,21 @@ Build/version configuration and the new release notes were also checked.
   and keyguard locked; wake-lock cleanup and exact mutation counts passed. Its
   original nonsecure keyguard setting was restored. Packaged UI5 was rebuilt and
   rerun after final bridge/coordinator changes;320x592 had no clipping/scrolling.
-  Signing/publication evidence belongs in a subsequent update.
+  These native suites were separate from the actual household device; no
+  production login or pairing was reset.
+- `npm run release:android -- --notes-file release-notes/0.4.2.txt` through the
+  ignored private environment loader: committed-source production-signed build
+  and lintVital passed, as did16KB ZIP alignment. Source/tag target:
+  `976a1c3b643193ca0bf5f92ecdef8fcd1a4d96e7`.
+- `git push origin main`; `npm run publish:android -- --directory
+  .local/releases/v0.4.2`: publicv0.4.2/code11 and matching Pages deployed.
+  Pages commit`f87edf802420f0a71e0bf55342dcc6e691f28378` is built/no error.
+- Anonymous HTTPS feed/APK GET200. Served metadata equals the prepared manifest;
+  downloaded APK9,632,212bytes, SHA-256
+  `886e1711953a88257f8dbd0fdbc5c2dd85d859cc11c2cf469ee8eb7609a9032f`,
+  and signer match the production release. A read during Pages build still
+  served0.4.1; after build, the normal feed served0.4.2. Chrome rendered0.4.2
+  and its exact public download link. No installer was launched on a real phone.
 
 ## What worked
 
@@ -101,7 +115,7 @@ regressions failed first, then passed after the receipt/cache fixes.
 
 ## Remaining questions
 
-Signed build and publication remain to be recorded at this source checkpoint.
+Implementation, local checks and public deployment are complete.
 On Julia's Motorola, does one Cast with Kodi closed reach visible PT-BR, settle
 on Remote and retain a working Pause/Resume card while locked? Does English
 fallback or subtitle-only retry work for the exact Bly Manor episode? Physical
@@ -113,7 +127,7 @@ unrelated untracked `headers.txt` is preserved.
 
 ## Suggested next prompt
 
-“Finish isolated native checks and signed0.4.2 publication, then verify the
-updated app on Julia's Motorola: Kodi closed, one Cast of the exact Bly Manor
+"Update to0.4.2 from https://kiansheik.io/kodaklumaremote/ and verify the
+app on Julia's Motorola: Kodi closed, one Cast of the exact Bly Manor
 episode, visible PT-BR, return to Remote, lock-screen Pause/Resume. Inspect only
 own-app diagnostics if it fails; preserve playback and avoid duplicate Opens.”

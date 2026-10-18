@@ -377,3 +377,9 @@
   packaged UI was rebuilt/retested after those bridge/coordinator refinements.
   Signed release/public verification follows; actual Motorola acceptance remains
   pending because the device is unavailable.
+- 2026-10-18 recovery deployed: publicv0.4.2/code11 from source976a1c3;
+  committed-source signed build/lintVital/16KB alignment passed. Pagesf87edf8
+  is built. Anonymous feed/APK GET200, exact metadata/hash/production signer and
+  Chrome's0.4.2 install link verified. APK9,632,212bytes, SHA-256
+  `886e1711953a88257f8dbd0fdbc5c2dd85d859cc11c2cf469ee8eb7609a9032f`.
+  No physical phone installation or household playback test was possible.
