@@ -1,12 +1,12 @@
 {
   "schemaVersion": 1,
   "packageName": "dev.framextv.lumaremote",
-  "versionName": "0.2.4",
-  "versionCode": 6,
+  "versionName": "0.3.0",
+  "versionCode": 7,
   "minSdk": 23,
-  "apkUrl": "https://github.com/kiansheik/kodaklumaremote/releases/download/v0.2.4/luma-remote-0.2.4.apk",
-  "sha256": "e41a99e4e9120bb1abdeb0217615e920859328b56b4ff280a8f98a6010360adf",
-  "sizeBytes": 740817,
-  "releasedAt": "2026-10-18T14:53:51.895Z",
-  "notes": "Primeira versão para instalar pelo site do Luma Remote.\n\n• Aviso opcional de atualização ao abrir o app e busca manual em Configurações.\n• Controle do projetor e do Kodi, com reprodução, volume e legendas.\n• Controles na notificação e na tela bloqueada.\n• Botão para desligar com confirmação.\n• Configuração do projetor e login do Kodi guardados no celular.\n\nEsta é uma versão inicial. Algumas tentativas de iniciar o Kodi e carregar legendas ainda podem falhar; estamos investigando.\n"
+  "apkUrl": "https://github.com/kiansheik/kodaklumaremote/releases/download/v0.3.0/luma-remote-0.3.0.apk",
+  "sha256": "cb2307a077750314ecfe0776e327aacf38e5cbf5a6c8153126bb023e80b26c12",
+  "sizeBytes": 963544,
+  "releasedAt": "2026-10-18T15:46:25.206Z",
+  "notes": "Choose LUMA or Philips from a compact device switcher. Both receivers can stay connected, and changing the selected remote leaves their videos playing.\n\nAdds an experimental Philips receiver using Media Station X. TV setup shows the phone's local address and asks you to approve the TV once. Videos play directly on the TV, with Brazilian Portuguese subtitles preferred and English as fallback; other languages remain available on demand.\n\nThe Philips remote provides playback, seek, subtitles and player volume, including notification and lock-screen controls for the selected receiver. Existing LUMA projector controls stay available separately.\n\nPhilips codec, subtitle and phone-off behavior still need confirmation on the actual TV.\n"
 }
