@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "packageName": "dev.framextv.lumaremote",
+  "versionName": "0.2.4",
+  "versionCode": 6,
+  "minSdk": 23,
+  "apkUrl": "https://github.com/kiansheik/kodaklumaremote/releases/download/v0.2.4/luma-remote-0.2.4.apk",
+  "sha256": "e41a99e4e9120bb1abdeb0217615e920859328b56b4ff280a8f98a6010360adf",
+  "sizeBytes": 740817,
+  "releasedAt": "2026-10-18T14:53:51.895Z",
+  "notes": "Primeira versão para instalar pelo site do Luma Remote.\n\n• Aviso opcional de atualização ao abrir o app e busca manual em Configurações.\n• Controle do projetor e do Kodi, com reprodução, volume e legendas.\n• Controles na notificação e na tela bloqueada.\n• Botão para desligar com confirmação.\n• Configuração do projetor e login do Kodi guardados no celular.\n\nEsta é uma versão inicial. Algumas tentativas de iniciar o Kodi e carregar legendas ainda podem falhar; estamos investigando.\n"
+}
