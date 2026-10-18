@@ -159,3 +159,10 @@ Current checks/phone boundary:
 Final0.2.0 installed on phone. Build,109 Node/65 browser checks,8 native backend,
 4 service,5 packaged UI and5 Keystore settings checks passed. Live updated phone
 Cast/Portuguese, lock-screen controls and full phone-off remain pending.
+
+Live updated-phone follow-up: fixed app diagnostics reported captured HLS with19
+tracks, authenticated setup and launching/waiting/subtitles/selecting/remote/ready.
+A read-only Kodi query then reported playing at04:51/22:35,19 available subtitle
+tracks, enabled and index6 selected. This establishes phone handoff completion
+and receiver state; actual projector picture/PT-BR rendering, lock controls and
+phone-off still await explicit user confirmation.

@@ -60,6 +60,12 @@ now configures candidate credentials, opens Kodi, waits/authenticates, saves and
 continues the latest captured Cast. Updated0.2.0 is installed; physical
 source/subtitle/system-control acceptance is pending.
 
+After installation, the phone's fixed diagnostic tag reported HLS capture with19
+tracks and successful stages through selecting/remote/ready. An independent
+read-only Kodi query reported playing04:51/22:35,19 available subtitle tracks,
+enabled/index6. This is live phone/receiver-state evidence, separate from pending
+projector picture/PT-BR rendering, lock controls and full phone-off confirmation.
+
 The service keeps native I/O beyond Activity destruction, restores state without
 media replay and publishes source-bound system controls. Disconnect immediately
 revokes old work, closes I/O, rejects queued/in-flight callbacks and removes the

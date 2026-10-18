@@ -113,3 +113,8 @@
   compact status and real absolute volume. REA confirmed normalized setter0..30;
   UI consumes observed readback. Final results/phone acceptance are in the
   [background handoff](session-handoffs/2026-10-18-phone-background-settings.md).
+- 2026-10-18 updated-phone live handoff: Safe app-only log reported HLS capture
+  with19 tracks and completion through subtitles/selecting/remote/ready. Read-only
+  Kodi state showed playing04:51/22:35,19 subtitle tracks, enabled/index6. No media
+  or control mutation was sent by this diagnostic. Physical picture/PT-BR and
+  phone-off confirmation remain pending; source/credentials were not logged.
