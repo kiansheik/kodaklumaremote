@@ -18,6 +18,10 @@
 8. Full mobile acceptance is phone fully OFF, receiver still fetching media.
    Which direct receiver transport will be supported by the Android controller?
    Miracast-only targets need another player and cannot satisfy this alone.
+9. Which Kodak LUMA model/Android/CPU does the user own, and can it install Kodi,
+   VLC or a DLNA receiver? Does its advertised built-in DLNA expose a usable
+   MediaRenderer? Documented app interfaces are [here](receiver-apps.md), and
+   manufacturer/commercial options are [here](luma-receiver-options.md).
 
 Resolved: public reachability confirmed; same-origin embed + declared source
 found statically; existing-page CAF avoids an extension remote-SDK loader;

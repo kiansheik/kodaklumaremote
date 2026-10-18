@@ -2,7 +2,8 @@
 
 2026-10-18 America/Sao_Paulo. Detailed record:
 [session handoff](session-handoffs/2026-10-18-native-cast.md).
-Latest follow-up: [live Philips test and mobile goal](session-handoffs/2026-10-18-philips-mobile.md).
+Device follow-up: [live Philips test and mobile goal](session-handoffs/2026-10-18-philips-mobile.md).
+Latest follow-up: [LUMA and existing receiver apps](session-handoffs/2026-10-18-luma-receivers.md).
 
 ## Outcome
 
@@ -93,6 +94,12 @@ stays ignored under `.local/tv-discovery.json`. A negative probe is not proof
 that the TV has no service under another mode/network configuration.
 
 ## Next highest-value work
+
+For the user's app-capable Kodak LUMA, first establish available receiver apps
+or built-in DLNA. If Kodi installs, its authenticated HTTP `Player.Open` accepts
+a media URL; VLC Android 3.6+ Remote access is an alternative. Follow the
+[receiver app experiment](receiver-apps.md), then verify phone-off continuation.
+Exact model/Android/CPU and installation remain unknown; no LUMA test occurred.
 
 Use [the physical-device checklist](../../tests/manual-chromecast.md) first with
 the public demo, then the site's own native Cast control in uninstrumented Chrome.

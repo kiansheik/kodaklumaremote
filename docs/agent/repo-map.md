@@ -25,6 +25,9 @@
   and output/URL-boundary tests: `tests/discovery.test.mjs`.
 - `docs/agent/{philips-tv,mobile-target}.md`: actual TV evidence and final
   phone-powered-off retrieval requirement; no mobile app implemented yet.
+- `docs/agent/{luma-receiver-options,receiver-apps}.md`: manufacturer DLNA claims,
+  existing Android receiver apps, Kodi/VLC control interfaces and proposed tests;
+  no LUMA install or hardware acceptance yet.
 - `docs/agent/`: concise evidence, decisions, and reproducible handoffs.
 - `artifacts/`, `.local/`: ignored local evidence; never commit credentials/media.
 - `README.md`: build/load instructions; `package-lock.json`: pinned npm tools.

@@ -38,3 +38,9 @@
   Philips model and read its device description, with no recognized AVTransport
   services exposed and no errors. No media/controls sent. Subsequent `npm test`
   passed33 tests, including3 discovery tests; previous loaded-MV3 tests passed16.
+- 2026-10-18 receiver follow-up: User introduced an older app-capable Kodak LUMA;
+  exact model/Android unknown. Researched official Kodak DLNA claims, Kodi HTTP
+  JSON-RPC, VLC Android 3.6+ Remote access/released URL-opening implementation,
+  commercial DLNA receivers and a possible thin receiver APK. Documented first
+  experiment and phone-off acceptance. No app installation/device playback or
+  application-code changes; documentation whitespace/local-link checks only.

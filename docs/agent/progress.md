@@ -20,6 +20,15 @@ point passed30 unit/16 browser tests; separate discovery-tool checks follow.
 
 The final product is an Android/Samsung-phone controller whose receiver keeps
 retrieving media after phone power-off. See [mobile target](mobile-target.md).
-No native arbitrary-media receiver playback success is claimed. No custom receiver or relay is
-justified by the evidence; neither was implemented. Manual Chrome tab casting is
-documented separately as browser-dependent mirroring.
+No native arbitrary-media receiver playback success is claimed. No custom
+receiver or relay is implemented. Manual Chrome tab casting is documented
+separately as browser-dependent mirroring.
+
+LUMA follow-up: manufacturer DLNA support claims and existing Android receiver
+apps were researched. Kodi HTTP JSON-RPC provides a documented URL handoff;
+VLC Android 3.6+ has authenticated Remote access, with URL playback supported by
+released 3.6.5 source. The user reports native apps and a restricted app store,
+but exact model/Android and app installability remain unknown. Test an existing
+receiver before implementing a custom APK. See [receiver interfaces](receiver-apps.md)
+and [LUMA options](luma-receiver-options.md). No LUMA installation, playback or
+phone-off acceptance occurred.

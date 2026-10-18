@@ -48,6 +48,18 @@ This does not prove the absence of DLNA in all firmware/modes, and it does not
 establish a direct playback route. No media or control commands were sent.
 See [TV evidence](philips-tv.md) and [mobile target](mobile-target.md).
 
+Android receiver follow-up: user also owns an older Kodak LUMA with an app store
+that blocks some apps; native YouTube/Crunchyroll/Amazon run, and YouTube is
+discoverable only while open. Exact model, Android/CPU and store are unknown.
+Current Kodak 350/400/450 pages advertise DLNA, which needs device confirmation.
+Kodi's documented HTTP JSON-RPC `Player.Open` is the preferred programmable
+receiver experiment if installable; VLC Android 3.6+ Remote access is another
+candidate, with network-URL launch confirmed in released 3.6.5 source only.
+AirPin and other commercial DLNA receivers are alternatives. An installable
+thin receiver APK could receive LAN commands and own playback or launch a local
+player. These are researched routes, not installed or hardware-tested features.
+See [LUMA options](luma-receiver-options.md) and [receiver interfaces](receiver-apps.md).
+
 No generic receiver/media LOAD, target codec/CORS/expiry, mobile app or phone-off
 acceptance is established. TV-side generic Cast receiver/app availability is
 unknown. System Settings computer access was unavailable, so macOS local-network
