@@ -1,12 +1,12 @@
 {
   "schemaVersion": 1,
   "packageName": "dev.framextv.lumaremote",
-  "versionName": "0.4.1",
-  "versionCode": 10,
+  "versionName": "0.4.2",
+  "versionCode": 11,
   "minSdk": 24,
-  "apkUrl": "https://github.com/kiansheik/kodaklumaremote/releases/download/v0.4.1/luma-remote-0.4.1.apk",
-  "sha256": "a650dd4d44c8413bcd01b38c7c8d68f13ce758fdccc222222e0f36b43bc008e7",
-  "sizeBytes": 9631440,
-  "releasedAt": "2026-10-18T22:45:24.051Z",
-  "notes": "Maintenance build of the current LUMA/Kodi and Philips Matter remote, signed with the existing production certificate for normal in-app updates.\n\nThe repository now includes desktop Philips local-control and DIAL discovery tools. Direct Netflix launch was confirmed on the test TV; these desktop tools are not yet integrated into the phone app.\n\nPhilips browser/Media Station X video and subtitle setup remains experimental. This release does not add generic TV casting.\n\nRequires 64-bit ARM Android 7 or newer.\n"
+  "apkUrl": "https://github.com/kiansheik/kodaklumaremote/releases/download/v0.4.2/luma-remote-0.4.2.apk",
+  "sha256": "886e1711953a88257f8dbd0fdbc5c2dd85d859cc11c2cf469ee8eb7609a9032f",
+  "sizeBytes": 9632212,
+  "releasedAt": "2026-10-18T23:34:49.624Z",
+  "notes": "Fixes Kodi startup recovery when the movie begins before its start request finishes responding. A failed subtitle load now leaves the playing video and remote usable, with all captured languages available for a subtitle-only retry.\n\nWaits for Kodi's subtitle player to be ready. Prefers Brazilian Portuguese, then English when a rejected subtitle request is confirmed not to have loaded.\n\nKeeps lock-screen and notification controls during temporary connection failures and completes button actions while the screen is locked. Kodi playback controls can remain connected when the projector's separate hardware-control connection drops.\n\nMotorola device confirmation is still pending; fixes are covered by local and Android emulator regressions.\n\nRequires 64-bit ARM Android 7 or newer.\n"
 }
