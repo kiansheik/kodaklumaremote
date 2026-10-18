@@ -1,5 +1,9 @@
 # Matter controller and phone UI fixtures
 
+Earlier Mac/browser stage. Subsequent native phone pairing, signed0.4.0 release
+and public verification are recorded in the
+[native phone handoff](2026-10-18-native-matter-phone.md).
+
 Goal: commission and inspect the existing Philips TV without native SDK setup
 on the Mac, then verify the phone's manual/QR pairing and combined remote UI.
 

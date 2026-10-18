@@ -357,8 +357,8 @@ Phone Volume+1→2 and Volume−2→1 were each independently read back from the
 starting volume is restored. Actual phone **Add another phone** opened a
 TV-accepted enhanced window and displayed a fresh manual code/QR/expiry notice;
 dismiss/reopen left no code or QR. No second phone was enrolled. Navigation/Power
-controls are enabled; phone key/Off/input effects, camera scan, second-phone
-enrollment and final signed reinstall/reconnect remain pending.
+controls are enabled; phone key/Off/input effects, camera scan and second-phone
+enrollment remain pending.
 
 The app now requires Android API24+/ARM64. Official CHIP SDK source is pinned
 to3584c8c8552f4a0d471f2aad24a15b478959c230 with Kotlin2.1.10; locally built
@@ -381,11 +381,23 @@ MSX player volume, so re-pairing to a no-speaker TV cannot show stale40%.
 Final source checks passed:54 mobile browser,22 focused Node and7 QR JVM;
 18 final focused native checks (Matter7/service6/packaged UI5), debug/test APK
 and lint. Earlier unaffected native26 (backend9/settings5/MSX8/dual receiver4)
-also passed:44 native checks across runs, not a fresh full44-case rerun. The
-precommit release build passed earlier; post-commit signed rebuild/install and
-publication remain pending.
-These fixtures are separate from the actual-phone
-pairing/speaker proof above. Source HEAD056b6c9/public Pages/release
-remain0.3.1;0.4.0 is currently installed locally, uncommitted and unpublished.
-No final0.4.0 APK hash is recorded before the post-commit release rebuild.
+also passed:44 native checks across runs, not a fresh full44-case rerun. These
+fixtures are separate from the actual-phone pairing/speaker proof above.
+
+Release0.4.0/code9 is published from source
+4d487cf2fdd3613b1d098838cfa5a23134871b0b. Final signed build/lintVital and
+ZIP16KB alignment passed. APK9,631,440bytes, SHA-256
+`a3f03b098f739d7e4253a0716771cbe7e8a5d7cd1fcf4aa6be73e6d6d93766fa`.
+That exact signed APK was installed on Samsung; signer and saved Kodi Keystore
+decryption passed before/after, with receiver/Kodi setup retained. Own-process
+service logs returned to foreground=true/connected=true on the saved Philips
+target without a new setup code. `verified=false` is expected with no verified
+MSX media. The phone's secure PIN blocked foreground UI inspection after this
+upgrade; service-level reconnection is established, foreground UI acceptance is
+not. No further lock-screen dismissal attempts were made.
+
+GitHubv0.4.0 is public. Pagesc542b9089cb27708d34478690de1b0625b314dc0 is built;
+HTTPS install page returned200 with ARM64 compatibility text. HTTPS update.json
+returned200 and exactly matched the signed0.4.0 manifest (code9/minSdk24).
+Public GitHub APK download returned200 and matched the installed APK's size/hash.
 See the [native phone handoff](session-handoffs/2026-10-18-native-matter-phone.md).

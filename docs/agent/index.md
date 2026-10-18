@@ -26,7 +26,7 @@ Distribution: [signed releases and optional updates](../releasing.md),
 [GitHub/Pages handoff](session-handoffs/2026-10-18-github-release-updates.md).
 Dual receiver: [Philips MSX and LUMA selection](msx-receiver.md),
 [implementation handoff](session-handoffs/2026-10-18-dual-receiver-msx.md).
-Current phone work: [native Matter pairing and hardware remote](session-handoffs/2026-10-18-native-matter-phone.md).
+Current phone release: [native Matter pairing and hardware remote](session-handoffs/2026-10-18-native-matter-phone.md).
 Mac evidence and isolated UI checks: [controller/browser handoff](session-handoffs/2026-10-18-matter-controller-browser.md).
 
 Execution: [decisions](decisions.md), [experiments](experiments.md),

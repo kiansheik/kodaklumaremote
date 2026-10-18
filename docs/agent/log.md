@@ -265,3 +265,14 @@
   and lint. Earlier unaffected26 also passed (44 total across runs). Async pair
   polling/foreground lifetime, per-attempt cancellation and confirmed local-only
   recovery are covered. Final committed-source signing/install/publication next.
+- 2026-10-18 native Matter release completed: source4d487cf2fdd3613b1d098838cfa5a23134871b0b
+  committed/pushed with headers.txt excluded. Final signed0.4.0/code9 build/
+  lintVital/ZIP16KB passed; APK9,631,440bytes, SHA-256
+  a3f03b098f739d7e4253a0716771cbe7e8a5d7cd1fcf4aa6be73e6d6d93766fa.
+  Exact APK installed on Samsung; signer/Kodi Keystore decryption and retained
+  receiver/Kodi setup passed. Safe service logs reconnected the saved Philips
+  target without a new code. Secure PIN prevented foreground UI acceptance;
+  no further dismissal attempts. GitHubv0.4.0 public, Pagesc542b908 built,
+  HTTPS install/feed200 with exact signed manifest, and public APK200 matched
+  installed size/hash. Camera, second-phone enrollment, phone key/Off/input and
+  MSX media acceptance remain open. [Final handoff](session-handoffs/2026-10-18-native-matter-phone.md).

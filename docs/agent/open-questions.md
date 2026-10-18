@@ -37,24 +37,19 @@
    public MP4 and actual HLS/subtitles worked on version 21.2. Does built-in DLNA expose a usable
    MediaRenderer? Documented app interfaces are [here](receiver-apps.md), and
    manufacturer/commercial options are [here](luma-receiver-options.md).
-10. Does the installed0.4.0 phone reconnect after app/process restarts, navigate
-    the TV and enroll another phone through its transient QR window? Native
+10. Does the0.4.0 phone restore foreground UI correctly after unlock, navigate
+    the TV, scan a code and enroll another phone through its transient QR window? Native
     manual-code pairing completed with production trust enabled. Phone speaker
     volume1→2→1 was independently read back from the Mac, restoring the start.
     Mac pairing/inventory/Home status0 and an additional-controller window also
     passed. The phone also opened a TV-accepted additional-phone window; its
-    code/QR cleared on dismiss/reopen. Second-phone enrollment, signed reinstall/
-    reconnect, navigation, power/input effects and camera scanning remain
-    pending. No ContentLauncher or
+    code/QR cleared on dismiss/reopen. The final signed upgrade retained Kodi
+    login and reached saved-target service-level connection without another
+    code; secure PIN prevented foreground UI acceptance. Second-phone enrollment,
+    navigation, power/input effects and camera scanning remain pending. No ContentLauncher or
     ApplicationLauncher appeared, so Matter does not establish website video or
     external-subtitle delivery on this firmware. See [Matter evidence](philips-matter.md)
     and [native phone handoff](session-handoffs/2026-10-18-native-matter-phone.md).
-11. Does final signed reinstall reconnect the existing phone fabric and retain
-    Kodi setup? Source recovery/lifecycle checks passed54 browser and18 final
-    focused native cases, plus26 earlier unaffected native cases. Confirmed
-    local-only recovery retains the encrypted CA/LUMA state, issues no TV command
-    and explains that it cannot remove an unreachable TV's controller entry.
-    A reset/unreachable household TV was not deliberately created for this test.
 
 Resolved: public reachability confirmed; same-origin embed + declared source
 found statically; existing-page CAF avoids an extension remote-SDK loader;

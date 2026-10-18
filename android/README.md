@@ -44,16 +44,18 @@ Mac Matter pairing and accepted Home passed. Actual phone manual-code pairing
 completed with production trust enabled; its speaker1→2→1 changes were
 independently read back and restored. The phone's **Add another phone** window
 was accepted by the TV; its code/QR cleared on dismiss/reopen. Phone navigation/
-input/Off effects, camera scanning, second-phone enrollment and final signed
-reinstall/reconnect remain pending. Version0.4.0 is
-installed locally; the public install page still serves0.3.1 until publication.
+input/Off effects, camera scanning and second-phone enrollment remain pending.
+The final signed upgrade preserved Kodi login and restored the saved Philips
+connection at service level; secure PIN prevented foreground UI acceptance
+after upgrade. Version0.4.0 is installed and publicly available from the install
+page, with matching signed feed/APK verified.
 See [Matter evidence](../docs/agent/philips-matter.md),
 [native handoff](../docs/agent/session-handoffs/2026-10-18-native-matter-phone.md)
 and [MSX implementation](../docs/agent/msx-receiver.md).
 
 ## Use
 
-Install the locally built debug APK on the Samsung phone. Keep the phone and
+Install the signed APK from the install page on the phone. Keep the phone and
 LUMA on the same Wi-Fi. On first use, find/connect the projector and enter the
 HTTP username, password and port configured in Kodi. **Use Kodi** opens Kodi,
 waits for its API and validates the login before saving it on this phone. The
@@ -186,7 +188,8 @@ launch, confirmed power commands and Matter code/QR privacy. The0.4.0 focused
 validation passed54 mobile browser,22 Node and7 QR JVM checks. The final focused
 native18 (Matter7/service6/UI5), debug/test APK and lint passed after recovery/
 lifecycle fixes;26 earlier unaffected native cases also passed (44 across runs).
-The final post-commit signed rebuild/install and publication remain pending.
+The committed-source signed build/lintVital, installation and publication also
+passed; the public APK matches the exact installed release's size/hash.
 The7 native Matter checks load JNI/trust assets
 and verify encrypted storage, QR output and request guards; they do not pair a
 real TV. [Current handoff](../docs/agent/session-handoffs/2026-10-18-native-matter-phone.md).

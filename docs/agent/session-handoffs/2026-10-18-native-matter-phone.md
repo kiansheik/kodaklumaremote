@@ -2,9 +2,12 @@
 
 ## Goal
 
-Put durable Matter commissioning/hardware controls inside the existing Android
-remote, including manual/camera-QR setup and adding another phone. Avoid repeated
-outdoor TV setup steps while preserving LUMA/Kodi and the separate MSX receiver.
+Deliver durable Matter commissioning/hardware controls inside the existing
+Android remote, including manual/camera-QR setup and adding another phone.
+Native0.4.0 is now signed, installed and publicly verified; actual manual pairing,
+speaker changes and an additional-controller window passed. Preserve LUMA/Kodi
+and keep unresolved MSX video/subtitles separate from the completed hardware
+remote implementation, without repeated outdoor TV setup steps.
 
 ## Files inspected
 
@@ -47,8 +50,7 @@ Across the team:
   manual/QR-payload format strings, retaining error diagnostics.
 - Isolated Gradle `-PreceiverFixture=true :app:assembleDebug
   :app:assembleDebugAndroidTest :app:lintDebug`: passed on final source.
-  Earlier precommit signed release build/lint also passed; final committed-source
-  signing remains pending below.
+  Committed-source release build/lintVital and ZIP16KB alignment also passed.
 - Mobile Playwright fixtures:54 passed, including local-only recovery;
   focused Node:22 passed; QR JVM:7 passed.
 - Final focused native18/18 passed: Matter7/service6/packaged UI5, with final
@@ -57,7 +59,7 @@ Across the team:
   rerun. Matter checks cover JNI/trust loading,
   authenticated persistence/tamper failure, QR round-trip and request guards,
   without commissioning or controlling a real TV.
-  The final post-commit signed rebuild/install and publication remain pending.
+  Final committed-source signing/install/publication passed as detailed below.
 - Actual Samsung signed upgrade to0.4.0: read-only signer/Kodi Keystore
   decryption passed before/after installation. No uninstall/reset was used.
 - APK16KB ELF and ZIP alignment verified. A dedicated16KB-page kernel runtime
@@ -77,6 +79,19 @@ Across the team:
   displayed a private fresh manual code, pairing QR image and expiry notice.
   Dismiss/reopen contained neither code nor QR. No second phone enrolled and no
   camera scan was attempted.
+- Source commit/push4d487cf2fdd3613b1d098838cfa5a23134871b0b (40 files,
+  unrelated `headers.txt` excluded); local signed release preparation and
+  publication helper completed for0.4.0/code9.
+- Exact final signed APK installed with `adb install -r`; read-only signer and
+  saved Kodi Keystore decryption passed before/after, with receiver/Kodi setup
+  retained. Safe own-process service evidence progressed to
+  foreground=true/connected=true on the saved Philips target without a new code.
+  No verified MSX media was present, so media `verified=false` was expected.
+- Secure PIN blocked foreground UI after the final upgrade. Supported keyguard
+  dismissal could not dismiss it; no further attempts. Service-level restore
+  passed; foreground UI restore after unlock is not accepted yet.
+- Pages build/API and HTTPS install/feed/public APK checks completed: page/feed
+  HTTP200, feed exact signed-manifest equality, public APK exact size/SHA-256.
 - Documentation verification: SDK pin/hash verifier and whitespace/local-link
   checks; no secret codes, active media URLs or network addresses added.
 
@@ -99,8 +114,8 @@ ApplicationLauncher or ApplicationBasic server; this remains a hardware remote.
 - Physical MSX setup remains status0. Restricted preflights passed fixtures,
   but temporary diagnostics did not establish TV HTTP/TLS arrival. Do not loosen
   parsing or claim website playback/subtitle success based on Matter controls.
-- Actual phone camera scan, navigation/input/Off effects, final signed reinstall/
-  reconnect and another phone's enrollment remain pending.
+- Actual phone camera scan, navigation/input/Off effects, foreground UI restore
+  after the final signed upgrade and another phone's enrollment remain pending.
 - Recovery fixtures initially exposed stale40% volume from disconnected MSX
   after re-pairing to a no-speaker TV. Connected-target routing and explicit null
   volume/input fields fixed it; final54 browser and18 focused native passed.
@@ -122,16 +137,26 @@ ApplicationLauncher or ApplicationBasic server; this remains a hardware remote.
 
 ## Publication state and remaining questions
 
-At this handoff, HEAD056b6c9/public release and Pages serve0.3.1. Native0.4.0 is
-installed locally but source is uncommitted/unpublished. Rebuild the signed APK
-after committing final source; do not retain a precommit APK hash as the release
-identity. Signing credentials, pairing codes, fabric keys and active URLs stay
-private. Update this section after the final publication and phone acceptance.
+Public [releasev0.4.0](https://github.com/kiansheik/kodaklumaremote/releases/tag/v0.4.0)
+is non-draft, built from source4d487cf2fdd3613b1d098838cfa5a23134871b0b.
+The exact signed/installed/downloaded APK is9,631,440bytes, SHA-256
+`a3f03b098f739d7e4253a0716771cbe7e8a5d7cd1fcf4aa6be73e6d6d93766fa`.
+Version code9/minSdk24/ARM64 match the release metadata.
+
+Pages commitc542b9089cb27708d34478690de1b0625b314dc0 is built. The
+[HTTPS install page](https://kiansheik.io/kodaklumaremote/) returned200 and
+contains the Portuguese ARM64 compatibility text. Stable/no-cache HTTPS
+`update.json` returned200 and exactly matched the local signed0.4.0 manifest.
+Public GitHub APK HTTP200 download matched the exact installed size/hash.
+An initial feed read still served0.3.1 while Pages was building; final checks
+were performed after build completion. No publication or feed verification
+remains pending. Signing credentials, pairing codes, fabric keys and active URLs
+remain private; no precommit APK hash is used as the release identity.
 
 ## Suggested next prompt
 
-“Verify final signed reinstall/reconnect, camera/second-phone enrollment and
-phone navigation after the accepted manual pairing, restored speaker-volume
-proof and phone-originated additional-controller window,
-then commit/rebuild/publish0.4.0 with exact artifact verification. Keep MSX media
-receiver work and unresolved Kodi subtitles visible as separate acceptance.”
+“After the phone is unlocked, verify foreground UI reattachment without pairing
+again, then test camera/second-phone enrollment and supported phone navigation.
+Native0.4.0 is already published; preserve saved settings. Resume Philips media
+receiver work separately: MSX status0, video/subtitles, original Kodi cold-start
+subtitles and phone-off playback remain unresolved acceptance.”
