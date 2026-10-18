@@ -7,6 +7,13 @@
    dual-device remote are implemented; physical MSX setup still fails with
    status0. No TV HTTP/TLS request was established by the temporary Mac probe.
    Media codecs, subtitles and phone-off continuation need device acceptance.
+   JointSPACE now advertises browser activities on the actual TV; authenticated
+   launch of our standalone receiver may avoid MSX startup. PIN grant succeeded,
+   but browser200 left the user at Home with no receiver traffic; GET/hello and
+   playback are not yet established. API context labels did not match the screen.
+   A later exact-TV DIAL discovery did advertise an application base; one empty
+   Netflix POST returned201 then running, and the user confirmed visible launch.
+   This is not arbitrary media/subtitle delivery.
    See [MSX receiver](msx-receiver.md).
 2. Does frameXTV's existing native Cast control already satisfy the user in an
    ordinary uninstrumented Chrome session? Its code is present, discovery-gated.
@@ -37,19 +44,50 @@
    public MP4 and actual HLS/subtitles worked on version 21.2. Does built-in DLNA expose a usable
    MediaRenderer? Documented app interfaces are [here](receiver-apps.md), and
    manufacturer/commercial options are [here](luma-receiver-options.md).
-10. Does the0.4.0 phone restore foreground UI correctly after unlock, navigate
-    the TV, scan a code and enroll another phone through its transient QR window? Native
+10. Can the0.4.0 phone scan a code and enroll another phone through its transient
+    QR window, and do confirmed Off/input effects work? Native
     manual-code pairing completed with production trust enabled. Phone speaker
     volume1→2→1 was independently read back from the Mac, restoring the start.
     Mac pairing/inventory/Home status0 and an additional-controller window also
     passed. The phone also opened a TV-accepted additional-phone window; its
     code/QR cleared on dismiss/reopen. The final signed upgrade retained Kodi
     login and reached saved-target service-level connection without another
-    code; secure PIN prevented foreground UI acceptance. Second-phone enrollment,
-    navigation, power/input effects and camera scanning remain pending. No ContentLauncher or
+    code; subsequent user feedback confirms immediate TV recognition and visible
+    phone navigation after TV off/on. Second-phone enrollment, power/input
+    effects and camera scanning remain pending. No ContentLauncher or
     ApplicationLauncher appeared, so Matter does not establish website video or
     external-subtitle delivery on this firmware. See [Matter evidence](philips-matter.md)
     and [native phone handoff](session-handoffs/2026-10-18-native-matter-phone.md).
+11. Can the newly observed JointSPACEv6 browser activity open the Mac proof
+    receiver and sustain direct-source video/PT-BR? This uses separate Digest
+    pairing, not the existing Matter credentials. A fresh hidden-stdin PIN grant
+    succeeded and privately saved credentials. Browser200 was accepted without
+    visible launch or receiver TCP/assets/hello, while authenticated context
+    labels disagreed with Home. A single saved-URL browser retry after TV off/on
+    was again accepted with TCP/assets/hello0; the user confirms it did nothing
+    and remained Home. A context read had empty focus. One Matter Right from
+    the recent Netflix tile returned status0 and user-confirmed regular Netflix
+    focus. The user later positioned browser1Right/MSX2Right from the first tile.
+    A three-key Home batch reached HDMI1. Separate confirmed Home plus Right→
+    Select showed ambiguous “Editar speed Dial”; Back plus a browser request
+    returned to HDMI1, still receiver0. Named JointSPACE Home visibly returned
+    to Home. Right,700ms pause,Confirm were accepted, but their screen result is
+    unknown because the user left; all device work/questions stopped. Future
+    browser/MSX setup requires observed focus, with no assumed cause. A photo is not
+    required; use text feedback and do not infer focus from API results.
+    Fifteen Python protocol/Unicode fixtures and13 Node fixtures pass without real
+    device/media actions. The saved S1E2
+    source HEAD and public configuration returned403, so fresh capture is also
+    unresolved. Android JointSPACE/encrypted-credential/browser-handoff
+    integration follows only after this proof; published0.4.0 does not have it.
+    See [browser setup](session-handoffs/2026-10-18-philips-browser-setup.md).
+12. Can the physically confirmed DIAL route launch another supported receiver?
+    Exact-TV multicast discovery supplied an `Application-URL`; Netflix state
+    changed stopped→running after one empty POST201 and the user confirmed
+    visible Netflix launch. YouTube GET was403. No arbitrary app/browser URL
+    or subtitle payload is established; app IDs/endpoints must not be guessed.
+    See [TV evidence](philips-tv.md) and the
+    [current follow-up](session-handoffs/2026-10-18-philips-power-cycle-follow-up.md).
 
 Resolved: public reachability confirmed; same-origin embed + declared source
 found statically; existing-page CAF avoids an extension remote-SDK loader;

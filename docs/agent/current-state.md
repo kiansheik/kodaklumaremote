@@ -393,11 +393,115 @@ decryption passed before/after, with receiver/Kodi setup retained. Own-process
 service logs returned to foreground=true/connected=true on the saved Philips
 target without a new setup code. `verified=false` is expected with no verified
 MSX media. The phone's secure PIN blocked foreground UI inspection after this
-upgrade; service-level reconnection is established, foreground UI acceptance is
-not. No further lock-screen dismissal attempts were made.
+upgrade; at that point only service-level reconnection was established. No
+further lock-screen dismissal attempts were made. The user later confirmed the
+signed phone app immediately recognizes the TV and navigation visibly works
+after switching the TV off/on. This establishes actual saved-connection and
+navigation acceptance; it does not establish phone Off/input or media playback.
 
 GitHubv0.4.0 is public. Pagesc542b9089cb27708d34478690de1b0625b314dc0 is built;
 HTTPS install page returned200 with ARM64 compatibility text. HTTPS update.json
 returned200 and exactly matched the signed0.4.0 manifest (code9/minSdk24).
 Public GitHub APK download returned200 and matched the installed APK's size/hash.
 See the [native phone handoff](session-handoffs/2026-10-18-native-matter-phone.md).
+
+The user next explicitly authorized using the existing Matter connection to
+set up TV playback without more outdoor manual navigation. A fresh Mac Home
+command returned status0 (CASE57ms, descriptors14ms); it does not prove which
+screen has focus. Exact-TV SSDP still supplied no services, and the documented
+debug/screenshot routes on9222/7001 were unavailable in bounded checks.
+
+A separate Philips JointSPACE route is now observed: HTTP1925 `/1/system`
+and HTTPS1926 `/6/system` returned200 and identify API6.1/Linux. Advertised
+features include key/unicode input, text-entry context and browser activities,
+with Digest pairing/secured transport. Protected HTTP activity returned403;
+HTTPS context/activity/screen-state returned401 with a Digest challenge. This
+is distinct from Matter authentication. The first30-second PIN window expired;
+a fresh explicit request and hidden-stdin PIN grant then returned SUCCESS.
+Credentials are saved privately with mode0600; the PIN is not persisted.
+Authenticated context returned200, but its Skype/Options/NA labels disagreed
+with the user's visible Home screen, so it is not reliable focus evidence.
+Browser POST returned200 (`pageLoadVerified:false`), while the user still saw
+Home and our receiver recorded no TV TCP/assets/hello. Application enumeration
+was rejected; no undocumented application-launch payload was attempted.
+
+`scripts/philips-controller.py` passed15 offline fixtures. Its new stdin/hidden
+Unicode command follows maintained upstream
+`input/key` semantics and reports acceptance without claiming text was applied.
+Advertised text-entry context flags do not establish a field-replacement API.
+A separate Mac
+direct-browser proof (`scripts/msx-mac-proof.mjs`) reuses the existing receiver
+assets/channel with explicit private interface/TV peer, secret URL and separate
+loopback-only authenticated control. It passed13 loopback fixtures plus syntax
+checks. It serves no media/subtitle proxy and makes no source fetches. Its tests
+did not contact devices. Root subsequently started the temporary actual LAN
+listener; sanitized status is running=true/connected=false, assets0/hello0.
+The private launch configuration remains prepared. After the TV power cycle,
+one explicit saved-URL browser retry again returned
+`accepted:true/pageLoadVerified:false`; immediate TCP/assets/hello counts
+remained0. The user confirmed that retry did nothing and Home remained visible.
+A later context read reported `contextObserved:true,focus:{}`. The user
+identified a recent Netflix tile at the left edge of Home and said no photo
+was needed. Continue from that known starting tile using text feedback, while
+API context remains unreliable. Root sent one Matter Right from Netflix;
+endpoint1 returned SendKey status0 (CASE62ms/descriptors17ms). The user confirms
+this reached the regular Netflix tile; no Select or media was sent.
+The proposed browser route could avoid MSX
+startup setup; actual browser
+GET/hello, autoplay, video and PT-BR remain untested.
+These Mac tools are not integrated into the published0.4.0 APK.
+
+A subsequent exact-TV DIAL check found a separate direct app-launch route.
+Unicast search returned0; bounded standard multicast for DIAL/MediaRenderer,
+filtering the paired TV address, found one43PFG6910 descriptor with an
+`Application-URL` response header. The old discovery path discarded this
+header; empty XML services did not exclude DIAL. At the advertised base,
+YouTube GET403 and Netflix GET200/stopped preceded exactly one empty Netflix
+POST:201, then GET200/running. The user confirmed Netflix visibly opened.
+No Select/navigation accompanied this launch,
+and no arbitrary URL/media/subtitle delivery is established. The private
+advertised base remains under ignored mode0600 evidence. The read-only discovery
+script now preserves only a validated `dialAdvertised` boolean, requiring the
+descriptor's numeric private peer and no credentials/query/fragment. Eight
+discovery fixtures, syntax and whitespace checks passed. Root's live
+`node scripts/discover-tv.mjs --no-save` then returned one exact-model target,
+`dialAdvertised:true`, empty serviceTypes/AVTransport and zero errors, without
+app requests. No APK or phone feature changed.
+
+The user rearranged favorites so the browser is one Right and MSX two Rights
+from the initial Home tile. A Home→Right→Select batch unexpectedly reached
+HDMI1, as the user confirmed; its cause is unproven. Root then sent Home alone
+and waited: the user confirmed real Home with the first tile highlighted.
+Only then did Right→Select run (both status0, CASE49/55ms), showing “Editar speed
+Dial”. That screen remains ambiguous. One Back
+and another accepted JointSPACE browser request then returned to HDMI1, with
+receiver counters still0. The user then confirmed JointSPACE named Home
+visibly returned HDMI1→Home. JointSPACE Right, a700ms pause and Confirm were
+accepted, but the resulting screen is unknown because the user left before
+replying. All device work/questions stopped at that boundary; saved pairings
+and the temporary listener were preserved. No browser/MSX launch is established,
+and the cause of earlier outcomes remains unproven. A key acknowledgement alone
+cannot prove focus. No new phone feature or release was made.
+
+The saved S1E2 source returned403 to a bounded HEAD request. An initial egress
+approval was rejected; after offline provider inspection, the same-provider
+request was approved and its403 confirmed, without auth/redirect workarounds.
+Ordinary Chrome again blanked the episode page to about:blank; direct public
+configuration GET also returned403. No source bypass was attempted and a fresh
+usable source is unresolved. Two private Open-command fixtures are prepared
+offline for public and S1E2 playback (16 declared tracks, PT-BR preferred); this
+preparation made no requests and does not establish source reachability.
+No new TV playback/subtitle success is claimed.
+See the [browser setup handoff](session-handoffs/2026-10-18-philips-browser-setup.md).
+The latest [power-cycle and browser retry follow-up](session-handoffs/2026-10-18-philips-power-cycle-follow-up.md)
+records the new phone acceptance without a new app release.
+
+Release preparation: the user requested building/deploying the latest source.
+Android version is now0.4.1/code10, a maintenance build of the existing phone
+features. New Philips/DIAL work is desktop tooling, not phone integration.
+Focused release/deploy/discovery/receiver Node checks passed28/28 and Philips
+Python fixtures15/15. Initial loopback sandbox denials were resolved by running
+the fixtures with loopback permission. The first signing attempt selected an
+older Gradle8.11.1 cache; the project uses cached Gradle9.6.1. The existing
+production certificate matches. Final committed-source build and publication
+are tracked in the [maintenance release handoff](session-handoffs/2026-10-18-release-0.4.1.md).

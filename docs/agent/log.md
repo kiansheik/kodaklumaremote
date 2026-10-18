@@ -276,3 +276,79 @@
   HTTPS install/feed200 with exact signed manifest, and public APK200 matched
   installed size/hash. Camera, second-phone enrollment, phone key/Off/input and
   MSX media acceptance remain open. [Final handoff](session-handoffs/2026-10-18-native-matter-phone.md).
+- 2026-10-18 playback automation follow-up: user authorized existing Matter
+  controls; Home returned0 with57ms CASE/14ms descriptors. Bounded exact-TV
+  SSDP still exposed no services; documented9222/7001 debug routes unavailable.
+  JointSPACE API6.1/Linux system endpoints responded; protected activities/
+  context require Digest. First pair-request returned SUCCESS/PIN_REQUIRED,
+  timeout30seconds; four-digit PIN/grant pending, no browser launch yet.
+- 2026-10-18 Mac browser proof prepared: Philips Python CLI12 offline checks;
+  peer/capability-pinned Node receiver13 loopback checks and syntax passed.
+  Existing assets/channel reused, no media proxy/source fetch or actual LAN
+  listener by tests. Saved S1E2 HEAD403 confirmed after provider-scope review;
+  Chrome about:blank/public-config403 left fresh capture unresolved, with no
+  bypass. Browser/TV playback/PT-BR acceptance pending. [Handoff](session-handoffs/2026-10-18-philips-browser-setup.md).
+- 2026-10-18 temporary receiver ready: root started the peer-pinned Mac listener
+  and prepared a0600 private browser-launch URL config. Status running=true,
+  connected=false, asset/hello counts0. No browser/grant/playback yet. The first
+  JointSPACE30-second PIN window expired; await user readiness before another
+  explicit request. No auto-start/persistence is installed.
+- 2026-10-18 authenticated browser attempt: a fresh explicit JointSPACE request
+  and hidden-stdin PIN grant returned SUCCESS. Private0600 credentials are
+  saved, with no PIN persistence. Authenticated context200 reported labels that
+  disagreed with the user's visible Home; browser POST200 was accepted but Home
+  remained visible and the receiver recorded no TV TCP/assets/hello. Application
+  enumeration was rejected. A user photo is requested for feedback-based
+  navigation rather than inferring focus. The CLI adds proven stdin/hidden
+  Unicode input with no field-replacement claim; no new APK or playback proof.
+- 2026-10-18 Unicode CLI validation: all15 offline Python cases passed, plus
+  the existing13 receiver fixtures. Private public/S1E2 Open commands were
+  prepared offline (16 declared episode tracks, PT-BR preferred); no media or
+  TV request was sent. Navigation is paused for the requested Home photo.
+- 2026-10-18 TV power-cycle feedback: user confirms the signed phone app
+  immediately recognizes the TV and visible navigation works after TV off/on.
+  Home starts on Netflix at the left edge; user says no photo is needed, so
+  the photo blocker is removed in favor of text feedback from this known tile.
+  Root retried the saved JointSPACE browser URL once after that state change:
+  accepted=true/pageLoadVerified=false, receiver TCP/assets/hello still0.
+  User then confirmed it did nothing and remained Home. A read-only context had
+  empty focus; one Matter Right from Netflix returned endpoint1 status0
+  (CASE62ms/descriptors17ms). Highlighted app label pending; no Select/media
+  sent, and no new playback or phone release.
+  [Follow-up handoff](session-handoffs/2026-10-18-philips-power-cycle-follow-up.md).
+- 2026-10-18 DIAL route found: user identified the first tile as recent Netflix;
+  one Matter Right reached regular Netflix. Bounded unicast search0, then
+  standard DIAL/MediaRenderer multicast filtered to the paired TV found one
+  matching descriptor with `Application-URL`. Existing discovery drops that
+  header; empty XML services do not exclude DIAL. Advertised-base GET YouTube403,
+  GET Netflix200/stopped; one empty Netflix POST201, then GET200/running.
+  Visible app launch awaits user confirmation. No Select/navigation accompanied
+  the DIAL launch; no arbitrary media/subtitle payload, code change or APK release.
+- 2026-10-18 physical DIAL proof and focus correction: user confirmed Netflix
+  visibly opened. They arranged browser1Right/MSX2Right from the initial tile.
+  A Home→Right→Select batch reached HDMI1; cause unproven. Home alone then
+  returned status0 (CASE64ms/descriptors13ms), with real Home/first-tile focus
+  user-confirmed before Right→Select (CASE49/55ms,status0). Latest screen result
+  pending; no browser/MSX/media claim. Separate key acknowledgements from focus.
+- 2026-10-18 discovery and focus follow-up: read-only discovery now preserves
+  validated descriptor `dialAdvertised` only;8 fixtures/syntax/whitespace passed,
+  no app fetch/launch added. Right→Select showed ambiguous “Editar speed Dial”,
+  with its meaning unproven. One Back plus accepted browser request
+  returned to HDMI1; TV receiver counters remain0. Named JointSPACE Home was
+  accepted with visible effect pending. No browser/MSX claim or proven cause.
+- 2026-10-18 live discovery regression: `node scripts/discover-tv.mjs --no-save`
+  returned one exact43PFG6910 target, `dialAdvertised:true`, empty serviceTypes/
+  AVTransport and zero errors. No app endpoints were requested by the tool.
+- 2026-10-18 final user-away boundary: user confirmed JointSPACE named Home
+  visibly returned HDMI1→Home. Right,700ms pause,Confirm were both accepted;
+  resulting screen is unknown because the user left before replying. All
+  device work/questions stopped, retaining private pairings and the temporary
+  receiver. DIAL Netflix visible launch is proven; TV receiver TCP/assets/hello
+  remained0 throughout, with no media/subtitles or new phone feature/release.
+- 2026-10-18 requested maintenance release: version0.4.1/code10 and accurate
+  notes distinguish existing phone features from new desktop Philips/DIAL tools.
+  Release/deploy/discovery/receiver Node28 and Philips Python15 checks passed.
+  Loopback sandbox failures were environmental; permitted fixture runs passed.
+  Corrected an initial older-Gradle selection to cached9.6.1. Production signing
+  certificate matches. Committed-source build/publication verification follows
+  in the [release handoff](session-handoffs/2026-10-18-release-0.4.1.md).

@@ -33,7 +33,8 @@ Phone disconnection does not intentionally stop an already loaded player; the
 actual firmware still needs a phone-off test across buffering boundaries.
 
 Philips controls cover play/pause, stop, seek, subtitles and **player volume**.
-They do not control hardware speaker volume, TV power, navigation or app launch.
+This MSX transport does not control TV hardware; the separately paired Matter
+adapter in0.4.0 supplies supported speaker/navigation/confirmed-Off controls.
 LUMA keeps its existing projector controls. Notification/lock-screen actions
 follow the selected receiver, with revision/source guards against stale actions.
 
@@ -64,6 +65,45 @@ listener currently serves HTTP only. A forced-HTTPS TV context needs a different
 entry path; CORS headers cannot fix a TLS mismatch. The current physical failure
 has not been attributed to this policy. [Matter hardware control research](philips-matter.md) is separate and
 does not establish arbitrary video/subtitle playback.
+
+## Current direct-browser experiment
+
+The actual TV now advertises browser activities through its separate
+[JointSPACEv6 API](philips-jointspace.md). A fresh private Digest PIN grant
+succeeded. This authority is separate from the working Matter fabric. Browser
+POST returned200, but the user still saw Home and the receiver saw no TV traffic;
+the CLI correctly reports `pageLoadVerified:false`. Authenticated context labels
+did not match the screen, so they cannot guide blind focus/navigation.
+
+The temporary Mac proof in `scripts/msx-mac-proof.mjs` serves these same receiver
+assets/channel directly, potentially avoiding MSX's startup/secure-context
+restriction. It is peer/capability pinned, uses authenticated loopback control
+and never proxies media/subtitles. Thirteen loopback fixtures pass. Root has
+started the temporary listener. One saved-URL browser retry after the TV power
+cycle was accepted again, but TCP/asset/hello counts remain0 and the user
+confirms it left Home unchanged. A context read supplied empty focus. One
+Matter Right from the recent Netflix tile was accepted and reached the regular
+Netflix tile, as confirmed by the user.
+The user confirms phone reconnection/navigation
+and identifies Netflix as the leftmost default Home tile, so text feedback can
+guide the next step without requiring a photo. Proven Unicode key input is
+available; no text-entry context replacement schema was established.
+Separate exact-TV discovery now proves a DIAL application base. One empty
+Netflix launch returned201 then running, and the user confirmed visible launch.
+This app-specific route does not establish a browser/MSX launch,
+arbitrary media URL or subtitles; see [TV evidence](philips-tv.md).
+The user's favorites now place browser1Right/MSX2Right from the initial tile.
+After one Home batch unexpectedly reached HDMI1, a separate Home with user
+feedback restored first-tile focus. Right→Select showed ambiguous “Editar speed
+Dial”; one Back and a browser request then reached HDMI1, still receiver0.
+Named JointSPACE Home visibly returned HDMI1→Home, as the user confirmed.
+Right,700ms pause,Confirm were then accepted, but the screen result is unknown:
+the user left and all device work/questions stopped. Pairings/listener were
+preserved. No browser/MSX or media launch is claimed; the cause remains unproven.
+Browser loading,
+autoplay, fresh source, actual video/PT-BR and continuation still need acceptance;
+this is a proposed route, not a resolution of MSX status0 or a shipped0.4.0
+playback feature. [Current setup handoff](session-handoffs/2026-10-18-philips-browser-setup.md).
 
 See the [session handoff](session-handoffs/2026-10-18-dual-receiver-msx.md) for exact
 build/test/publication and device results. Code/fixtures establish behavior only

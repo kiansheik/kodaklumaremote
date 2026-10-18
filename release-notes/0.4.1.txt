@@ -1,0 +1,7 @@
+Maintenance build of the current LUMA/Kodi and Philips Matter remote, signed with the existing production certificate for normal in-app updates.
+
+The repository now includes desktop Philips local-control and DIAL discovery tools. Direct Netflix launch was confirmed on the test TV; these desktop tools are not yet integrated into the phone app.
+
+Philips browser/Media Station X video and subtitle setup remains experimental. This release does not add generic TV casting.
+
+Requires 64-bit ARM Android 7 or newer.

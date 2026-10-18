@@ -53,8 +53,10 @@ confirming normal Home/YouTube mode, reached the exact43PFG6910/78 and read one
 device description without errors. That description exposed no recognized
 service entries or AVTransport actions. No generic DLNA playback path is thereby
 established; do not infer that every mode/firmware lacks DLNA. Protocol of the
-SSDP reply was not retained in sanitized metadata, so DIAL-only remains an
-inference. See E12 in [experiments](experiments.md).
+SSDP reply was not retained in sanitized metadata, so that initial probe did
+not establish DIAL. A later exact-TV check below now establishes its app-launch
+protocol; empty XML service entries did not exclude it. See E12 in
+[experiments](experiments.md) for the earlier observation.
 
 1. In Chrome's native Cast picker, see whether the powered-on TV is discovered
    on the same network. Record the picker result separately from extension
@@ -80,6 +82,27 @@ generic media loading or Chrome tab mirroring. Chromium's
 describes that status as compatibility with particular video websites. DIAL or
 an app-specific receiver is a plausible explanation; the protocol was not
 captured or proven by the picker text.
+
+Later, a bounded unicast DIAL search returned0. Standard multicast searches for
+DIAL and MediaRenderer, restricted to the paired TV address, returned one
+descriptor matching43PFG6910. Its response advertised an `Application-URL`.
+The old `discover-tv.mjs` retained descriptor XML but discarded this header,
+so its empty service array was insufficient to exclude DIAL. It now reports
+only a validated `dialAdvertised` boolean: HTTP(S), same numeric private
+descriptor peer, no credentials/query/fragment; an advertised different port
+is allowed. Eight offline discovery fixtures plus syntax/whitespace checks
+passed. A subsequent live `node scripts/discover-tv.mjs --no-save` returned one
+exact-model target, `dialAdvertised:true`, empty serviceTypes/AVTransport and
+zero errors. This read-only tool fetches no app endpoints and launches nothing.
+
+At that advertised application base, read-only YouTube GET returned403 and
+Netflix GET returned200/stopped. Root sent exactly one empty POST to the
+advertised Netflix endpoint, with no Select or further navigation: launch201,
+then GET200/running. The user confirmed Netflix visibly opened.
+This proves DIAL endpoint discovery/state/launch acceptance, not arbitrary URL
+playback, app-name enumeration or subtitle delivery. No app
+names or endpoint bases were guessed. See the
+[current follow-up](session-handoffs/2026-10-18-philips-power-cycle-follow-up.md).
 
 The user also reports successful Samsung-phone connection after entering the
 TV's `modo de espelhamento`, while normal Chromecast does not see that mode.
@@ -128,6 +151,7 @@ success does not establish AirPlay support either.
 | --- | --- | --- |
 | Google Cast media receiver | Yes, with receiver-accessible source and suitable receiver lifecycle | Generic route disabled; YouTube route works; no generic media acceptance yet |
 | UPnP/DLNA MediaRenderer | Yes, if the TV fetches an origin URL itself | Exact-model description received in normal mode; no recognized AVTransport services/actions advertised |
+| DIAL app launch | App-specific; does not establish arbitrary media delivery | Advertised base discovered; Netflix201/running and visible launch user-confirmed |
 | Miracast / Smart View mirror | No; powered sender supplies ongoing video/audio stream | User reports Samsung mirror works |
 | Independent TV browser/receiver app | Potentially; requires compatible TV player and independent media/auth access | Not tested |
 

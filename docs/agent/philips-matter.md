@@ -103,11 +103,13 @@ step. Phone Volume+1→2 and Volume−2→1 were independently checked by Mac re
 the starting level was restored. Actual **Add another phone** opened a
 TV-accepted enhanced window, displaying a fresh manual code, pairing QR and
 expiry notice. Dismiss/reopen cleared the code and QR. No second phone was
-enrolled. Home/D-pad/Power controls are enabled, but phone navigation effects,
-Off/input writes, camera scanning and second-phone enrollment remain pending.
+enrolled. The user subsequently confirmed the signed phone app immediately
+recognizes the TV and visibly navigates after TV off/on. Off/input writes,
+camera scanning and second-phone enrollment remain pending.
 The final signed upgrade retained the signer/Kodi login and reconnected the
 saved Philips target at service level without another code. The secure PIN
-blocked foreground UI inspection after upgrade; that UI acceptance is separate.
+initially blocked foreground UI inspection after upgrade; the later user report
+supplies actual reconnection/navigation acceptance without a new app release.
 
 Final review adds a separate confirmed **TV unavailable? Forget on this phone**
 action for a reset/unreachable TV. It clears this phone's saved TV node/cache,

@@ -37,6 +37,21 @@ export function localDescriptionUrl(value, base) {
   } catch { return null; }
 }
 
+export function localDialUrl(value, descriptorLocation) {
+  try {
+    if (typeof value !== 'string' || !value || value.length > 2048 || /[\u0000-\u0020\u007f\\?#]/.test(value)) return null;
+    const descriptor = localDescriptionUrl(descriptorLocation);
+    const url = new URL(value);
+    const authority = value.match(/^[a-z][a-z0-9+.-]*:\/\/([^/]*)/i)?.[1];
+    const host = url.hostname.replace(/^\[|\]$/g, '');
+    if (!descriptor || !['http:', 'https:'].includes(url.protocol) || !isPrivateAddress(host)
+        || url.hostname !== descriptor.hostname || !authority || authority.includes('@')
+        || url.username || url.password || url.search || url.hash || url.port === '0') return null;
+    // DIAL commonly advertises a different port from its SSDP descriptor.
+    return url;
+  } catch { return null; }
+}
+
 function xmlBlocks(xml, name) {
   const blocks = [];
   let cursor = 0, depth = 0, contentStart = 0;
@@ -92,8 +107,8 @@ export function transportActions(xml) {
   return [...new Set(xmlBlocks(xml, 'action').map(block => xmlText(block, 'name')).filter(name => ACTIONS.has(name)))].sort();
 }
 
-async function fetchDescription(url, signal) {
-  const response = await fetch(url, {
+async function fetchDescription(url, signal, fetchImpl = fetch) {
+  const response = await fetchImpl(url, {
     redirect: 'manual', credentials: 'omit', signal,
     headers: { Accept: 'application/xml, text/xml' },
   });
@@ -110,7 +125,35 @@ async function fetchDescription(url, signal) {
     if (size > MAX_BYTES) throw new Error('Description too large');
     chunks.push(chunk);
   }
-  return safeXml(Buffer.concat(chunks).toString('utf8'));
+  return { xml: safeXml(Buffer.concat(chunks).toString('utf8')), applicationUrl: response.headers.get('application-url') };
+}
+
+export async function inspectTargetDescription(location, signal, fetchImpl = fetch) {
+  const descriptorUrl = localDescriptionUrl(location);
+  if (!descriptorUrl) throw new Error('Description refused');
+  const { xml, applicationUrl } = await fetchDescription(descriptorUrl, signal, fetchImpl);
+  const target = targetDescription(xml);
+  if (!target) return { target: null, descriptionErrors: 0 };
+  const safeTarget = {
+    model: target.model, manufacturer: target.manufacturer,
+    serviceTypes: [...new Set(target.services.map(service => service.type))].sort(),
+    avTransportActions: [], avTransportDescriptionRead: false,
+    dialAdvertised: localDialUrl(applicationUrl, descriptorUrl) !== null,
+  };
+  let descriptionErrors = 0;
+  for (const service of target.services.slice(0, 12)) {
+    if (!/:AVTransport:\d+$/.test(service.type)) continue;
+    // URLBase may change the path, but must keep the same origin.
+    const base = localDescriptionUrl(xmlText(xml, 'URLBase'), descriptorUrl) || descriptorUrl;
+    const scpd = localDescriptionUrl(service.scpd, base);
+    if (!scpd || !service.scpd) continue;
+    try {
+      const description = await fetchDescription(scpd, signal, fetchImpl);
+      safeTarget.avTransportActions = transportActions(description.xml);
+      safeTarget.avTransportDescriptionRead = true;
+    } catch { descriptionErrors++; }
+  }
+  return { target: safeTarget, descriptionErrors };
 }
 
 async function discoverLocations(interfaces, report) {
@@ -168,27 +211,11 @@ export async function discoverTv({ interfaceName = process.env.TV_DISCOVERY_INTE
   for (const location of locations) {
     if (signal.aborted) break;
     try {
-      const xml = await fetchDescription(location, signal);
+      const description = await inspectTargetDescription(location, signal);
       report.descriptionCount++;
-      const target = targetDescription(xml);
-      if (!target) { report.nonTargetCount++; continue; }
-      const safeTarget = {
-        model: target.model, manufacturer: target.manufacturer,
-        serviceTypes: [...new Set(target.services.map(service => service.type))].sort(),
-        avTransportActions: [], avTransportDescriptionRead: false,
-      };
-      for (const service of target.services.slice(0, 12)) {
-        if (!/:AVTransport:\d+$/.test(service.type)) continue;
-        // URLBase may change the path, but must keep the same origin.
-        const base = localDescriptionUrl(xmlText(xml, 'URLBase'), location) || new URL(location);
-        const scpd = localDescriptionUrl(service.scpd, base);
-        if (!scpd || !service.scpd) continue;
-        try {
-          safeTarget.avTransportActions = transportActions(await fetchDescription(scpd, signal));
-          safeTarget.avTransportDescriptionRead = true;
-        } catch { report.descriptionErrors++; }
-      }
-      report.targets.push(safeTarget);
+      if (!description.target) { report.nonTargetCount++; continue; }
+      report.descriptionErrors += description.descriptionErrors;
+      report.targets.push(description.target);
     } catch { report.descriptionErrors++; }
   }
   return report;

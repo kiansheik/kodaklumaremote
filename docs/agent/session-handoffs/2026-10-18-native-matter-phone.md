@@ -89,7 +89,8 @@ Across the team:
   No verified MSX media was present, so media `verified=false` was expected.
 - Secure PIN blocked foreground UI after the final upgrade. Supported keyguard
   dismissal could not dismiss it; no further attempts. Service-level restore
-  passed; foreground UI restore after unlock is not accepted yet.
+  passed. Later user feedback confirms the signed phone app immediately finds
+  the TV and visibly navigates after TV off/on; no new APK was needed.
 - Pages build/API and HTTPS install/feed/public APK checks completed: page/feed
   HTTP200, feed exact signed-manifest equality, public APK exact size/SHA-256.
 - Documentation verification: SDK pin/hash verifier and whitespace/local-link
@@ -114,8 +115,9 @@ ApplicationLauncher or ApplicationBasic server; this remains a hardware remote.
 - Physical MSX setup remains status0. Restricted preflights passed fixtures,
   but temporary diagnostics did not establish TV HTTP/TLS arrival. Do not loosen
   parsing or claim website playback/subtitle success based on Matter controls.
-- Actual phone camera scan, navigation/input/Off effects, foreground UI restore
-  after the final signed upgrade and another phone's enrollment remain pending.
+- Actual phone camera scan, input/Off effects and another phone's enrollment
+  remain pending. Reconnection and visible navigation after TV off/on are now
+  user-confirmed; see the [follow-up](2026-10-18-philips-power-cycle-follow-up.md).
 - Recovery fixtures initially exposed stale40% volume from disconnected MSX
   after re-pairing to a no-speaker TV. Connected-target routing and explicit null
   volume/input fields fixed it; final54 browser and18 focused native passed.
@@ -155,8 +157,8 @@ remain private; no precommit APK hash is used as the release identity.
 
 ## Suggested next prompt
 
-“After the phone is unlocked, verify foreground UI reattachment without pairing
-again, then test camera/second-phone enrollment and supported phone navigation.
+“Phone reconnection and visible navigation after TV off/on are confirmed.
+Camera/second-phone enrollment and Off/input effects remain separate tests.
 Native0.4.0 is already published; preserve saved settings. Resume Philips media
 receiver work separately: MSX status0, video/subtitles, original Kodi cold-start
 subtitles and phone-off playback remain unresolved acceptance.”

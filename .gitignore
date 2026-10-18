@@ -9,3 +9,5 @@ dist/
 *.m4s
 *.webm
 .DS_Store
+__pycache__/
+*.py[cod]

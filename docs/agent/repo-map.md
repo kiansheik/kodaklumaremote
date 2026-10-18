@@ -23,14 +23,30 @@
 - `tests/manual-chromecast.md`: hardware acceptance checklist and evidence table.
 - `scripts/discover-tv.mjs`: bounded read-only SSDP/descriptor probe for the
   exact Philips TV; no playback controls/media/port scanning. Companion parser
-  and output/URL-boundary tests: `tests/discovery.test.mjs`.
+  and output/URL-boundary tests: `tests/discovery.test.mjs` (8 fixtures). It now
+  preserves the descriptor `Application-URL` only as validated `dialAdvertised`,
+  never the raw base, and makes no app requests. Empty XML service entries do
+  not exclude DIAL; actual Netflix launch is separately user-confirmed.
 - `docs/agent/{philips-tv,mobile-target}.md`: actual TV evidence and final
   phone-powered-off retrieval requirement; physical mobile acceptance pending.
 - `docs/agent/philips-matter.md`: paired Philips endpoint inventory, accepted Home
-  and speaker-volume readback; phone acceptance and URL/subtitle boundaries.
+  and speaker-volume readback; user-confirmed phone reconnect/navigation after
+  TV power cycle, plus URL/subtitle boundaries.
 - `tools/matter-controller/`: separate pinned Matter.js0.17.9 Mac commissioner,
   sanitized inventory, explicit keys/volume/window and cached private-IP hint.
   Private fabric and pairing-window artifacts stay under ignored `.local/`.
+- `scripts/philips-controller.py`, `tests/test_philips_controller.py`: Python
+  standard-library JointSPACEv6 pairing/Digest client, sanitized context and
+  explicit browser/key and stdin-only Unicode requests. This authority is
+  separate from Matter. Actual PIN grant succeeded; browser200 did not produce
+  a visible launch or receiver traffic, and context labels were inconsistent.
+  See [protocol and acceptance boundaries](philips-jointspace.md).
+- `scripts/msx-mac-proof.mjs`, `tests/msx-mac-proof.test.mjs`: isolated Mac
+  direct-browser receiver proof reusing `src/msx/` assets. Explicit private
+  interface/TV peer, secret asset/session path, separate authenticated loopback
+  status/stdin commands and observed ACKs; no media proxy. Import starts no
+  listener. Private connection details remain ignored; physical browser/media
+  acceptance is tracked in the [setup handoff](session-handoffs/2026-10-18-philips-browser-setup.md).
 - `docs/agent/{luma-receiver-options,receiver-apps}.md`: manufacturer DLNA claims,
   existing Android receiver apps, Kodi/VLC control interfaces and proposed tests;
   Kodi public/actual HLS and Portuguese subtitle acceptance is in `tests/manual-kodi.md`.
