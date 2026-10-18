@@ -25,6 +25,141 @@ test('actual MV3 MAIN-world script uses page CAF and inserts one accessible cont
   await expect(host(page)).toHaveCount(1);
   expect(await page.evaluate(()=>window.castMock.calls)).toEqual([]);
 });
+test('copy video link reads declared HLS behind a blob without requiring Cast SDK',async({page})=>{
+  await open(page);
+  await page.evaluate(()=>{
+    window.copiedLinks=[];
+    Object.defineProperty(navigator,'clipboard',{value:{writeText:async value=>window.copiedLinks.push(value)},configurable:true});
+    delete window.cast;
+    const video=document.querySelector('video');
+    video.src='blob:local-fixture';
+    Object.defineProperty(video,'currentSrc',{value:'blob:local-fixture',configurable:true});
+    const source=document.createElement('source');source.src='/authorized.m3u8?token=fixture';source.type='application/vnd.apple.mpegurl';video.append(source);
+  });
+  expect(await page.evaluate(()=>window.copiedLinks)).toEqual([]);
+  await host(page).getByRole('button',{name:'Copy video link',exact:true}).click();
+  await expect(host(page).getByRole('status')).toHaveText('HLS video link copied.');
+  expect(await page.evaluate(()=>window.copiedLinks)).toEqual(['http://127.0.0.1:4173/authorized.m3u8?token=fixture']);
+  expect(await page.evaluate(()=>window.castMock.calls)).toEqual([]);
+  await expect(host(page)).not.toContainText('token=fixture');
+});
+test('copy video link remains available after Cast discovery fails',async({page})=>{
+  await open(page);
+  await page.evaluate(()=>{
+    window.castMock.sessionError='receiver_unavailable';
+    window.copiedLinks=[];
+    Object.defineProperty(navigator,'clipboard',{value:{writeText:async value=>window.copiedLinks.push(value)},configurable:true});
+  });
+  await host(page).getByRole('button',{name:'Cast video',exact:true}).click();
+  await expect(host(page).getByRole('status')).toContainText('No compatible Cast receiver');
+  await host(page).getByRole('button',{name:'Copy video link',exact:true}).click();
+  await expect(host(page).getByRole('status')).toHaveText('MP4 video link copied.');
+  expect(await page.evaluate(()=>window.copiedLinks.length)).toBe(1);
+  expect(await page.evaluate(()=>window.castMock.calls.some(x=>x[0]==='load'))).toBe(false);
+});
+test('copy rejects encrypted and bare blob sources without writing the clipboard',async({page})=>{
+  await open(page);
+  await page.evaluate(()=>{
+    window.copiedLinks=[];
+    Object.defineProperty(navigator,'clipboard',{value:{writeText:async value=>window.copiedLinks.push(value)},configurable:true});
+    Object.defineProperty(document.querySelector('video'),'mediaKeys',{value:{},configurable:true});
+  });
+  await host(page).getByRole('button',{name:'Copy video link',exact:true}).click();
+  await expect(host(page).getByRole('status')).toContainText('Encrypted playback');
+  await page.evaluate(()=>{
+    const video=document.querySelector('video');delete video.mediaKeys;
+    video.src='blob:local-fixture';
+    Object.defineProperty(video,'currentSrc',{value:'blob:local-fixture',configurable:true});
+  });
+  await host(page).getByRole('button',{name:'Copy video link',exact:true}).click();
+  await expect(host(page).getByRole('status')).toContainText('does not expose a supported direct media URL');
+  expect(await page.evaluate(()=>window.copiedLinks)).toEqual([]);
+});
+test('clipboard failure is sanitized and can be retried',async({page})=>{
+  await open(page);
+  await page.evaluate(()=>Object.defineProperty(navigator,'clipboard',{value:{writeText:async()=>{throw new Error('private signed URL');}},configurable:true}));
+  await host(page).getByRole('button',{name:'Copy video link',exact:true}).click();
+  await expect(host(page).getByRole('status')).toContainText('Allow clipboard access');
+  await expect(host(page)).not.toContainText('private signed URL');
+  await expect(host(page).getByRole('button',{name:'Copy video link',exact:true})).toBeEnabled();
+});
+test('pending clipboard completion does not overwrite a new episode status',async({page})=>{
+  await open(page);
+  await page.evaluate(()=>Object.defineProperty(navigator,'clipboard',{value:{writeText:()=>new Promise(resolve=>window.finishCopy=resolve)},configurable:true}));
+  await host(page).getByRole('button',{name:'Copy video link',exact:true}).click();
+  await page.evaluate(()=>{history.pushState({},'','/watch/fixture/1/2');document.querySelector('video').src='/episode2.mp4';});
+  await expect(host(page).getByRole('status')).toBeHidden();
+  await page.evaluate(()=>window.finishCopy());
+  await expect(host(page).getByRole('button',{name:'Copy video link',exact:true})).toBeEnabled();
+  await expect(host(page).getByRole('status')).toBeHidden();
+});
+test('copy subtitle list includes all validated languages and metadata regardless of active mode without Cast',async({page})=>{
+  await open(page);
+  await page.evaluate(()=>{
+    delete window.cast;
+    window.copiedLinks=[];
+    Object.defineProperty(navigator,'clipboard',{value:{writeText:async value=>window.copiedLinks.push(value)},configurable:true});
+    const video=document.querySelector('video');
+    const subtitle=document.createElement('track');
+    subtitle.kind='subtitles';subtitle.src='/portuguese.vtt?token=fixture';subtitle.srclang='pt';subtitle.label='Português';
+    video.append(subtitle);subtitle.track.mode='hidden';
+    const rejected=document.createElement('track');rejected.src='/unsupported.srt';video.append(rejected);
+  });
+  expect(await page.evaluate(()=>window.copiedLinks)).toEqual([]);
+  await host(page).getByRole('button',{name:'Copy subtitle list',exact:true}).click();
+  await expect(host(page).getByRole('status')).toHaveText('2 subtitle links copied.');
+  const copied=await page.evaluate(()=>JSON.parse(window.copiedLinks[0]));
+  expect(copied.tracks).toHaveLength(2);
+  expect(copied.tracks[0]).toMatchObject({id:1,url:'http://127.0.0.1:4173/tests/fixtures/en.vtt',contentType:'text/vtt',language:'en',label:'English'});
+  expect(copied.tracks[1]).toEqual({id:2,url:'http://127.0.0.1:4173/portuguese.vtt?token=fixture',contentType:'text/vtt',language:'pt',label:'Português',active:false});
+  expect(await page.evaluate(()=>window.castMock.calls)).toEqual([]);
+  await expect(host(page)).not.toContainText('token=fixture');
+});
+test('copy subtitle list rejects unsupported subtitle sources and missing tracks',async({page})=>{
+  await open(page);
+  await page.evaluate(()=>{
+    window.copiedLinks=[];
+    Object.defineProperty(navigator,'clipboard',{value:{writeText:async value=>window.copiedLinks.push(value)},configurable:true});
+    const track=document.querySelector('track');track.src='/unsupported.srt';track.track.mode='showing';
+    const blob=document.createElement('track');blob.src='blob:subtitle-fixture';document.querySelector('video').append(blob);blob.track.mode='showing';
+  });
+  await host(page).getByRole('button',{name:'Copy subtitle list',exact:true}).click();
+  await expect(host(page).getByRole('status')).toHaveText('No supported subtitle link is exposed by this player.');
+  await page.evaluate(()=>document.querySelectorAll('track').forEach(track=>track.remove()));
+  await host(page).getByRole('button',{name:'Copy subtitle list',exact:true}).click();
+  await expect(host(page).getByRole('status')).toHaveText('No supported subtitle link is exposed by this player.');
+  expect(await page.evaluate(()=>window.copiedLinks)).toEqual([]);
+});
+test('copy subtitle list rejects encrypted media and sanitizes clipboard failure',async({page})=>{
+  await open(page);
+  await page.evaluate(()=>{
+    window.copyCount=0;
+    Object.defineProperty(navigator,'clipboard',{value:{writeText:async()=>{window.copyCount++;throw new Error('private subtitle URL');}},configurable:true});
+    document.querySelector('track').track.mode='showing';
+    Object.defineProperty(document.querySelector('video'),'mediaKeys',{value:{},configurable:true});
+  });
+  await host(page).getByRole('button',{name:'Copy subtitle list',exact:true}).click();
+  await expect(host(page).getByRole('status')).toContainText('Encrypted playback');
+  expect(await page.evaluate(()=>window.copyCount)).toBe(0);
+  await page.evaluate(()=>{delete document.querySelector('video').mediaKeys;});
+  await host(page).getByRole('button',{name:'Copy subtitle list',exact:true}).click();
+  await expect(host(page).getByRole('status')).toHaveText('Could not copy the subtitle list. Allow clipboard access for this page, then try again.');
+  await expect(host(page)).not.toContainText('private subtitle URL');
+  await expect(host(page).getByRole('button',{name:'Copy subtitle list',exact:true})).toBeEnabled();
+});
+test('pending subtitle list copy does not overwrite the next episode status',async({page})=>{
+  await open(page);
+  await page.evaluate(()=>{
+    document.querySelector('track').track.mode='showing';
+    Object.defineProperty(navigator,'clipboard',{value:{writeText:()=>new Promise(resolve=>window.finishCopy=resolve)},configurable:true});
+  });
+  await host(page).getByRole('button',{name:'Copy subtitle list',exact:true}).click();
+  await page.evaluate(()=>{history.pushState({},'','/watch/fixture/1/2');document.querySelector('video').src='/episode2.mp4';});
+  await expect(host(page).getByRole('status')).toBeHidden();
+  await page.evaluate(()=>window.finishCopy());
+  await expect(host(page).getByRole('button',{name:'Copy subtitle list',exact:true})).toBeEnabled();
+  await expect(host(page).getByRole('status')).toBeHidden();
+});
 test('inserts for a dynamically added player and removes detached controls',async({page})=>{
   await open(page);
   await page.evaluate(()=>document.querySelector('video').remove());
@@ -78,12 +213,25 @@ test('missing SDK and unsupported blob fail clearly without fetching SDK',async(
   await expect(host(page).getByRole('status')).toContainText('does not expose a supported direct media URL');
   expect(scripts.some(url=>url.includes('gstatic'))).toBe(false);
 });
-test('preserves visible site Cast button and returns when it disappears',async({page})=>{
+test('preserves visible site Cast button while keeping video and subtitle copying available',async({page})=>{
   await open(page);
-  await page.evaluate(()=>{const native=document.createElement('button');native.setAttribute('aria-label','Cast to TV / Chromecast');native.textContent='Native Cast';document.body.append(native);});
-  await expect(host(page)).toBeHidden();
+  await page.evaluate(()=>{
+    window.copiedLinks=[];
+    Object.defineProperty(navigator,'clipboard',{value:{writeText:async value=>window.copiedLinks.push(value)},configurable:true});
+    const native=document.createElement('button');native.setAttribute('aria-label','Cast to TV / Chromecast');native.textContent='Native Cast';document.body.append(native);
+  });
+  await expect(host(page).getByRole('button',{name:'Cast video',exact:true})).toBeHidden();
+  await expect(page.getByRole('button',{name:'Cast to TV / Chromecast',exact:true})).toBeVisible();
+  await host(page).getByRole('button',{name:'Copy video link',exact:true}).click();
+  await expect(host(page).getByRole('status')).toHaveText('MP4 video link copied.');
+  await host(page).getByRole('button',{name:'Copy subtitle list',exact:true}).click();
+  await expect(host(page).getByRole('status')).toHaveText('1 subtitle links copied.');
+  const copied=await page.evaluate(()=>window.copiedLinks);
+  expect(copied[0]).toBe('http://127.0.0.1:4173/test-video.mp4');
+  expect(JSON.parse(copied[1]).tracks).toHaveLength(1);
+  expect(await page.evaluate(()=>window.castMock.calls)).toEqual([]);
   await page.getByRole('button',{name:'Cast to TV / Chromecast',exact:true}).evaluate(el=>el.remove());
-  await expect(host(page)).toBeVisible();
+  await expect(host(page).getByRole('button',{name:'Cast video',exact:true})).toBeVisible();
 });
 test('same-origin embed frame gets its own player integration',async({page})=>{
   await page.goto('/watch/fixture/1/1');

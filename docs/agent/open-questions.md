@@ -5,12 +5,15 @@
    enables it for YouTube but disables it for frameXTV/general tab casting.
 2. Does frameXTV's existing native Cast control already satisfy the user in an
    ordinary uninstrumented Chrome session? Its code is present, discovery-gated.
-3. Can that receiver fetch and decode the target's authorized source and tracks
-   independently? Actual codecs, expiry, receiver CORS/auth and DRM unknown.
+3. Kodi 21.2 fetched/decoded the actual HLS and Portuguese subtitles. Can genuine
+   Google Cast receivers accept the same source? Long-term expiry/auth renewal,
+   alternate source compatibility and codec details remain unknown.
 4. Which enabled disable-devtool detector causes automated blanking? Manual
    DevTools-open and Anti Anti Debug fingerprinting reports not reproduced.
-5. Are exposed subtitle tracks compatible on the actual receiver? Extension
-   supports HTTP WebVTT, not blob/SRT/internal HLS conversion or audio selection.
+5. All 19 declared subtitles are registered in Kodi; Portuguese rendering and
+   dialogue timing are user-confirmed. Other languages are not render-tested.
+   Can batch import/metadata binding become a normal UI flow? Current Mac UI adds
+   one link at a time; the batch test used the local API. No audio selector.
 6. Are cross-origin backup players needed? They are outside current host scope.
 7. Does wrapper/full-video fullscreen and BFCache work on real Chrome? Wrapper
    handling and simulated BFCache are covered; native video fullscreen cannot
@@ -19,7 +22,7 @@
    Which direct receiver transport will be supported by the Android controller?
    Miracast-only targets need another player and cannot satisfy this alone.
 9. Which Kodak LUMA model/Android/CPU does the user own? Kodi is installed and
-   public-media playback worked on version 21.2. Does built-in DLNA expose a usable
+   public MP4 and actual HLS/subtitles worked on version 21.2. Does built-in DLNA expose a usable
    MediaRenderer? Documented app interfaces are [here](receiver-apps.md), and
    manufacturer/commercial options are [here](luma-receiver-options.md).
 
@@ -31,4 +34,8 @@ YouTube app-specific playback physically confirmed by user. Generic Cast and
 phone-off target-media playback are still unverified.
 Kodi public MP4 playback on LUMA is now physically confirmed, with remote
 pause/resume/seek and bounded continuation after the Mac controller stopped.
-Phone sender, full phone shutdown and intended source integration remain open.
+Actual frameXTV HLS picture/sound and Portuguese subtitles are now physically
+confirmed on LUMA Kodi. Phone sender and full phone shutdown remain open.
+Why did the rapid pause/seek60/resume sequence stop this HLS? MP4 seek worked;
+target HLS seek reliability has not passed. Retest deliberately with settled
+commands before changing transport or introducing a relay.

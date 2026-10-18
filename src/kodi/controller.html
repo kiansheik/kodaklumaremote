@@ -19,13 +19,15 @@
     li + li { margin-top: 8px; }
     .fields { display: grid; grid-template-columns: minmax(0, 2fr) minmax(100px, 1fr); gap: 14px; }
     label { display: block; font-weight: 600; font-size: .95rem; }
-    input { display: block; width: 100%; margin-top: 6px; border: 1px solid #839a98; border-radius: 7px; padding: 11px 12px; font: inherit; color: inherit; background: #fff; }
+    input, select { display: block; width: 100%; margin-top: 6px; border: 1px solid #839a98; border-radius: 7px; padding: 11px 12px; font: inherit; color: inherit; background: #fff; }
+    #source-form { border-top: 1px solid #d4dfdc; margin-top: 22px; padding-top: 20px; }
     button { padding: 11px 16px; border: 1px solid #53726d; border-radius: 8px; font: inherit; font-weight: 600; color: #173139; background: #f6f9f7; cursor: pointer; }
     button.primary { background: #12644f; color: #fff; border-color: #12644f; }
     button:disabled { opacity: .5; cursor: default; }
     :focus-visible { outline: 3px solid #d88121; outline-offset: 3px; }
     .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; margin-top: 16px; }
     .seek-label { max-width: 180px; }
+    .track-label { flex: 1 1 240px; min-width: 0; }
     .hint { font-size: .9rem; color: #435c62; margin-top: 12px; }
     #message { min-height: 1.5em; margin: 16px 0 0; font-weight: 600; overflow-wrap: anywhere; }
     #message[data-error="true"] { color: #a02e1f; }
@@ -36,7 +38,7 @@
 <body>
   <main>
     <h1>Kodi receiver test</h1>
-    <p class="intro">Send a public Big Buck Bunny video to Kodi on your projector. The projector retrieves and plays the video itself.</p>
+    <p class="intro">Send the public Big Buck Bunny sample or a direct video link to Kodi. The projector retrieves and plays the video itself.</p>
 
     <section class="card" aria-labelledby="setup-heading">
       <h2 id="setup-heading">Prepare the projector</h2>
@@ -70,7 +72,7 @@
     </section>
 
     <section class="card" aria-labelledby="playback-heading">
-      <h2 id="playback-heading">Public video test</h2>
+      <h2 id="playback-heading">Playback</h2>
       <div class="row">
         <button id="play" class="primary" type="button" data-action="play" disabled>Play Big Buck Bunny</button>
         <button type="button" data-action="status" disabled>Refresh status</button>
@@ -86,27 +88,80 @@
         </label>
         <button id="seek" type="submit" disabled>Seek</button>
       </form>
+      <form id="source-form" autocomplete="off">
+        <div class="fields">
+          <label>Video link
+            <input id="source-url" type="url" required disabled autocomplete="off" spellcheck="false" autocapitalize="off" aria-describedby="source-hint">
+          </label>
+          <div>
+            <label for="source-type">Video format</label>
+            <select id="source-type" disabled>
+              <option value="application/vnd.apple.mpegurl">HLS</option>
+              <option value="video/mp4">MP4</option>
+              <option value="video/webm">WebM</option>
+              <option value="application/dash+xml">DASH</option>
+            </select>
+          </div>
+        </div>
+        <p id="source-hint" class="hint">Paste the direct video link copied from the player. The projector must be able to access it. Links are not saved.</p>
+        <div class="row"><button id="play-source" type="submit" disabled>Play video link</button></div>
+      </form>
       <p id="playback-status" class="status" aria-live="polite">No receiver connected.</p>
       <p class="hint">After picture and sound start, close this page to check that playback continues. The final phone test will require powering the phone fully off while the projector keeps playing over its own network connection. This Mac test does not establish phone compatibility.</p>
+    </section>
+
+    <section class="card" aria-labelledby="subtitles-heading">
+      <h2 id="subtitles-heading">Subtitles</h2>
+      <button type="button" data-action="subtitles" disabled>Refresh subtitles</button>
+      <form id="subtitle-form" class="row">
+        <div class="track-label">
+          <label for="subtitle-track">Subtitle track</label>
+          <select id="subtitle-track" disabled><option value="off">Off</option></select>
+        </div>
+        <button id="apply-subtitle" type="submit" disabled>Apply subtitle</button>
+      </form>
+      <p id="subtitle-status" class="status" aria-live="polite">Connect to Kodi, then refresh subtitles while a video is playing.</p>
+      <form id="subtitle-link-form" autocomplete="off">
+        <label>External subtitle link
+          <input id="subtitle-url" type="url" required disabled autocomplete="off" spellcheck="false" autocapitalize="off" aria-describedby="subtitle-hint">
+        </label>
+        <p id="subtitle-hint" class="hint">Optional: paste a direct subtitle link the projector can access. Links are not saved. After loading, refresh subtitles to check the available tracks.</p>
+        <div class="row"><button id="load-subtitle" type="submit" disabled>Load subtitle</button></div>
+      </form>
     </section>
   </main>
   <script type="module">
     const connectForm = document.querySelector('#connect-form');
     const seekForm = document.querySelector('#seek-form');
+    const sourceForm = document.querySelector('#source-form');
+    const sourceInput = document.querySelector('#source-url');
+    const sourceType = document.querySelector('#source-type');
+    const subtitleForm = document.querySelector('#subtitle-form');
+    const subtitleLinkForm = document.querySelector('#subtitle-link-form');
+    const subtitleTrack = document.querySelector('#subtitle-track');
+    const subtitleInput = document.querySelector('#subtitle-url');
+    const subtitleStatus = document.querySelector('#subtitle-status');
+    const applySubtitleButton = document.querySelector('#apply-subtitle');
     const receiverInputs = [...connectForm.querySelectorAll('input')];
-    const playbackButtons = [...document.querySelectorAll('[data-action]'), document.querySelector('#seek')];
+    const playbackButtons = [...document.querySelectorAll('[data-action]'), document.querySelector('#seek'), document.querySelector('#play-source'), document.querySelector('#load-subtitle')];
     const connectButton = document.querySelector('#connect');
     const positionInput = document.querySelector('#position');
     const message = document.querySelector('#message');
     const playbackStatus = document.querySelector('#playback-status');
     let connected = false;
     let busy = false;
+    let subtitleActive = false;
 
     function updateControls() {
       connectButton.disabled = busy;
       receiverInputs.forEach(input => { input.disabled = busy; });
       playbackButtons.forEach(button => { button.disabled = busy || !connected; });
       positionInput.disabled = busy || !connected;
+      sourceInput.disabled = busy || !connected;
+      sourceType.disabled = busy || !connected;
+      subtitleInput.disabled = busy || !connected;
+      subtitleTrack.disabled = busy || !connected || !subtitleActive;
+      applySubtitleButton.disabled = busy || !connected || !subtitleActive;
     }
 
     function showMessage(text, error = false) {
@@ -124,7 +179,7 @@
     }
 
     function showPlayback(result) {
-      if (!result || typeof result.active !== 'boolean') return;
+      if (!result || typeof result.active !== 'boolean' || typeof result.playing !== 'boolean') return;
       if (!result.active) {
         playbackStatus.textContent = 'Kodi is connected. No active video.';
         return;
@@ -135,6 +190,47 @@
       const duration = clock(result.durationSeconds);
       if (position) parts.push(duration ? `${position} / ${duration}` : position);
       playbackStatus.textContent = parts.join(' · ');
+    }
+
+    function resetSubtitles(text) {
+      subtitleActive = false;
+      subtitleTrack.replaceChildren(new Option('Off', 'off'));
+      subtitleStatus.textContent = text;
+    }
+
+    function subtitleRank(track) {
+      const language = typeof track.language === 'string' ? track.language.toLowerCase().replaceAll('_', '-') : '';
+      const name = typeof track.name === 'string' ? track.name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase() : '';
+      if (/^(pt(?:-.*)?|por|pob)$/.test(language) || /\b(portugues|portuguese)\b/.test(name)) return 0;
+      if (/^(en(?:-.*)?|eng)$/.test(language) || /\b(english|ingles)\b/.test(name)) return 1;
+      return 2;
+    }
+
+    function showSubtitles(result) {
+      if (!result || typeof result.active !== 'boolean' || !Array.isArray(result.tracks)) return;
+      resetSubtitles(result.active ? 'No subtitle tracks are available for this video. You can load an external subtitle link.' : 'Kodi has no active video. Start a video, then refresh subtitles.');
+      subtitleActive = result.active;
+      if (!result.active) return;
+      const tracks = result.tracks.filter(track => Number.isInteger(track.index) && track.index >= 0).map(track => {
+        const labels = [track.language, track.name].filter(value => typeof value === 'string' && value.trim());
+        if (track.forced) labels.push('Forced');
+        if (track.impaired) labels.push('Hearing impaired');
+        return { ...track, label: labels.join(' · ') || `Track ${track.index + 1}` };
+      });
+      const labelCounts = new Map();
+      for (const track of tracks) {
+        const key = track.label.trim().toLowerCase();
+        labelCounts.set(key, (labelCounts.get(key) || 0) + 1);
+      }
+      tracks.sort((a, b) => subtitleRank(a) - subtitleRank(b) || a.label.localeCompare(b.label, 'en', { sensitivity: 'base', ignorePunctuation: true, numeric: true }) || a.index - b.index);
+      for (const track of tracks) {
+        const generic = typeof track.name === 'string' && /^\(?\s*(external|proxy)\s*\)?$/i.test(track.name.trim());
+        const duplicate = labelCounts.get(track.label.trim().toLowerCase()) > 1;
+        const label = generic || duplicate ? `${track.label} · Track ${track.index + 1}` : track.label;
+        subtitleTrack.add(new Option(label, String(track.index)));
+      }
+      if (result.enabled && tracks.some(track => track.index === result.currentIndex)) subtitleTrack.value = String(result.currentIndex);
+      if (tracks.length) subtitleStatus.textContent = `${tracks.length} subtitle ${tracks.length === 1 ? 'track' : 'tracks'} available. ${result.enabled ? 'Enabled on Kodi.' : 'Currently off.'}`;
     }
 
     async function request(action, extra = {}) {
@@ -164,11 +260,18 @@
           const version = typeof data.result?.version === 'string' ? ` (${data.result.version})` : '';
           showMessage(`Connected to ${name}${version}.`);
           playbackStatus.textContent = 'Ready to play the public test video.';
+          resetSubtitles('Refresh subtitles while a video is playing to list its tracks.');
         } else {
-          const labels = { play: 'Video requested. Confirm picture and sound on the projector, then refresh status.', status: 'Status refreshed.', pause: 'Pause requested.', resume: 'Resume requested.', seek: 'Seek requested.', stop: 'Stop requested.' };
+          const labels = { play: 'Video requested. Confirm picture and sound on the projector, then refresh status.', 'play-source': 'Video requested. Confirm picture and sound on the projector, then refresh status.', status: 'Status refreshed.', pause: 'Pause requested.', resume: 'Resume requested.', seek: 'Seek requested.', stop: 'Stop requested.', subtitles: 'Subtitle list refreshed.', 'set-subtitle': 'Subtitle setting updated on Kodi. Confirm it on the projector.', 'add-subtitle': 'Subtitle requested. Refresh subtitles to check whether Kodi loaded it.' };
           showMessage(labels[action] || 'Command completed.');
           showPlayback(data.result);
-          if (action === 'play') playbackStatus.textContent = 'Waiting for Kodi to open the video. Refresh status to check playback.';
+          if (action === 'subtitles' || action === 'set-subtitle') showSubtitles(data.result);
+          if (action === 'play' || action === 'play-source') {
+            playbackStatus.textContent = 'Waiting for Kodi to open the video. Refresh status to check playback.';
+            resetSubtitles('Video requested. Refresh subtitles after playback starts.');
+          }
+          if (action === 'add-subtitle') resetSubtitles('Subtitle requested. Refresh subtitles to check the available tracks.');
+          if (action === 'stop') resetSubtitles('Playback stopped. Start a video, then refresh subtitles.');
           if (action === 'stop' && typeof data.result?.active !== 'boolean') playbackStatus.textContent = 'Playback stopped.';
         }
       } catch {
@@ -183,6 +286,7 @@
     receiverInputs.forEach(input => input.addEventListener('input', () => {
       connected = false;
       playbackStatus.textContent = 'Reconnect after changing receiver settings.';
+      resetSubtitles('Reconnect to Kodi, then refresh subtitles.');
       showMessage('Receiver settings changed. Connect to continue.');
       updateControls();
     }));
@@ -196,6 +300,22 @@
     seekForm.addEventListener('submit', event => {
       event.preventDefault();
       if (connected && positionInput.checkValidity()) request('seek', { position: Number(positionInput.value) });
+    });
+    sourceForm.addEventListener('submit', event => {
+      event.preventDefault();
+      if (connected && sourceForm.reportValidity()) request('play-source', {
+        media: { url: sourceInput.value.trim(), contentType: sourceType.value }
+      });
+    });
+    subtitleForm.addEventListener('submit', event => {
+      event.preventDefault();
+      if (connected && subtitleActive) request('set-subtitle', {
+        subtitle: subtitleTrack.value === 'off' ? 'off' : Number(subtitleTrack.value)
+      });
+    });
+    subtitleLinkForm.addEventListener('submit', event => {
+      event.preventDefault();
+      if (connected && subtitleLinkForm.reportValidity()) request('add-subtitle', { subtitleUrl: subtitleInput.value.trim() });
     });
   </script>
 </body>

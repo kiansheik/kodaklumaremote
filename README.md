@@ -95,10 +95,11 @@ off; a Miracast-only mirror cannot meet that requirement. See
 
 ## Kodi on an Android projector
 
-The user's LUMA running Kodi 21.2 played the public Big Buck Bunny MP4 with
-user-confirmed picture and sound. Pause/resume and absolute seek were checked;
-playback advanced after the Mac controller process stopped. This establishes a
-public-media Kodi route, not frameXTV playback or final phone-off acceptance.
+The user's LUMA running Kodi 21.2 played both the public Big Buck Bunny MP4 and
+an actual frameXTV HLS episode with user-confirmed picture and sound. All 19
+declared subtitle tracks were registered for that episode; Portuguese (Brazil)
+was selected and the user confirmed visible subtitles matching the dialogue.
+Kodi keeps multiple tracks available and displays one at a time.
 
 ```sh
 npm run kodi
@@ -111,8 +112,19 @@ details in the local controller, connect, and choose **Play Big Buck Bunny**.
 Use **Refresh status** after a playback command; Kodi starts/seeks asynchronously.
 Closing the page does not stop the video; use **Stop** explicitly.
 
-This Mac-only test controller sends authenticated JSON-RPC commands to one
-private IPv4 address. Credentials are not persisted, and only the fixed public
-sample URL can be opened. The Mac does not fetch or relay video. It adds no Kodi
-button to the extension and is not yet an Android phone controller.
-See [Kodi testing and discovery](tests/manual-kodi.md).
+For frameXTV, use the extension's **Copy video link**, paste into the controller's
+**Video link**, choose the reported format, and select **Play video link**.
+The successful episode used HLS. **Refresh subtitles** lists Kodi's tracks;
+choose a track or **Off**, then **Apply subtitle**. Portuguese appears first,
+followed by English. An **External subtitle link** can add one track at a time.
+The extension's **Copy subtitle list** copies all exposed tracks as JSON; the
+controller has no batch-import UI yet. The 19-track test used the local API,
+described in [Kodi testing and discovery](tests/manual-kodi.md).
+
+This Mac-only controller sends authenticated JSON-RPC commands to one private
+IPv4 address. Credentials and pasted links are not persisted; the Mac does not
+fetch or relay video. The source continued playing with the controller process
+stopped. A rapid pause/seek/resume sequence stopped the HLS episode; a restart
+without seeking remained stable, so HLS seeking remains unresolved. This is a
+working desktop stepping stone; an Android sender and full phone-off acceptance
+are still pending.

@@ -49,6 +49,8 @@ export function install(win) {
         <svg width="20" height="18" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M1 18v3h3a3 3 0 0 0-3-3zm0-4v2a5 5 0 0 1 5 5h2a7 7 0 0 0-7-7zm0-4v2a9 9 0 0 1 9 9h2A11 11 0 0 0 1 10zm2-7a2 2 0 0 0-2 2v3h2V5h18v14h-7v2h7a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2H3z"/></svg>
         <span>Cast</span>
       </button>
+      <button class="copy" type="button">Copy video link</button>
+      <button class="copy-subtitles" type="button">Copy subtitle list</button>
       <div class="remote" hidden>
         <button class="play" type="button" aria-label="Pause remote video">Pause</button>
         <label>Seek <input class="seek" aria-label="Remote position" type="range" min="0" max="0" value="0" step="1"></label>
@@ -60,6 +62,7 @@ export function install(win) {
     <div class="message" role="status" aria-live="polite" hidden></div>`;
   const $ = selector => shadow.querySelector(selector);
   const button = $('.cast');
+  const copyButton = $('.copy');
   const message = $('.message');
   const sourceSignature = video => JSON.stringify([video.getAttribute('src'),
     [...video.querySelectorAll('source')].map(source => [source.getAttribute('src'),source.getAttribute('type')])]);
@@ -170,11 +173,50 @@ export function install(win) {
       button.disabled = false;
     }
   }
+  async function copyLink(allSubtitles = false) {
+    const copyControl = allSubtitles ? $('.copy-subtitles') : copyButton;
+    if (!active || copyControl.disabled) return;
+    const video = active;
+    const attempt = generation;
+    copyControl.disabled = true;
+    try {
+      // Read the same declared, unencrypted HTTP source as Cast, only on click.
+      // The URL is handed directly to the clipboard and is never rendered/logged.
+      const media = extractMedia(video, {baseURI: doc.baseURI});
+      if (allSubtitles && !media.tracks.length) {
+        status('No supported subtitle link is exposed by this player.');
+        return;
+      }
+      const value = allSubtitles ? JSON.stringify({tracks: media.tracks}) : media.url;
+      await win.navigator.clipboard.writeText(value);
+      if (disposed || active !== video || attempt !== generation) return;
+      if (allSubtitles) {status(`${media.tracks.length} subtitle links copied.`); return;}
+      const format = {
+        'application/vnd.apple.mpegurl': 'HLS', 'application/x-mpegurl': 'HLS',
+        'application/dash+xml': 'DASH', 'video/mp4': 'MP4', 'video/webm': 'WebM'
+      }[media.contentType];
+      status(`${format ? `${format} video` : 'Video'} link copied.`);
+    } catch (error) {
+      if (disposed || active !== video || attempt !== generation) return;
+      if (error?.code === 'DRM_UNSUPPORTED') {
+        status('Encrypted playback cannot be sent by this integration.');
+      } else if (['SOURCE_UNSUPPORTED', 'SOURCE_UNAVAILABLE'].includes(error?.code)) {
+        status('This player does not expose a supported direct media URL. Blob/MSE sources cannot be sent directly.');
+      } else {
+        const resource = allSubtitles ? 'subtitle list' : 'video link';
+        status(`Could not copy the ${resource}. Allow clipboard access for this page, then try again.`);
+      }
+    } finally {
+      copyControl.disabled = false;
+    }
+  }
   function command(callback) {
     try { const result = callback(); result?.catch?.(() => status('The remote command failed. Check the Cast connection.')); }
     catch { status('The remote command failed. Check the Cast connection.'); }
   }
   button.addEventListener('click', cast);
+  copyButton.addEventListener('click', () => copyLink());
+  $('.copy-subtitles').addEventListener('click', () => copyLink(true));
   $('.play').addEventListener('click', () => command(() => remote?.paused ? controller?.resume() : controller?.pause()));
   $('.seek').addEventListener('change', event => command(() => controller?.seek(Number(event.target.value))));
   $('.volume').addEventListener('change', event => command(() => controller?.setVolume(Number(event.target.value))));
@@ -234,19 +276,17 @@ export function install(win) {
     if (chosen !== active) bind(chosen);
     if (!active) return;
     if (casting || connecting) binding.changed();
-    // Preserve an existing site Cast control instead of adding a duplicate.
+    // Preserve the site's Cast control while keeping independent copy actions.
     const nativeCast = doc.querySelector('google-cast-launcher, [data-framextv-native-cast], [aria-label="Cast to TV / Chromecast"], [aria-label^="Disconnect Cast ("]');
-    if (nativeCast && nativeCast.getBoundingClientRect().width > 0) {
-      host.hidden = true;
-      return;
-    }
+    button.hidden = Boolean(nativeCast && nativeCast.getBoundingClientRect().width > 0);
     host.hidden = false;
     const rect = active.getBoundingClientRect();
     const fullscreen = doc.fullscreenElement;
     // A replaced <video> cannot display children. A wrapper fullscreen can.
     const mount = fullscreen && fullscreen !== active && fullscreen.contains(active) ? fullscreen : doc.documentElement;
     if (host.parentNode !== mount) mount.append(host);
-    host.style.left = `${Math.max(8, Math.min(rect.right - (casting ? 450 : 95), win.innerWidth - (casting ? 450 : 95)))}px`;
+    const width = host.offsetWidth;
+    host.style.left = `${Math.max(8, Math.min(rect.right - width, win.innerWidth - width - 8))}px`;
     host.style.top = `${Math.max(8, Math.min(rect.top + 8, win.innerHeight - host.offsetHeight - 8))}px`;
     button.title = lastStatus;
   }

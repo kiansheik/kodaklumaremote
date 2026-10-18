@@ -13,7 +13,7 @@ Do not silently substitute mirroring or a phone-hosted relay.
 | UPnP/DLNA MediaRenderer | Potentially | Renderer HTTP GET follows SetAVTransportURI/Play independently of control point. TV must expose those services and accept media. Philips description received, but no recognized AVTransport was advertised. |
 | Miracast-only display | No by itself | Source sends an ongoing encoded display stream. Needs another source/player left running; switching phone off stops its stream. |
 | YouTube's TV receiver | YouTube playback verified; phone-off not tested | User confirmed public film picture and sound. Does not accept arbitrary frameXTV URLs through our Cast adapter. |
-| Kodi 21.2 on LUMA | Public MP4 receiver playback confirmed; phone-off pending | User confirmed picture/sound; controls and progression after Mac controller stopped checked. Phone sender/intended media/model/Android remain unverified. |
+| Kodi 21.2 on LUMA | Public MP4 and actual frameXTV HLS receiver playback confirmed; phone-off pending | User confirmed episode picture/sound and Portuguese subtitles matching dialogue. Playback continued with the Mac controller stopped. HLS seek stability, phone sender and exact model/Android remain unresolved. |
 
 Primary sources: [Google Cast overview](https://developers.google.com/cast/docs/overview),
 [receiver lifetime](https://developers.google.com/cast/docs/web_receiver/basic),
@@ -25,9 +25,9 @@ Primary sources: [Google Cast overview](https://developers.google.com/cast/docs/
 
 1. Establish receiver capability and a public-media direct-playback proof before
    building a mobile shell. Existing Philips results are [here](philips-tv.md).
-   LUMA Kodi 21.2 public-media playback now passes the initial receiver gate;
-   see [hardware evidence](../../tests/manual-kodi.md). Integrate a phone sender
-   and the intended authorized source next. For other receivers, test DLNA/Kodi/VLC;
+   LUMA Kodi 21.2 passes public MP4 and actual frameXTV HLS playback, including
+   user-confirmed Portuguese subtitles; see [hardware evidence](../../tests/manual-kodi.md).
+   Integrate a phone sender next and resolve HLS seeking/expiry. For other receivers, test DLNA/Kodi/VLC;
    see [LUMA options](luma-receiver-options.md) and [interfaces](receiver-apps.md).
 2. For actual Cast receivers, use the official Android Sender SDK for device
    selection, media LOAD and remote controls. Keep source discovery independent
@@ -48,14 +48,22 @@ helper on Mac would still need a real supported transport; it does not turn
 Miracast into independent media retrieval.
 
 `npm run kodi` is a Mac-only stepping stone: localhost UI → authenticated Kodi
-HTTP commands → receiver fetches fixed public MP4. It neither integrates with
-the MV3 extension nor substitutes for the future phone controller. Kodi uses a
-different transport from Google Cast; both can be adapters behind source selection.
+HTTP commands → receiver fetches the chosen media. The MV3 extension's **Copy
+video link** supplies an exposed authorized source for manual paste into that UI;
+there is no automatic extension-to-Kodi connection. **Copy subtitle list** exposes
+all declared track descriptors, but batch-import UI is still missing. The tested
+episode had 19 registered tracks, with Portuguese (Brazil) selected and confirmed
+visible; English follows Portuguese in the Mac selector. Only one track displays
+at a time. This controller does not substitute for the future phone app. Kodi
+uses a different transport from Google Cast; both can be adapters behind source
+selection.
 
 ## Required acceptance
 
-- Test public media, then the intended authorized source; confirm TV picture and
-  sound and remote pause/seek/volume before sender shutdown.
+- Repeat the successful public-media and intended-source tests from the phone;
+  confirm receiver picture/sound, subtitles and remote controls. The desktop
+  public MP4 seek worked; a rapid pause/seek/resume stopped the HLS episode, so
+  HLS seeking needs a separate stable test before claiming it supported.
 - Start from phone on ordinary Wi-Fi. TV Internet must not depend on that phone's
   hotspot, proxy, relay, cache server or local file endpoint.
 - Switch the phone fully off. Observe playback for several minutes and across a

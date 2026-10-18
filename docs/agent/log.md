@@ -54,3 +54,21 @@
   yielded live Playing status. No app-code fault established; helpers scoped as
   a module. 44 Node tests +3 new Kodi browser tests passed. No target stream,
   phone app/full phone shutdown or stored credentials/device addresses.
+- 2026-10-18 08:21 onward America/Sao_Paulo: Corrected the incomplete public-only
+  test by handing the actual declared frameXTV HLS source from ordinary native
+  Chrome to Kodi. User confirmed episode picture/sound. Rapid pause/seek60/resume
+  stopped playback by itself; restarted at 08:24:09 without seeking and remained
+  active at 08:35:28, paused at 531/1355 seconds. HLS seek cause unresolved.
+- 2026-10-18 subtitle follow-up: Added trusted-click video/source-list copy,
+  Kodi direct-source and subtitle list/select/off/add controls, plus memory-only
+  receiver/media-scoped label aliases. All 19 declared tracks registered via
+  sequential local API calls; Portuguese (Brazil) selected. User explicitly
+  confirmed captions visible and matching dialogue. Other languages registered,
+  not individually render-tested. Portuguese/English preference order appears
+  in the actual Mac UI. Batch UI and Android sender remain unimplemented.
+- 2026-10-18 validation: Full build/check passed at 55 Node/32 browser tests;
+  final Node run passed60 and Kodi browser run passed7. Review found copy actions
+  hidden alongside a native Cast control; fixed and rebuilt, affected native
+  coexistence browser case passed1. Browser count remains25 extension +7 Kodi.
+  Saved a subtitle-only screenshot, removed own temporary raw source/track JSON,
+  and kept credentials/active links outside Git. Full phone-off remains untested.

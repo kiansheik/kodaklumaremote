@@ -70,3 +70,19 @@ candidate transports; a Miracast-only sink is not. A native helper does not make
 mirroring into independent retrieval. Do not build a phone proxy/hotspot path as
 if it met this requirement. See [mobile target](mobile-target.md) and
 [Philips hardware evidence](philips-tv.md). No mobile app is implemented yet.
+
+## D8: Explicit source handoff and media-scoped subtitle metadata
+
+Use trusted-click **Copy video link** and **Copy subtitle list** actions on the
+ordinary player. They reuse validated declared-source extraction, require no
+new extension permissions and do not copy browser cookies/headers. Preserve the
+site's Cast button while leaving these independent copy actions available.
+Kodi receives the URL through its documented JSON-RPC interface and owns media
+retrieval; no Mac media relay is needed for the observed HLS source.
+
+External Kodi subtitle names can be generic. Keep human-readable aliases only
+in bounded controller memory, keyed by receiver and SHA-256 of Kodi's verified
+current file. Do not persist raw links or attach old labels to another video.
+Registration/command acceptance is distinct from rendering: only Portuguese
+captions received explicit physical dialogue-match confirmation in this test.
+The all-track handoff currently uses the local API; a batch UI remains future work.

@@ -3,7 +3,8 @@
 - `src/extension/manifest.json`: site-only MV3 manifest, MAIN world, matching
   same-origin frames, no extension API permissions/background/network observers.
 - `src/extension/player.js`: video selection, Shadow DOM fallback UI, native Cast
-  preservation, navigation/source lifecycle and local-return behavior.
+  preservation, navigation/source lifecycle, local-return behavior, trusted-click
+  video-link and all-declared-subtitle-list clipboard actions.
 - `src/cast/session.js`: dependency-injected adapter to the page's initialized
   CAF SDK; no SDK loader or receiver-configuration replacement.
 - `src/cast/demo.js`: ordinary web demo using the same adapter; excluded from
@@ -27,13 +28,15 @@
   phone-powered-off retrieval requirement; no mobile app implemented yet.
 - `docs/agent/{luma-receiver-options,receiver-apps}.md`: manufacturer DLNA claims,
   existing Android receiver apps, Kodi/VLC control interfaces and proposed tests;
-  Kodi public-media acceptance is recorded in `tests/manual-kodi.md`.
+  Kodi public/actual HLS and Portuguese subtitle acceptance is in `tests/manual-kodi.md`.
 - `scripts/kodi-controller.mjs`, `src/kodi/controller.html`: Mac loopback UI and
-  allowlisted authenticated Kodi JSON-RPC for the fixed public sample; no media
-  relay, credential persistence or arbitrary-source endpoint.
+  allowlisted authenticated Kodi JSON-RPC for the public sample/direct HTTP
+  sources, subtitle list/select/off/add, and API-only media-scoped label aliases.
+  No media relay or credential persistence; aliases are memory-only.
 - `tests/kodi-controller.test.mjs`, `tests/browser/kodi.spec.js`: Kodi transport/
   localhost boundaries and real UI with mocked receiver. `tests/manual-kodi.md`:
-  setup/discovery, actual Kodi 21.2 public-film/control/continuation evidence.
+  setup/discovery, Kodi 21.2 public MP4 and frameXTV HLS/subtitle evidence, including
+  the unresolved rapid-seek stop and remaining phone-off acceptance.
 - `docs/agent/`: concise evidence, decisions, and reproducible handoffs.
 - `artifacts/`, `.local/`: ignored local evidence; never commit credentials/media.
 - `README.md`: build/load instructions; `package-lock.json`: pinned npm tools.

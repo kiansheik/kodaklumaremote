@@ -14,11 +14,14 @@ Cast UI. A separate ordinary HTTPS demo uses the same controller with a public
 Big Buck Bunny MP4. No SDK injection, relay, auth/DRM bypass, telemetry, or media
 bundling is part of the extension.
 
-Latest validation: 44 Node tests passed, including 11 new Kodi tests; three new
-Kodi browser tests passed with mocked transport. Prior build and 16 loaded-MV3
-Chromium fixture tests passed; those browser fixtures were not rerun for the
-separate Kodi tool. Cast is mocked in fixtures. Production manifest and separate
-loopback test manifest are generated from checked-in source configuration.
+Latest validation: build and 60 Node tests passed; browser coverage is 25
+loaded-MV3 extension tests plus seven Kodi UI tests. Full check passed at 55 Node
+and 32 browser tests; subsequent Node and narrow Kodi runs cover the final
+media-scoped label registry and subtitle sorting. A final build and native-Cast
+coexistence browser case passed after keeping copy buttons visible beside native
+Cast. Cast/Kodi transports are
+mocked in fixtures. Production and loopback-only test manifests are generated
+from checked-in source configuration.
 Live SDK smoke: Chrome 155.0.8059.39, 2026-10-18 07:15:24 America/Sao_Paulo,
 HTTPS secure context, SDK ready, zero media requests; no receiver selected.
 Current Google Cast sample MP4 HEAD:200, video/mp4, byte ranges, CORS `*`.
@@ -58,7 +61,7 @@ receiver experiment if installable; VLC Android 3.6+ Remote access is another
 candidate, with network-URL launch confirmed in released 3.6.5 source only.
 AirPin and other commercial DLNA receivers are alternatives. An installable
 thin receiver APK could receive LAN commands and own playback or launch a local
-player. These were researched routes; Kodi now has the public-media test below.
+player. These were researched routes; Kodi now has actual target-media playback below.
 See [LUMA options](luma-receiver-options.md) and [receiver interfaces](receiver-apps.md).
 
 User subsequently installed/configured Kodi. A bounded Bonjour query discovered
@@ -67,13 +70,33 @@ Authenticated connection identified Kodi 21.2. `Player.Open` of the public MP4
 started receiver playback; user confirmed projector picture and sound. Pause/
 resume succeeded, and later position confirmed an absolute seek to 90 seconds.
 Playback advanced with the Mac controller process stopped (28-second bounded
-check). New `npm run kodi` serves a loopback-only UI for credentials and public
-sample controls; it sends only Kodi JSON-RPC, with no media fetch/relay or saved
-credentials. Live Chrome connection/status worked; native password notification
-obstructed initial clicks, not an established app-code failure. See
-[Kodi evidence](../../tests/manual-kodi.md).
+check). `npm run kodi` serves a loopback-only UI for credentials, public sample,
+direct video links and subtitle selection/loading. It sends only Kodi JSON-RPC,
+with no media fetch/relay or saved credentials. Native Chrome's password
+notification initially obstructed clicks, not an established app-code failure.
 
-No generic Google Cast/target-source LOAD, target codec/CORS/expiry, mobile app
+Actual frameXTV HLS now played on Kodi 21.2: ordinary native Chrome showed the
+watch/embed player, and the extension's **Copy video link** supplied its declared
+source to the controller. User confirmed episode picture and sound. A rapid
+pause → seek60 → resume sequence was followed by playback stopping by itself;
+the cause is unresolved. Restarted without seeking at 08:24:09, it remained
+active through 08:35:28 (paused at 531/1355 seconds). Playback progressed while
+the Mac controller server was absent; this is still not a full phone-off test.
+
+**Copy subtitle list** captures every declared validated track, including the
+site's hidden/custom-caption tracks. All 19 were registered in Kodi using
+sequential `Player.AddSubtitle` calls and observed track-index polling. Portuguese
+(Brazil) was selected/enabled; user explicitly confirmed visible subtitles
+matching dialogue. Other tracks were registered, not individually render-tested.
+The Mac dropdown sorts Portuguese first, English second, then other languages;
+one track is visible at a time. Kodi reports generic external names, so an
+in-memory alias registry associates copied metadata with receiver + SHA-256 of
+the verified current source. Aliases vanish on server restart and do not rename
+Kodi's own menu. Batch import is currently an API-driven test procedure, not a
+controller UI feature. See [Kodi evidence](../../tests/manual-kodi.md) and the
+[latest handoff](session-handoffs/2026-10-18-framextv-kodi-subtitles.md).
+
+No generic Google Cast target-source LOAD, long-term source expiry, mobile app
 or full phone-off acceptance is established. TV-side generic Cast app availability is
 unknown. System Settings computer access was unavailable, so macOS local-network
 permission was not inspected or changed. Chrome debug internals were disabled

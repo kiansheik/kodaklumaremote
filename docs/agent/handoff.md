@@ -4,7 +4,8 @@
 [session handoff](session-handoffs/2026-10-18-native-cast.md).
 Device follow-up: [live Philips test and mobile goal](session-handoffs/2026-10-18-philips-mobile.md).
 Receiver research: [LUMA and existing apps](session-handoffs/2026-10-18-luma-receivers.md).
-Latest follow-up: [working Kodi public playback](session-handoffs/2026-10-18-kodi-playback.md).
+Public receiver proof: [Kodi public playback](session-handoffs/2026-10-18-kodi-playback.md).
+Latest: [actual frameXTV HLS and subtitles](session-handoffs/2026-10-18-framextv-kodi-subtitles.md).
 
 ## Outcome
 
@@ -63,9 +64,9 @@ Static `--assets` outputs remain ignored; asset hashes may change with site buil
 
 ## Evidence and limits
 
-- Error-classification follow-up `npm run check`: passed build, **30 unit +16
-  loaded-MV3 browser tests**. Subsequent `npm test` passed **33** tests including
-  three independent discovery-tool tests.
+- Latest automated coverage: build, **60 Node tests**, **25 loaded-MV3 browser
+  tests** and **seven Kodi browser tests**. Final label/sort/native-control
+  changes were covered by subsequent narrow runs after the full check.
   Browser CAF is mocked. Actual MV3 injection, frame scope and page-world bridge
   are tested, not device discovery/decode.
 - Actual SDK smoke passed in Chrome155.0.8059.39 over local HTTPS, secure context,
@@ -78,9 +79,11 @@ Static `--assets` outputs remain ignored; asset hashes may change with site buil
   Exact detector, manual DevTools opening and extension fingerprinting unproven.
 - Live extension injection confirmed in watch and same-origin embed with CAF
   present. Blanking occurred before video/source/control appeared in that probe;
-  actual-origin control/media behavior remains unverified.
-- Generic Cast receiver playback, target codec/expiry/authorization/CORS, actual
-  subtitles and local-return behavior on hardware remain unverified.
+  a later ordinary native Chrome session successfully copied the actual HLS
+  source and all 19 declared subtitle descriptors through trusted-click controls.
+- Generic Cast receiver playback, long-term expiry and Cast local-return behavior
+  on hardware remain unverified. Kodi target HLS picture/sound and Portuguese
+  subtitle rendering/timing are now explicitly confirmed by the user.
 - No audio-language selector, internal HLS/blob subtitle conversion, cross-origin
   iframe permission, custom receiver or relay. Direct `<video>` fullscreen cannot
   display an overlay outside the replaced element; wrapper fullscreen is handled.
@@ -96,11 +99,13 @@ that the TV has no service under another mode/network configuration.
 
 ## Next highest-value work
 
-LUMA Kodi 21.2 public-film playback, pause/resume/seek and bounded continuation
-after Mac controller shutdown now worked; user confirmed picture/sound. Use
-`npm run kodi` and [manual instructions](../../tests/manual-kodi.md). Implement
-the phone sender/source integration next, then perform actual phone-power-off
-and intended authorized HLS/expiry/track acceptance. Model/Android remain unknown.
+LUMA Kodi 21.2 now plays the actual frameXTV HLS and Portuguese subtitles.
+All 19 tracks are available, with Portuguese first and English next in the Mac
+menu; one displays at a time. Use `npm run kodi` and
+[manual instructions](../../tests/manual-kodi.md). Investigate the observed HLS
+stop after rapid pause/seek/resume, then make batch import and a phone sender
+usable. Perform actual phone-power-off, reconnect and expiry acceptance.
+Model/Android remain unknown; no phone app exists yet.
 
 Use [the physical-device checklist](../../tests/manual-chromecast.md) first with
 the public demo, then the site's own native Cast control in uninstrumented Chrome.
@@ -113,7 +118,7 @@ or receiver error before proposing a custom receiver/authorized relay.
 Chrome's manual **Cast → Sources → Cast tab** is a documented mirroring fallback,
 not an extension-native mode. It does not satisfy independent receiver retrieval.
 
-Suggested next prompt: “Use the manual Chromecast checklist with my receiver
-[model/name]. Verify the public HTTPS demo first, then native frameXTV Cast and
-the fallback if needed. Record observed hardware results without storing URLs
-or credentials; do not bypass provider restrictions.”
+Suggested next prompt: “Continue from Kodi's confirmed frameXTV HLS and
+Portuguese subtitles. Make source plus all-track handoff a normal controller
+flow, investigate HLS seeking, then build the Android sender and prove playback
+after full phone shutdown. Keep active URLs and credentials out of Git.”
