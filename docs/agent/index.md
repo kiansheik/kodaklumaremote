@@ -1,0 +1,11 @@
+# Agent index
+
+Start with [current state](current-state.md), [repo map](repo-map.md), and
+[open questions](open-questions.md). Code and tests override these notes.
+
+Research: [investigation](investigation.md), [site architecture](site-architecture.md),
+[anti-debugging](anti-debugging.md), [network](network-analysis.md),
+[playback](playback-analysis.md), [Cast feasibility](chromecast-feasibility.md).
+
+Execution: [decisions](decisions.md), [experiments](experiments.md),
+[progress](progress.md), [log](log.md), [handoff](handoff.md).
