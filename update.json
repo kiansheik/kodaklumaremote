@@ -1,12 +1,12 @@
 {
   "schemaVersion": 1,
   "packageName": "dev.framextv.lumaremote",
-  "versionName": "0.4.0",
-  "versionCode": 9,
+  "versionName": "0.4.1",
+  "versionCode": 10,
   "minSdk": 24,
-  "apkUrl": "https://github.com/kiansheik/kodaklumaremote/releases/download/v0.4.0/luma-remote-0.4.0.apk",
-  "sha256": "a3f03b098f739d7e4253a0716771cbe7e8a5d7cd1fcf4aa6be73e6d6d93766fa",
+  "apkUrl": "https://github.com/kiansheik/kodaklumaremote/releases/download/v0.4.1/luma-remote-0.4.1.apk",
+  "sha256": "a650dd4d44c8413bcd01b38c7c8d68f13ce758fdccc222222e0f36b43bc008e7",
   "sizeBytes": 9631440,
-  "releasedAt": "2026-10-18T16:52:06.486Z",
-  "notes": "Adds Philips TV remote pairing with a QR scanner or manual Matter setup code. This phone's pairing is saved with Android Keystore encryption and reconnects when the app opens.\n\nAdds supported TV navigation, speaker volume, input selection and confirmed power-off controls. “Add another phone” creates a temporary QR/setup code without removing existing phones.\n\nLUMA/Kodi and the Philips remote keep separate connections. Video and external subtitles still require a compatible playback app; Matter remote control does not add video-URL playback to this TV.\n\nRequires 64-bit ARM Android 7 or newer.\n"
+  "releasedAt": "2026-10-18T22:45:24.051Z",
+  "notes": "Maintenance build of the current LUMA/Kodi and Philips Matter remote, signed with the existing production certificate for normal in-app updates.\n\nThe repository now includes desktop Philips local-control and DIAL discovery tools. Direct Netflix launch was confirmed on the test TV; these desktop tools are not yet integrated into the phone app.\n\nPhilips browser/Media Station X video and subtitle setup remains experimental. This release does not add generic TV casting.\n\nRequires 64-bit ARM Android 7 or newer.\n"
 }
