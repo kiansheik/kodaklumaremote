@@ -58,6 +58,8 @@
   validated credentials and caches the receiver. Generated assets/APKs ignored.
 - `scripts/build-mobile.mjs`, `scripts/test-android-*.mjs`: mobile assets and
   explicit emulator-only native backend, UI, service/persistence and Keystore tests.
+- `LiveControlsInstrumentation.java`: separately confirmed actual-phone
+  notification/MediaSession Pause/Play checks; no fixture reset or media opening.
 - `tests/handoff.test.mjs`, `tests/browser/mobile*.spec.js`,
   `android/app/src/androidTest/`: coordinator, capture, layouts and Android tests.
 - `docs/agent/{phone-app,luma-review-findings}.md`: phone architecture/acceptance

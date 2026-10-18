@@ -95,7 +95,7 @@ async function openApp(page, initialSnapshot = null) {
         return;
       }
       if (request.method === 'kodi.addSubtitle' && receiver.failSubtitle) {
-        window.LumaRPC.receive({ id: request.id, ok: false, error: { code: 'KODI_RESPONSE', message: 'private-subtitle-token' } });
+        window.LumaRPC.receive({ id: request.id, ok: false, error: { code: typeof receiver.failSubtitle === 'string' ? receiver.failSubtitle : 'INVALID_SUBTITLE', message: 'private-subtitle-token' } });
         return;
       }
       if (request.method === 'kodi.getSubtitles' && receiver.failSubtitleAuth) {
@@ -758,7 +758,7 @@ test('service restoration retains the complete lazy catalog and loads a new lang
   await expect(page.locator('body')).not.toContainText('private-subtitle-token');
 });
 
-test('an on-demand subtitle failure leaves the current language and catalog usable without replay', async ({ page }) => {
+test('a rejected on-demand subtitle leaves the current language and catalog usable and auth recovery never replays', async ({ page }) => {
   await openApp(page); await setup(page); await cast(page);
   await page.getByRole('button', { name: 'Subtitles', exact: true }).click();
   await page.evaluate(() => { window.__receiver.failSubtitle = true; });
@@ -775,6 +775,30 @@ test('an on-demand subtitle failure leaves the current language and catalog usab
   await expect(page.locator('#kodi-panel')).toBeVisible();
   await expect(page.locator('#message')).toHaveText('Kodi did not accept the username or password. Check the Kodi connection details.');
   expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'kodi.open').length)).toBe(1);
+});
+
+test('an uncertain subtitle Add waits within its bound then releases controls without resending or replaying', async ({ page }) => {
+  await page.clock.install();
+  await openApp(page); await setup(page); await cast(page);
+  await page.getByRole('button', { name: 'Subtitles', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'English', exact: true })).toBeEnabled();
+  await page.clock.pauseAt(new Date(await page.evaluate(() => Date.now() + 1000)));
+  await page.evaluate(() => { window.__receiver.failSubtitle = 'KODI_RESPONSE'; });
+  await page.getByRole('button', { name: 'English', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.__calls.filter(call => call.method === 'kodi.addSubtitle').length)).toBe(2);
+  await page.clock.runFor(1000);
+  await expect(page.getByRole('button', { name: 'English', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Portuguese (Brazil)', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await page.clock.fastForward(31000);
+  await expect(page.getByRole('button', { name: 'English', exact: true })).toBeEnabled();
+  await expect(page.locator('#sheet-message')).toHaveText('Kodi did not register a subtitle in time.');
+  await expect(page.locator('#sheet-message')).toHaveAttribute('data-error', 'true');
+  const calls = await page.evaluate(() => window.__calls);
+  expect(calls.filter(call => call.method === 'kodi.addSubtitle')).toHaveLength(2);
+  expect(calls.filter(call => call.method === 'kodi.open')).toHaveLength(1);
+  expect(calls.filter(call => call.method === 'app.rememberRemote')).toHaveLength(0);
+  expect(await page.evaluate(() => ({ selected: window.__receiver.currentIndex, playing: window.__receiver.playing }))).toEqual({ selected: 0, playing: true });
+  await expect(page.locator('body')).not.toContainText('private-subtitle-token');
 });
 
 test('initial subtitle selection falls back to English when Brazilian Portuguese is absent', async ({ page }) => {

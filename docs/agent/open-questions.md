@@ -40,8 +40,11 @@ Kodi public MP4 playback on LUMA is now physically confirmed, with remote
 pause/resume/seek and bounded continuation after the Mac controller stopped.
 Actual frameXTV HLS picture/sound and Portuguese subtitles are now physically
 confirmed on LUMA Kodi from both the Mac and Samsung sender. Full phone shutdown
-remains open. The phone user reported a cold Kodi start stall and no visible
-system controls in0.2.0; the follow-up repair needs physical acceptance.
+remains open. The phone user reported no visible controls in0.2.1 and repeated
+starts/missing subtitles on S1E2. Diagnostics found inactive phone media state
+after upgrade despite receiver playback, then subtitle-stage native errors and
+timeouts during new attempts. Reattachment and readiness repairs need physical
+acceptance; see the latest current-state entry.
 Why did the rapid pause/seek60/resume sequence stop this HLS? MP4 seek worked;
 target HLS seek reliability has not passed. Retest deliberately with settled
 commands before changing transport or introducing a relay.

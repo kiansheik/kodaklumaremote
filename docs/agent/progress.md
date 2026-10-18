@@ -79,3 +79,10 @@ notification/lock-screen controls. The repair adds a bounded idle-only Open
 retry, preferred-first/lazy subtitle loading and system-control presentation
 fixes. See the [control follow-up](session-handoffs/2026-10-18-phone-system-controls.md)
 for final checks, installed artifact and remaining physical acceptance.
+
+0.2.2 follows a failed physical0.2.1 control/subtitle test. It adopts continuing
+Kodi playback after process restart, separates ordinary/media notifications and
+allows realistic bounded subtitle readiness. Actual Samsung notification and
+MediaSession Pause/Play actions passed without replay. S1E2 first-attempt/PT-BR
+and shade/lock visual confirmation remain pending. See the
+[reattachment handoff](session-handoffs/2026-10-18-phone-reattachment-readiness.md).

@@ -7,8 +7,8 @@ import android.os.SystemClock;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-/** Tests the production native backend against explicit Mac loopback fixtures.
- * It never starts the browsing Activity or contacts a physical projector. */
+/** Defaults to explicit Mac loopback fixtures. The separate live-controls mode
+ * requires explicit confirmation and never runs the destructive fixture setup. */
 public final class BackendInstrumentation extends UiSmokeInstrumentation {
     private NativeBackend backend;
     private Bundle args;
@@ -44,6 +44,7 @@ public final class BackendInstrumentation extends UiSmokeInstrumentation {
         }
     }
     @Override public void onStart() {
+        if ("live-controls".equals(args.getString("mode"))) { LiveControlsInstrumentation.run(this, args); return; }
         if ("ui".equals(args.getString("mode"))) { super.onStart(); return; }
         if ("service".equals(args.getString("mode"))) { ServiceInstrumentation.run(this, args); return; }
         if ("settings".equals(args.getString("mode"))) { SettingsInstrumentation.run(this); return; }

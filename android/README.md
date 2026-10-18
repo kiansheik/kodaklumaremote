@@ -19,6 +19,9 @@ red/green connection indicator. Setup moves behind **Settings**, which provides
 connection/login editing, a fresh scan and separate forget actions for Kodi,
 the projector or everything. Switching apps or recreating the Activity restores
 the living service's remote without reconnecting or replaying media.
+If Android restarts the process, the app attaches to Kodi's already-playing
+public HTTP video using fresh status and generic metadata. Website language
+names/source catalogs return after another capture; they are not saved to disk.
 
 Open **Browse**, visit the frameXTV episode and wait for its player, then tap
 **Cast to LUMA** in the browser toolbar. An HTTPS frameXTV page can also be
@@ -38,16 +41,17 @@ cannot be undone. Browsing another page after a successful handoff does not
 stop receiver playback.
 
 After connecting, allow notification permission when Android asks if you want
-notification controls. The ongoing notification opens Remote and offers
+notification controls. Expand the ongoing LUMA notification to use
 Play/Pause, **Stop video** and **Disconnect** for the verified current source.
-The app publishes a MediaSession for Android’s lock-screen/system media
-controls; their actual appearance and behavior still need testing on Samsung.
+A separate media card and MediaSession serve Android’s lock-screen/system
+controls. Both action routes passed live Pause/Play checks on Samsung;
+their visual shade/lock-screen presentation still needs acceptance.
 **Disconnect** closes the controller connection and leaves Kodi playback alone.
 Use **Stop video** to end the video.
 
 Force-stop, reboot or process death can end the live session. Saved setup is
 used when the app next opens; automatic service restart and restoration of
-playback/language aliases after process death are not guaranteed. This service
+website language aliases after process death are not guaranteed. This service
 controls the projector; media continues
 to come directly from its source without the phone or Mac relaying it.
 
@@ -86,11 +90,27 @@ Mac loopback fixtures via `10.0.2.2`; it does not discover or contact the actual
 projector. See [phone implementation and acceptance](../docs/agent/phone-app.md)
 for recorded results and physical tests still required.
 
-The mobile UI has 26 passing browser cases, including validated first setup,
+For an explicitly intended live phone Pause/Play test, install both built APKs
+on that phone, then invoke the separate confirmed mode:
+
+```sh
+adb -s "$LUMA_PHONE_SERIAL" shell am instrument -w \
+  -e mode live-controls -e confirmLivePlayback true \
+  dev.framextv.lumaremote.test/dev.framextv.lumaremote.BackendInstrumentation
+```
+
+This mode requires saved setup and an already-playing verified public HTTP
+source. It tests notification and media-session Pause/Play, then verifies that
+the identical source is playing. It never resets setup, opens media, adds
+subtitles, seeks, stops or disconnects. Without the confirmation flag it exits
+before accessing playback. Do not use the emulator fixture modes on a phone.
+
+The mobile UI has 27 passing browser cases, including validated first setup,
 saved-settings presentation, cancellation, reset/rescan, volume commits,
 session restoration and notification-open handling. Final checks passed:
-121 Node,69 browser,8 native transport,4 service,5 packaged UI and5 Keystore
-settings checks. Updated0.2.1 is installed on Samsung Android16. The user
+128 Node and70 browser coverage; updated4 service and5 packaged UI checks passed.
+The earlier8 transport/5 Keystore checks cover unchanged logic. Updated0.2.2
+is installed on Samsung Android16, with2 live Pause/Play checks passed. The user
 confirmed live casting with picture, sound and Portuguese subtitles on0.2.0.
 The repaired cold start, system control display/actions and full phone-off
 playback still need physical acceptance.

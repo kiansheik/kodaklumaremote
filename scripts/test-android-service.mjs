@@ -90,13 +90,17 @@ try {
   assert.ok(authRejections >= 2);
   assert.deepEqual(commands.filter(command => command.includes('setVolume')), ['MediaControl\r\nsetVolume 14\r\n\r\n']);
   assert.equal(volume, 7);
-  assert.equal(stops, 0);
+  assert.equal(stops, 1);
   assert.equal(currentSource, FIRST); assert.equal(playing, true);
-  assert.deepEqual(mutations.map(message => message.method), ['Player.Open', 'Player.PlayPause', 'Player.PlayPause']);
-  assert.equal(mutations[1].params.play, false); assert.equal(mutations[2].params.play, true);
+  assert.deepEqual(mutations.map(message => message.method), ['Player.Open', 'Player.PlayPause', 'Player.PlayPause', 'Player.PlayPause', 'Player.PlayPause', 'Player.Stop', 'Player.Open']);
+  assert.deepEqual(mutations.filter(message => message.method === 'Player.PlayPause').map(message => message.params.play), [false, true, false, true]);
+  assert.equal(mutations[6].params.item.file, FIRST);
   assert.deepEqual(commands.filter(command => command.startsWith('KEYEVENT\r\n')), ['KEYEVENT\r\n24\r\n\r\n']);
   assert.ok(commands.every(command => !/^(?:auth|CHECKPASSWORD|STARTAPPEVNET)/u.test(command)));
-  console.log('Android connection service: 4 lifecycle, MediaSession, notification and disconnect checks passed against emulator-only fixtures.');
+  console.log('Android connection service: 4 lifecycle, dual-notification, MediaSession control and disconnect checks passed against emulator-only fixtures.');
+} catch (error) {
+  console.error(JSON.stringify({ fixture: { connections, stops, playing, mutations: mutations.map(({ method, params }) => ({ method, ...(typeof params.play === 'boolean' ? { play: params.play } : {}) })) } }));
+  throw error;
 } finally {
   for (const socket of sockets) socket.destroy();
   for (const server of [tcp, kodi]) { server.closeAllConnections?.(); await new Promise(done => server.close(done)); }

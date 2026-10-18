@@ -151,3 +151,22 @@ Publish a shared session/notification launch target and playback custom actions
 for modern Android system controls. A connection without verified playback uses
 an ordinary service notification. An active notification record is not proof
 that Samsung displays the controls; retain physical acceptance separately.
+
+## D13: Recover observed playback and separate notification surfaces
+
+An APK/process restart loses RAM-only media descriptors while Kodi continues
+playing. When connected with saved setup, adopt a fresh active public HTTP
+source only if no remembered remote or authorized handoff exists. Use generic
+metadata, rotate the control revision and send no Open/Add command. Keep existing
+remembered sources scoped; do not retarget their old controls to another video.
+
+Keep an ordinary foreground notification with source-bound playback buttons
+separate from the verified MediaStyle card. This allows the normal notification
+panel and Android's media/lock-screen surfaces to work independently. Use a
+confirmed, exact-source live instrumentation mode to test the phone's actual
+notification and MediaSession Pause/Play actions, preserving setup and playback.
+
+Metadata reads can span multiple native HTTP requests. Give subtitle readiness
+and registration bounded30-second windows and propagate their deadlines to the
+bridge. Retry transient reads, not authentication/validation errors. An uncertain
+Add outcome is reconciled against observed indices without sending another Add.

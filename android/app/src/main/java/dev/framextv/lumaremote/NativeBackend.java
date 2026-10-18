@@ -392,8 +392,14 @@ public final class NativeBackend {
             Object replyId = reply.opt("id");
             if (!"2.0".equals(reply.opt("jsonrpc")) || !(replyId instanceof Number) || ((Number) replyId).doubleValue() != id || !reply.has("result") || reply.has("error")) throw fail("KODI_RESPONSE");
             return reply.get("result");
-        } catch (BackendException failure) { throw failure; }
-        catch (Exception ignored) { throw fail("KODI_UNAVAILABLE"); }
+        } catch (BackendException failure) {
+            android.util.Log.i("LumaKodi", method + " " + failure.code);
+            throw failure;
+        }
+        catch (Exception ignored) {
+            android.util.Log.i("LumaKodi", method + " KODI_UNAVAILABLE");
+            throw fail("KODI_UNAVAILABLE");
+        }
         finally { if (deadline != null) deadline.cancel(false); if (connection != null) connection.disconnect(); activeHttp = null; }
     }
     private JSONObject rpcObject(String method, JSONObject params) throws Exception {

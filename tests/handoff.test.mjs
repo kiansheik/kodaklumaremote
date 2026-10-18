@@ -31,7 +31,8 @@ function fixture(options = {}) {
       async status(opts) { record('status', opts); await options.status?.(state, opts); return { ...state.playback }; },
       async getSubtitles(opts) {
         record('getSubtitles', opts);
-        await options.getSubtitles?.(state, opts);
+        const provided = await options.getSubtitles?.(state, opts);
+        if (provided !== undefined) return provided;
         for (const pending of [...state.pending]) {
           if (--pending.polls <= 0) {
             state.tracks.push({ index: pending.index });
@@ -341,9 +342,131 @@ test('lazy subtitle changes stay source-bound, validate declared choices and pre
   assert.equal(f.state.currentIndex, 0);
   f.state.playback = { active: true, sourceUrl: url };
   f.adapters.kodi.addSubtitle = async () => { throw new Error('Fixture add failed'); };
-  await assert.rejects(f.coordinator.selectSubtitle(request, track('en').url), { code: 'ADAPTER_FAILED' });
+  await assert.rejects(f.coordinator.selectSubtitle(request, track('en').url), { code: 'SUBTITLE_TIMEOUT' });
   assert.equal(f.state.currentIndex, 0);
   assert.equal(f.state.enabled, true);
+});
+
+test('cold metadata and playback reads recover transient native failures without repeating mutations', async () => {
+  let initialStatusFailures = 2, captionFailures = 2, postAddStatusFailures = 2;
+  const f = fixture({
+    status: state => {
+      if ((!state.opened && initialStatusFailures-- > 0) || (state.adds.length && postAddStatusFailures-- > 0)) {
+        state.time += 1000; throw Object.assign(new Error('Transient native startup read'), { code: 'KODI_UNAVAILABLE' });
+      }
+    },
+    getSubtitles: state => {
+      if (captionFailures-- > 0) { state.time += 1000; throw Object.assign(new Error('Transient metadata response'), { code: 'KODI_RESPONSE' }); }
+    },
+  });
+  const result = await f.coordinator.start(media([track('pt-BR'), track('en')]));
+  assert.equal(f.state.opened, 1);
+  assert.deepEqual(f.state.adds, [track('pt-BR').url]);
+  assert.equal(f.state.calls.filter(name => name === 'setSubtitle').length, 1);
+  assert.equal(result.selectedIndex, 0);
+  assert.equal(f.state.ready.length, 1);
+  assert.ok(f.state.time > 6000);
+});
+
+test('multi-RPC subtitle reads and delayed registration have bounded windows longer than three seconds', async () => {
+  const budgets = [];
+  const f = fixture({
+    status: state => { state.time += 1200; },
+    getSubtitles: (state, options) => { budgets.push(options.timeoutMs); state.time += 4500; },
+    add: (state, value, options) => {
+      budgets.push(options.timeoutMs); state.time += 4500;
+      state.pending.push({ index: 0, polls: 2 });
+    },
+    select: (state, index, options) => {
+      budgets.push(options.timeoutMs); state.time += 7000;
+      state.currentIndex = index; state.enabled = true;
+    },
+  });
+  const result = await f.coordinator.start(media([track('pt-BR')]));
+  assert.equal(result.selectedIndex, 0);
+  assert.equal(f.state.adds.length, 1);
+  assert.equal(f.state.calls.filter(name => name === 'setSubtitle').length, 1);
+  assert.ok(budgets.every(value => Number.isFinite(value) && value > 3000 && value <= 30000));
+  assert.ok(f.state.time > 30000 && f.state.time < 120000);
+  assert.equal(f.state.ready.length, 1);
+});
+
+test('inactive subtitle metadata waits for readiness and permanent read failure has a fixed bound', async () => {
+  let warming = 2;
+  const f = fixture({ getSubtitles: () => warming-- > 0 ? { active: false, tracks: [], enabled: false, currentIndex: null } : undefined });
+  await f.coordinator.start(media([track('pt-BR')]));
+  assert.equal(f.state.adds.length, 1);
+  assert.ok(f.state.time >= 700);
+  const unavailable = fixture({
+    getSubtitles: () => { throw new Error('Native read unavailable'); },
+    coordinator: { limits: { subtitleMs: 700 } },
+  });
+  await assert.rejects(unavailable.coordinator.start(media([track('pt-BR')])), { code: 'SUBTITLE_TIMEOUT' });
+  assert.equal(unavailable.state.time, 700);
+  assert.equal(unavailable.state.adds.length, 0);
+  assert.equal(unavailable.state.ready.length, 0);
+});
+
+test('a transient post-add read never permits subtitle selection after the receiver changes source', async () => {
+  let fail = true;
+  const f = fixture({
+    status: state => {
+      if (state.adds.length && fail) { fail = false; throw new Error('Temporary native response'); }
+      if (state.adds.length) state.playback = { active: true, sourceUrl: 'https://media.example.org/other.m3u8' };
+    },
+  });
+  await assert.rejects(f.coordinator.start(media([track('pt-BR')])), { code: 'SOURCE_CHANGED' });
+  assert.equal(f.state.adds.length, 1);
+  assert.equal(f.state.calls.filter(name => name === 'setSubtitle').length, 0);
+  assert.equal(f.state.ready.length, 0);
+});
+
+test('read retries stop immediately for native authentication, configuration and source errors', async () => {
+  for (const code of ['KODI_AUTH', 'KODI_CONFIG', 'SOURCE_CHANGED', 'INVALID_INPUT']) {
+    const f = fixture({ getSubtitles: () => { throw Object.assign(new Error('Fixed native failure'), { code }); } });
+    await assert.rejects(f.coordinator.start(media([track('pt-BR')])), { code: code === 'SOURCE_CHANGED' ? 'SOURCE_CHANGED' : 'ADAPTER_FAILED' });
+    assert.equal(f.state.time, 0);
+    assert.equal(f.state.calls.filter(name => name === 'getSubtitles').length, 1);
+    assert.equal(f.state.adds.length, 0);
+  }
+});
+
+test('an uncertain Add response reconciles a late observed index without sending Add again', async () => {
+  const f = fixture({ add: state => {
+    state.pending.push({ index: 0, polls: 3 });
+    throw Object.assign(new Error('Add response was unavailable'), { code: 'KODI_RESPONSE' });
+  } });
+  const result = await f.coordinator.start(media([track('pt-BR')]));
+  assert.equal(result.selectedIndex, 0);
+  assert.equal(f.state.adds.length, 1);
+  assert.equal(f.state.ready.length, 1);
+});
+
+test('an uncertain Add with no index times out without a duplicate while unsent proof permits manual retry', async () => {
+  for (const unsent of [false, true]) {
+    const f = fixture({
+      add: (state, value, options) => {
+        if (state.adds.length === 1) {
+          if (unsent) options.onNotSent();
+          throw Object.assign(new Error('Native Add request failed'), { code: 'KODI_UNAVAILABLE' });
+        }
+        state.tracks.push({ index: 0 });
+      },
+      coordinator: { limits: { subtitleMs: 700 } },
+    });
+    const request = media([track('pt-BR')]);
+    await assert.rejects(f.coordinator.start(request), { code: unsent ? 'ADAPTER_FAILED' : 'SUBTITLE_TIMEOUT' });
+    assert.equal(f.state.adds.length, 1);
+    if (unsent) {
+      await f.coordinator.start(request);
+      assert.equal(f.state.adds.length, 2);
+      assert.equal(f.state.ready.length, 1);
+    } else {
+      await assert.rejects(f.coordinator.start(request), { code: 'SUBTITLE_TIMEOUT' });
+      assert.equal(f.state.adds.length, 1);
+      assert.equal(f.state.ready.length, 0);
+    }
+  }
 });
 
 test('handoff stops before opening when the page source changes during launch', async () => {

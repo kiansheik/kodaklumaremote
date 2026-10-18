@@ -17,7 +17,8 @@ Phone implementation: [Android sender and combined remote](phone-app.md),
 [review findings](luma-review-findings.md),
 [phone handoff](session-handoffs/2026-10-18-phone-handoff.md).
 Saved setup: [background controls](session-handoffs/2026-10-18-phone-background-settings.md).
-Latest: [system controls, cold start and lazy subtitles](session-handoffs/2026-10-18-phone-system-controls.md).
+System controls: [cold start and lazy subtitles](session-handoffs/2026-10-18-phone-system-controls.md).
+Latest: [playback reattachment and subtitle readiness](session-handoffs/2026-10-18-phone-reattachment-readiness.md).
 
 Execution: [decisions](decisions.md), [experiments](experiments.md),
 [progress](progress.md), [log](log.md), [handoff](handoff.md).

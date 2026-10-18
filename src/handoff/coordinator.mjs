@@ -37,6 +37,7 @@ export class HandoffError extends Error {
 }
 
 function fail(code) { return new HandoffError(code); }
+const TRANSIENT_ADAPTER_CODES = new Set(['KODI_UNAVAILABLE', 'TIMEOUT', 'BUSY', 'KODI_RESPONSE']);
 function safeText(value, limit) { return typeof value === 'string' ? value.replace(/[\u0000-\u001f\u007f-\u009f]/gu, '').slice(0, limit) : ''; }
 function sourceUrl(value) {
   if (typeof value !== 'string' || /[\s\u0000-\u001f\u007f\\|]/u.test(value)) throw fail('INVALID_MEDIA');
@@ -98,7 +99,8 @@ export function createHandoffCoordinator({
     startup: bounded(limits.startupMs, 60000, 60000),
     active: bounded(limits.activeMs, 30000, 30000),
     openRetry: bounded(limits.openRetryMs, 5000, 10000, 500),
-    subtitle: bounded(limits.subtitleMs, 3000, 3000),
+    // One native read may contain three HTTP RPCs, each with a 5-second bound.
+    subtitle: bounded(limits.subtitleMs, 30000, 30000),
     overall: bounded(limits.overallMs, 120000, 120000),
     poll: bounded(limits.pollMs, 350, 2000, 100),
     tracks: Math.floor(bounded(limits.maxTracks, 64, 128)),
@@ -144,7 +146,7 @@ export function createHandoffCoordinator({
       const result = await Promise.race([
         Promise.resolve().then(() => {
           check(ctx);
-          return operation({ signal: operationController.signal, expectedSourceUrl: ctx.media.url, phase: ctx.phase });
+          return operation({ signal: operationController.signal, timeoutMs: Math.ceil(remaining), expectedSourceUrl: ctx.media.url, phase: ctx.phase });
         }),
         stopped,
       ]);
@@ -154,7 +156,10 @@ export function createHandoffCoordinator({
     } catch (error) {
       if (error instanceof HandoffError) throw error;
       check(ctx);
-      throw fail('ADAPTER_FAILED');
+      const fixed = fail('ADAPTER_FAILED');
+      fixed.retryable = typeof error?.code !== 'string' || TRANSIENT_ADAPTER_CODES.has(error.code);
+      if (error?.code === 'SOURCE_CHANGED') fixed.adapterCode = 'SOURCE_CHANGED';
+      throw fixed;
     } finally {
       clearTimeout(timer);
       ctx.controller.signal.removeEventListener('abort', abort);
@@ -166,21 +171,39 @@ export function createHandoffCoordinator({
     await call(ctx, options => wait(Math.min(settings.poll, window.deadline - now()), options), window);
   }
 
-  async function assertPlayback(ctx, window = stage(ctx, settings.subtitle, 'SUBTITLE_TIMEOUT')) {
-    const playback = await call(ctx, options => kodi.status(options), window);
-    if (!playback?.active || playback.sourceUrl !== ctx.media.url) throw fail('SOURCE_CHANGED');
+  async function read(ctx, operation, window) {
+    while (true) {
+      try { return await call(ctx, operation, window); }
+      catch (error) {
+        if (error.adapterCode === 'SOURCE_CHANGED') throw fail('SOURCE_CHANGED');
+        if (error.code !== 'ADAPTER_FAILED' || error.retryable !== true) throw error;
+      }
+      await pause(ctx, window);
+    }
+  }
+
+  async function assertPlayback(ctx, window = stage(ctx, settings.subtitle, 'SUBTITLE_TIMEOUT'), waitForActive = false) {
+    while (true) {
+      const playback = await read(ctx, options => kodi.status(options), window);
+      if (playback?.active && playback.sourceUrl === ctx.media.url) return;
+      if (!waitForActive || playback?.active !== false) throw fail('SOURCE_CHANGED');
+      await pause(ctx, window);
+    }
   }
 
   async function subtitles(ctx, window = stage(ctx, settings.subtitle, 'SUBTITLE_TIMEOUT')) {
-    const snapshot = await call(ctx, options => kodi.getSubtitles(options), window);
-    await assertPlayback(ctx, window);
-    if (!snapshot || !Array.isArray(snapshot.tracks) || snapshot.tracks.length > 128) throw fail('SUBTITLE_BINDING');
-    const indices = new Set();
-    for (const track of snapshot.tracks) {
-      if (!Number.isInteger(track?.index) || track.index < 0 || track.index > 1024 || indices.has(track.index)) throw fail('SUBTITLE_BINDING');
-      indices.add(track.index);
+    while (true) {
+      const snapshot = await read(ctx, options => kodi.getSubtitles(options), window);
+      await assertPlayback(ctx, window, true);
+      if (snapshot?.active === false) { await pause(ctx, window); continue; }
+      if (!snapshot || !Array.isArray(snapshot.tracks) || snapshot.tracks.length > 128) throw fail('SUBTITLE_BINDING');
+      const indices = new Set();
+      for (const track of snapshot.tracks) {
+        if (!Number.isInteger(track?.index) || track.index < 0 || track.index > 1024 || indices.has(track.index)) throw fail('SUBTITLE_BINDING');
+        indices.add(track.index);
+      }
+      return snapshot;
     }
-    return snapshot;
   }
 
   async function finishPending(ctx, cache, snapshot, window = stage(ctx, settings.subtitle, 'SUBTITLE_TIMEOUT')) {
@@ -261,19 +284,26 @@ export function createHandoffCoordinator({
     const pending = { url: track.url, before: new Set(snapshot.tracks.map(item => item.index)), invoked: false };
     cache.pending = pending;
     const window = stage(ctx, settings.subtitle, 'SUBTITLE_TIMEOUT');
-    await call(ctx, options => {
-      pending.invoked = true;
-      return kodi.addSubtitle(track, {
-        ...options,
-        onNotSent() {
-          pending.invoked = false;
-          if (pending.boundIndex !== undefined && cache.bindings.get(pending.url) === pending.boundIndex) cache.bindings.delete(pending.url);
-        },
-      });
-    }, window);
+    try {
+      await call(ctx, options => {
+        pending.invoked = true;
+        return kodi.addSubtitle(track, {
+          ...options,
+          onNotSent() {
+            pending.invoked = false;
+            if (pending.boundIndex !== undefined && cache.bindings.get(pending.url) === pending.boundIndex) cache.bindings.delete(pending.url);
+          },
+        });
+      }, window);
+    } catch (error) {
+      if (error.code !== 'ADAPTER_FAILED' || error.retryable !== true) throw error;
+      // A transport/response failure may follow a successful AddSubtitle write.
+      // Observe its result once within the registration window; never resend it.
+    }
     if (!pending.invoked) throw fail('ADAPTER_FAILED');
-    snapshot = await subtitles(ctx, window);
-    return finishPending(ctx, cache, snapshot, window);
+    const registration = stage(ctx, settings.subtitle, 'SUBTITLE_TIMEOUT');
+    snapshot = await subtitles(ctx, registration);
+    return finishPending(ctx, cache, snapshot, registration);
   }
 
   async function selectTrack(ctx, cache, track) {
@@ -281,8 +311,8 @@ export function createHandoffCoordinator({
     if (track && !Number.isInteger(index)) throw fail('SUBTITLE_BINDING');
     status(ctx, 'selecting', track ? 'Selecting the preferred subtitles…' : 'Keeping subtitles off…');
     await assertPlayback(ctx);
+    await call(ctx, options => kodi.setSubtitle(index ?? 'off', options), stage(ctx, settings.subtitle, 'SUBTITLE_TIMEOUT'));
     const selection = stage(ctx, settings.subtitle, 'SUBTITLE_TIMEOUT');
-    await call(ctx, options => kodi.setSubtitle(index ?? 'off', options), selection);
     while (true) {
       const observed = await subtitles(ctx, selection);
       if (track ? observed.enabled === true && observed.currentIndex === index : observed.enabled === false) break;
@@ -332,7 +362,10 @@ export function createHandoffCoordinator({
     while (true) {
       let playback;
       try { playback = await call(ctx, options => kodi.status(options), active); }
-      catch (error) { if (error.code !== 'ADAPTER_FAILED') throw error; }
+      catch (error) {
+        if (error.adapterCode === 'SOURCE_CHANGED') throw fail('SOURCE_CHANGED');
+        if (error.code !== 'ADAPTER_FAILED' || error.retryable !== true) throw error;
+      }
       if (playback?.active) {
         if (playback.sourceUrl === ctx.media.url) return;
         if (!previousSource || playback.sourceUrl !== previousSource) throw fail('SOURCE_CHANGED');
@@ -369,10 +402,13 @@ export function createHandoffCoordinator({
     while (true) {
       try {
         if ((await call(ctx, options => kodi.connect(options), startup))?.ready === true) break;
-      } catch (error) { if (error.code !== 'ADAPTER_FAILED') throw error; }
+      } catch (error) {
+        if (error.adapterCode === 'SOURCE_CHANGED') throw fail('SOURCE_CHANGED');
+        if (error.code !== 'ADAPTER_FAILED' || error.retryable !== true) throw error;
+      }
       await pause(ctx, startup);
     }
-    const initial = await call(ctx, options => kodi.status(options), startup);
+    const initial = await read(ctx, options => kodi.status(options), startup);
     const cache = cacheFor(ctx.media);
     if (!initial?.active || initial.sourceUrl !== ctx.media.url) {
       cache.bindings.clear(); cache.pending = null;
@@ -419,7 +455,7 @@ export function createHandoffCoordinator({
       }
     } catch (error) { return Promise.reject(error instanceof HandoffError ? error : fail('INVALID_MEDIA')); }
     current?.controller.abort();
-    const ctx = { media, controller: new AbortController(), isCurrentSource, phase, trackUrl, knownCatalog: known, deadline: now() + Math.min(settings.overall, phase === 'remote' ? 15000 : settings.overall) };
+    const ctx = { media, controller: new AbortController(), isCurrentSource, phase, trackUrl, knownCatalog: known, deadline: now() + Math.min(settings.overall, phase === 'remote' ? 60000 : settings.overall) };
     current = ctx;
     const abort = () => ctx.controller.abort();
     if (signal?.aborted) abort();

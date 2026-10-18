@@ -59,6 +59,11 @@ ready. One bounded retry is allowed only after that request settles and fresh
 observations confirm Kodi is idle; a native prewrite guard rejects the retry if
 another video has started. Unknown command outcomes are not blindly repeated.
 
+Subtitle readiness/registration reads have bounded30-second windows, sized for
+native operations that can contain multiple HTTP requests. Transient reads
+retry; authentication, validation and source errors fail promptly. An uncertain
+Add response is reconciled against actual indices without resending the Add.
+
 ## Saved first setup
 
 First use connects a projector, accepts the configured Kodi HTTP login, launches
@@ -104,13 +109,16 @@ remembered source matches observed Kodi playback, plus **Disconnect**. A
 [`MediaSession`](https://developer.android.com/reference/android/media/session/MediaSession)
 publishes observed playback state for Android’s
 [system media-control surfaces](https://developer.android.com/media/implement/surfaces/mobile),
-including the lock screen. The session and notification share a Remote launch
-target. MediaStyle is used only for a verified active source; an ordinary
-connection notification remains available before casting. Android 12+ requests
-immediate foreground notification presentation. Presentation depends on
+including the lock screen. The session and notifications share a Remote launch
+target. The ordinary foreground notification keeps source-bound playback buttons
+when verified; a separate MediaStyle card feeds system media/lock-screen surfaces.
+An ordinary connection notification remains available before casting. Android 12+
+requests immediate foreground notification presentation. Presentation depends on
 Android/Samsung settings; actual phone display and actions still need
 acceptance. Source/revision guards prevent an old notification from controlling
-a different video.
+a different video. Notification updates coalesce the latest snapshot/revision,
+post at most once per second and skip unchanged visible content; media-session
+state updates immediately.
 
 Read-only diagnostics on the installed0.2.0 found notification permission
 granted, an unblocked active foreground notification and an active playing media
@@ -122,19 +130,24 @@ it does not send Kodi Stop. **Stop video** explicitly ends playback. Live
 connection state and subtitle aliases remain in memory; cached receiver details
 and the encrypted login survive separately. Force-stop, reboot or process death
 do not guarantee live-session restoration. Reopening the app can use saved setup
-without automatically replaying media or reconstructing lost subtitle aliases.
+and attach to fresh observed public HTTP playback with generic metadata, without
+replaying media or reconstructing lost subtitle aliases. Adoption requires no
+remembered remote and no authorized casting attempt; a remembered source is
+never silently retargeted. The complete website language catalog returns after
+another capture/handoff; its URLs remain memory-only.
 Receiver playback remains independent of this control service and uses no Mac.
 
-Validation: **26 mobile browser cases** pass, including first authentication,
+Validation: **27 mobile browser cases** pass, including first authentication,
 saved setup, reset/rescan, volume commits, cancelled setup preventing auto-Cast,
 restoration without replay, preserved drafts and notification-open navigation.
-Native checks passed:8 backend,4 service,5 packaged UI and5 Keystore settings.
-Current coverage is121 Node and69 browser tests; the26 mobile cases were rerun
-after the final cancellation receipt changes. Version0.2.1/code3 is installed
-and open on Samsung. Read-only diagnostics confirm automatic saved connection,
-a public ordinary service notification and a nonnull session launch target
-before recasting. Actual Samsung control display/actions still need acceptance.
-See the [system-controls handoff](session-handoffs/2026-10-18-phone-system-controls.md).
+Current checks passed128 Node and the full70 browser cases, including27 mobile.
+Updated native service4 and packaged UI5 checks passed.
+Version0.2.2/code4 is installed on Samsung. Two confirmed live checks exercised
+the phone's actual ordinary-notification and MediaSession Pause/Play actions;
+all four state transitions were observed and the identical source was left
+playing. Shade/lock-screen visual acceptance and S1E2 startup/subtitle retest
+remain pending. See the
+[reattachment handoff](session-handoffs/2026-10-18-phone-reattachment-readiness.md).
 
 ## Files and reproduction
 

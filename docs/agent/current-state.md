@@ -185,3 +185,28 @@ last web-only receipt changes. Installed/open on Samsung; saved setup connected
 automatically, ordinary public notification posted and session launch target
 nonnull. Physical system-control display/actions and repaired cold start remain
 pending. [Latest handoff](session-handoffs/2026-10-18-phone-system-controls.md).
+
+0.2.1 physical follow-up failed: user saw no buttons/lock controls. The phone
+had a posted ordinary notification with only Disconnect and an inactive/NONE
+media session while Kodi continued playing: the APK restart lost its RAM remote.
+User also reported repeated starts/no subtitles on S1E2. Own logs showed native
+errors in the subtitle phase and repeated SUBTITLE_TIMEOUT, with Kodi reporting
+zero tracks. The old3-second window was shorter than a native multi-RPC read.
+
+0.2.2/code4 now installed: fresh active public playback is adopted without Open/
+Add if no remembered source or active handoff exists. Ordinary playback controls
+and the media card are separate; latest-state notification posts coalesce at
+most once/second. Subtitle windows30seconds, bounded transient read retries,
+fresh registration windows and uncertain-Add reconciliation preserve single
+writes.128 Node and the full70 browser cases passed. Updated Service4 and
+packaged UI5 passed after fixing posted-card
+timing in fixtures. On actual Samsung,2 confirmed live checks passed ordinary
+notification Pause/Play and MediaSession Pause/Play, preserving the identical
+source and leaving it playing. The no-confirmation gate rejected on emulator.
+
+S1E2's public PT-BR file returned200 quickly,268 cues, SRT body despite VTT API
+label (same known mismatch as S1E1). This alone does not establish a parse cause.
+A single public stream did not match Kodi's current source exactly, so no Mac
+subtitle mutation was sent. Phone opened the exact S1E2 link; user asked to Cast
+once and check visual notification/lock controls. Those results remain pending.
+[Current handoff](session-handoffs/2026-10-18-phone-reattachment-readiness.md).

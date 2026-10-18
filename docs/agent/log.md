@@ -131,3 +131,16 @@
   and media-session launch intent is present. Actual Samsung visibility/actions,
   cold-start retest and phone-off remain pending; see the
   [system-control handoff](session-handoffs/2026-10-18-phone-system-controls.md).
+- 2026-10-18 physical0.2.1 failures: user reported missing system controls and
+  repeated starts/no subtitles on S1E2. Diagnostics distinguished continued Kodi
+  playback from an inactive phone session after upgrade lost RAM media. Subsequent
+  own casting logs showed subtitle-stage native errors/timeouts; current Kodi had
+  zero subtitles. Replaced3-second metadata budget with30-second bounded reads/
+  registration, transient retry and uncertain-Add reconciliation without replay.
+- 2026-10-18 controls0.2.2: safe current-playback adoption, separate ordinary/media
+  cards and notification coalescing. Fixed service fixtures to wait for current
+  posted controls rather than any previous card.128 Node, full70 browser,
+  Service4 and packaged UI5 passed. Installed on Samsung;2 live
+  notification/MediaSession Pause/Play checks passed, same source left playing.
+  Exact S1E2 opened for user subtitle/first-attempt and visual-control acceptance.
+  Public PT-BR read succeeded; no receiver subtitle write on unmatched source.

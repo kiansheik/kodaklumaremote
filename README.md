@@ -177,6 +177,9 @@ foreground connection survives switching apps and provides notification/system
 media controls. The phone UI keeps setup behind Settings, shows compact status,
 has corner Home/Back and a volume slider with step buttons. Disconnect leaves
 the video playing; saved setup can be wiped independently.
+After a process restart it can attach to Kodi's continuing video from fresh
+status without restarting playback. Expand the ordinary LUMA notification for
+its buttons; a separate media card serves system controls.
 
 Build/setup: [Android README](android/README.md). Implementation, fixture results
 and physical acceptance: [phone app](docs/agent/phone-app.md). Source capture

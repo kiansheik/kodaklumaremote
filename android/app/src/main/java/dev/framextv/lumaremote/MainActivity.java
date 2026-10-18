@@ -454,8 +454,10 @@ public final class MainActivity extends Activity {
                 }
                 if (connectionService != null && params.optJSONObject("remote") != null) {
                     if (!connectionService.rememberHandoff(capturedMedia, params.getJSONObject("remote"))) {
+                        android.util.Log.i("LumaHandoff", "remote metadata rejected INVALID_SUBTITLE");
                         reply(id, null, "INVALID_SUBTITLE", "Could not retain the subtitle catalog. The projector is playing independently."); return;
                     }
+                    android.util.Log.i("LumaHandoff", "remote metadata accepted");
                 }
                 String script;
                 try (InputStream input = getAssets().open("capture.js")) {

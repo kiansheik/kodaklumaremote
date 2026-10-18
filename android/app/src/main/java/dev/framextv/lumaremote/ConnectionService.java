@@ -20,6 +20,7 @@ import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.os.SystemClock;
+import android.util.Log;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import java.nio.charset.StandardCharsets;
@@ -46,7 +47,7 @@ public final class ConnectionService extends Service {
     private static final String STOP = "dev.framextv.lumaremote.STOP";
     private static final String DISCONNECT = "dev.framextv.lumaremote.DISCONNECT";
     private static final String CHANNEL = "projector_connection";
-    private static final int NOTIFICATION = 41;
+    private static final int NOTIFICATION = 41, MEDIA_NOTIFICATION = 42;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final LocalBinder binder = new LocalBinder();
     private final Object stateLock = new Object();
@@ -69,6 +70,11 @@ public final class ConnectionService extends Service {
     private boolean foreground, pollQueued, startRequested, autoConnectPaused;
     private long lastHeartbeat;
     private String notice = "Connect to a projector";
+    private String lastPresentation = "";
+    private String lastNotificationSignature;
+    private long lastNotificationPost;
+    private boolean notificationFlushQueued;
+    private final Runnable notificationFlush = this::flushNotifications;
 
     @Override public void onCreate() {
         super.onCreate();
@@ -128,9 +134,9 @@ public final class ConnectionService extends Service {
         return START_NOT_STICKY;
     }
     public MediaSession.Token getMediaSessionToken() { return mediaSession.getSessionToken(); }
-    public void authorizeToken(String token) { authorizedToken = token != null && token.length() <= 200 ? token : null; }
-    public void revokeToken(String token) { if (token != null && token.equals(authorizedToken)) authorizedToken = null; }
-    public void revokeTokens() { authorizedToken = null; }
+    public void authorizeToken(String token) { synchronized (stateLock) { authorizedToken = token != null && token.length() <= 200 ? token : null; } }
+    public void revokeToken(String token) { synchronized (stateLock) { if (token != null && token.equals(authorizedToken)) authorizedToken = null; } }
+    public void revokeTokens() { synchronized (stateLock) { authorizedToken = null; } }
     public void addListener(Listener listener) { if (listener != null) { listeners.add(listener); main.post(() -> { if (listeners.contains(listener)) listener.onStateChanged(snapshot()); }); } }
     public void removeListener(Listener listener) { listeners.remove(listener); }
     public JSONObject snapshot() { synchronized (stateLock) { return copy(state); } }
@@ -241,7 +247,7 @@ public final class ConnectionService extends Service {
                 }
                 put(state, "connection", connection);
                 put(state, "settings", settings.metadata());
-                if ("kodi.status".equals(method)) put(state, "playback", copy(result));
+                if ("kodi.status".equals(method)) { put(state, "playback", copy(result)); adoptObservedPlayback(result); }
                 if (("luma.status".equals(method) || "luma.setVolume".equals(method)) && result.optJSONObject("volume") != null) put(state, "volume", copy(result.optJSONObject("volume")));
                 if ("kodi.getSubtitles".equals(method)) observeSubtitles(result);
                 if ("app.settings.reset".equals(method)) state.remove("playback");
@@ -393,6 +399,21 @@ public final class ConnectionService extends Service {
     }
     private boolean connected() { return snapshot().optJSONObject("connection").optBoolean("connected"); }
     private boolean configured() { return snapshot().optJSONObject("connection").optBoolean("configured"); }
+    /** A fresh service may attach controls to video already playing on Kodi.
+     * A remembered source or an in-progress handoff always keeps its own scope. */
+    private void adoptObservedPlayback(JSONObject current) {
+        synchronized (stateLock) {
+            JSONObject connection = state.optJSONObject("connection");
+            if (authorizedToken != null || state.optJSONObject("remote") != null || connection == null
+                    || !connection.optBoolean("connected") || !connection.optBoolean("configured") || !current.optBoolean("active")) return;
+            String source;
+            try { source = NativeBackend.publicUrl(current.opt("sourceUrl")); }
+            catch (NativeBackend.BackendException ignored) { return; }
+            put(state, "remote", object("media", object("url", source, "contentType", "", "title", "Kodi video"),
+                    "tracks", new JSONArray(), "catalog", new JSONArray(), "selectedIndex", JSONObject.NULL, "subtitlesEnabled", false));
+            mediaRevision = UUID.randomUUID().toString();
+        }
+    }
     private static boolean matches(JSONObject remote, JSONObject playback) {
         JSONObject media = remote == null ? null : remote.optJSONObject("media");
         return media != null && playback != null && playback.optBoolean("active") && !media.optString("url").isEmpty() && media.optString("url").equals(playback.optString("sourceUrl"));
@@ -436,7 +457,7 @@ public final class ConnectionService extends Service {
                 if (configured()) {
                     try {
                         JSONObject current = work.transport.handle("kodi.status", new JSONObject());
-                        synchronized (stateLock) { if (!work.current()) return; put(state, "playback", current); }
+                        synchronized (stateLock) { if (!work.current()) return; put(state, "playback", current); adoptObservedPlayback(current); }
                     } catch (NativeBackend.BackendException failure) {
                         if ("KODI_AUTH".equals(failure.code) && work.current()) { candidateKodi = null; candidateGeneration = -1; }
                         synchronized (stateLock) { if (!work.current()) return; state.remove("playback"); }
@@ -464,13 +485,18 @@ public final class ConnectionService extends Service {
     }
     private void promote() {
         if (destroyed) return;
-        Notification notification = notification();
-        if (Build.VERSION.SDK_INT >= 29) startForeground(NOTIFICATION, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE);
-        else startForeground(NOTIFICATION, notification);
-        foreground = true;
+        if (!foreground) {
+            JSONObject all; String revision;
+            synchronized (stateLock) { all = copy(state); revision = mediaRevision; }
+            Notification notification = notification(false, all, revision);
+            if (Build.VERSION.SDK_INT >= 29) startForeground(NOTIFICATION, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE);
+            else startForeground(NOTIFICATION, notification);
+            foreground = true; lastNotificationPost = SystemClock.elapsedRealtime(); lastNotificationSignature = null;
+        }
     }
     private void demote() {
         main.removeCallbacks(poll);
+        cancelNotificationFlush();
         foreground = false; startRequested = false;
         removeForeground();
         stopSelf();
@@ -503,13 +529,53 @@ public final class ConnectionService extends Service {
         if (verified) metadata.putLong(MediaMetadata.METADATA_KEY_DURATION, playback.optLong("durationSeconds") * 1000);
         mediaSession.setMetadata(metadata.build());
         mediaSession.setActive(verified);
+        int trackCount = remote == null || remote.optJSONArray("tracks") == null ? 0 : remote.optJSONArray("tracks").length();
+        int catalogCount = remote == null || remote.optJSONArray("catalog") == null ? 0 : remote.optJSONArray("catalog").length();
+        String presentation = "foreground=" + foreground + " connected=" + (connection != null && connection.optBoolean("connected"))
+                + " verified=" + verified + " tracks=" + trackCount + " catalog=" + catalogCount + " sessionActive=" + mediaSession.isActive();
+        if (!presentation.equals(lastPresentation)) { lastPresentation = presentation; Log.i("LumaControls", presentation); }
         JSONObject volume = all.optJSONObject("volume");
         if (volume != null && volume.optInt("max") > 0) volumeProvider.setCurrentVolume(Math.max(0, Math.min(30,
                 (int) Math.round(volume.optDouble("current") * 30 / volume.optDouble("max")))));
-        if (foreground) getSystemService(NotificationManager.class).notify(NOTIFICATION, notification());
+        if (foreground) queueNotificationFlush();
+        else getSystemService(NotificationManager.class).cancel(MEDIA_NOTIFICATION);
     }
-    private Notification notification() {
-        JSONObject all = snapshot(), connection = all.optJSONObject("connection"), remote = all.optJSONObject("remote"), playback = all.optJSONObject("playback");
+    private String notificationSignature(JSONObject all, String revision) {
+        JSONObject connection = all.optJSONObject("connection"), remote = all.optJSONObject("remote"), playback = all.optJSONObject("playback");
+        boolean verified = connection != null && connection.optBoolean("connected") && matches(remote, playback);
+        String title = verified ? clean(remote.optJSONObject("media").optString("title"), 200) : "LUMA Remote";
+        if (title.isEmpty()) title = "Kodi video";
+        String name = connection == null ? "Projector" : clean(connection.optString("name"), 200);
+        if (name.isEmpty()) name = "Projector";
+        return object("revision", revision, "verified", verified, "playing", playback != null && playback.optBoolean("playing"),
+                "title", title, "name", name, "notice", clean(notice, 200), "foreground", foreground).toString();
+    }
+    private void queueNotificationFlush() {
+        if (destroyed || !foreground || notificationFlushQueued) return;
+        notificationFlushQueued = true;
+        main.postDelayed(notificationFlush, Math.max(0, 1000 - (SystemClock.elapsedRealtime() - lastNotificationPost)));
+    }
+    private void flushNotifications() {
+        notificationFlushQueued = false;
+        if (destroyed || !foreground) return;
+        JSONObject all; String revision;
+        synchronized (stateLock) { all = copy(state); revision = mediaRevision; }
+        String signature = notificationSignature(all, revision);
+        if (signature.equals(lastNotificationSignature)) return;
+        long now = SystemClock.elapsedRealtime();
+        if (now - lastNotificationPost < 1000) { queueNotificationFlush(); return; }
+        NotificationManager notifications = getSystemService(NotificationManager.class);
+        notifications.notify(NOTIFICATION, notification(false, all, revision));
+        JSONObject connection = all.optJSONObject("connection");
+        if (connection != null && connection.optBoolean("connected") && matches(all.optJSONObject("remote"), all.optJSONObject("playback"))) notifications.notify(MEDIA_NOTIFICATION, notification(true, all, revision));
+        else notifications.cancel(MEDIA_NOTIFICATION);
+        lastNotificationSignature = signature; lastNotificationPost = now;
+    }
+    private void cancelNotificationFlush() {
+        main.removeCallbacks(notificationFlush); notificationFlushQueued = false; lastNotificationSignature = null;
+    }
+    private Notification notification(boolean mediaCard, JSONObject all, String revision) {
+        JSONObject connection = all.optJSONObject("connection"), remote = all.optJSONObject("remote"), playback = all.optJSONObject("playback");
         boolean verified = connection != null && connection.optBoolean("connected") && matches(remote, playback);
         String name = connection == null ? "Projector" : clean(connection.optString("name"), 200);
         if (name.isEmpty()) name = "Projector";
@@ -519,33 +585,34 @@ public final class ConnectionService extends Service {
         if (Build.VERSION.SDK_INT >= 31) builder.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE);
         builder.setSmallIcon(android.R.drawable.ic_media_play).setContentTitle(title).setContentText(verified ? name : clean(notice, 200))
                 .setContentIntent(sessionActivity).setOngoing(true).setOnlyAlertOnce(true).setShowWhen(false)
-                .setCategory(verified ? Notification.CATEGORY_TRANSPORT : Notification.CATEGORY_SERVICE).setVisibility(Notification.VISIBILITY_PUBLIC);
+                .setCategory(mediaCard ? Notification.CATEGORY_TRANSPORT : Notification.CATEGORY_SERVICE).setVisibility(Notification.VISIBILITY_PUBLIC);
         if (verified) {
-            Notification.MediaStyle style = new Notification.MediaStyle().setMediaSession(mediaSession.getSessionToken());
             boolean playing = playback.optBoolean("playing");
             builder.addAction(new Notification.Action.Builder(playing ? android.R.drawable.ic_media_pause : android.R.drawable.ic_media_play,
-                    playing ? "Pause" : "Play", pending(playing ? PAUSE : PLAY, 1)).build());
-            builder.addAction(new Notification.Action.Builder(android.R.drawable.ic_menu_close_clear_cancel, "Stop video", pending(STOP, 2)).build());
-            style.setShowActionsInCompactView(0, 1);
-            builder.setStyle(style);
+                    playing ? "Pause" : "Play", pending(playing ? PAUSE : PLAY, 1, revision)).build());
+            builder.addAction(new Notification.Action.Builder(android.R.drawable.ic_menu_close_clear_cancel, "Stop video", pending(STOP, 2, revision)).build());
+            if (mediaCard) builder.setStyle(new Notification.MediaStyle().setMediaSession(mediaSession.getSessionToken()).setShowActionsInCompactView(0, 1, 2));
         }
-        builder.addAction(new Notification.Action.Builder(android.R.drawable.ic_menu_close_clear_cancel, "Disconnect", pending(DISCONNECT, 3)).build());
+        builder.addAction(new Notification.Action.Builder(android.R.drawable.ic_menu_close_clear_cancel, "Disconnect", pending(DISCONNECT, 3, revision)).build());
         return builder.build();
     }
-    private PendingIntent pending(String action, int requestCode) {
+    private PendingIntent pending(String action, int requestCode, String revision) {
         Intent intent = new Intent(this, ConnectionService.class).setAction(action);
-        if (!DISCONNECT.equals(action)) intent.setData(Uri.fromParts("luma-control", mediaRevision + ":" + action, null)).putExtra("revision", mediaRevision);
+        if (!DISCONNECT.equals(action)) intent.setData(Uri.fromParts("luma-control", revision + ":" + action, null)).putExtra("revision", revision);
         return PendingIntent.getService(this, requestCode, intent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
     }
     @Override public void onDestroy() {
+        cancelNotificationFlush();
         destroyed = true; generation++; revokeTokens(); main.removeCallbacksAndMessages(null); listeners.clear();
         for (Work work : pending) work.cancel();
         if (backend != null) backend.close(); network.shutdownNow();
         if (mediaSession != null) { mediaSession.setActive(false); mediaSession.release(); }
+        getSystemService(NotificationManager.class).cancel(MEDIA_NOTIFICATION);
         if (foreground) removeForeground();
         super.onDestroy();
     }
     private void removeForeground() {
+        getSystemService(NotificationManager.class).cancel(MEDIA_NOTIFICATION);
         if (Build.VERSION.SDK_INT >= 24) stopForeground(STOP_FOREGROUND_REMOVE);
         else stopForeground(true);
     }
