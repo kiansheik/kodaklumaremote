@@ -34,9 +34,9 @@ const errors = {
 const state = {
   native: false, busy: false, handoff: false, configured: false, connected: false,
   host: '', name: '', playback: null, activeMedia: null, pendingMedia: null,
-  tracks: [], selectedIndex: null, subtitlesEnabled: false, apps: [],
+  tracks: [], catalog: [], selectedIndex: null, subtitlesEnabled: false, apps: [],
   appPage: 0, subtitlePage: 0, sheet: null, sourceGeneration: 0, sourceChanged: false, autoStart: false, setupError: null,
-  jobToken: null, flowController: null, setupFlow: false, volume: null, skipNextLaunch: false,
+  jobToken: null, flowController: null, setupFlow: false, volume: null, skipNextLaunch: false, subtitleFlow: false, subtitleError: null,
   settings: { hasReceiver: false, hasKodi: false, autoConnect: true },
 };
 const pending = new Map();
@@ -90,6 +90,7 @@ function reportStatus(stage, code) {
   catch { /* Diagnostics never change the result of a user action. */ }
 }
 function rpc(method, params = {}, { signal, timeoutMs = 10000, onNotSent } = {}) {
+  const mutationReceipt = method === 'kodi.addSubtitle' || method === 'kodi.open';
   const notSent = () => { try { onNotSent?.(); } catch { /* Receipt observers cannot alter transport outcome. */ } };
   if (!window.LumaNative?.postMessage) { notSent(); return Promise.reject(fixedError('NATIVE_UNAVAILABLE')); }
   if (signal?.aborted) { notSent(); return Promise.reject(fixedError('CANCELLED')); }
@@ -103,11 +104,11 @@ function rpc(method, params = {}, { signal, timeoutMs = 10000, onNotSent } = {})
     };
     const abort = () => {
       cancelNative(params.sourceToken);
-      // A cancelled Add may still receive proof that the native guard stopped
+      // A cancelled mutation may still receive proof that the native guard stopped
       // it before writing. Keep only this bounded, expiring receipt observer;
       // the caller stops immediately and unknown outcomes remain unknown.
       const receipts = [...pending.values()].filter(entry => entry.receiptOnly).length;
-      if (method === 'kodi.addSubtitle' && typeof onNotSent === 'function' && receipts < 32) {
+      if (mutationReceipt && typeof onNotSent === 'function' && receipts < 32) {
         item.receiptOnly = true;
         signal?.removeEventListener('abort', abort);
       } else remove();
@@ -117,7 +118,7 @@ function rpc(method, params = {}, { signal, timeoutMs = 10000, onNotSent } = {})
     item = {
       receiptOnly: false,
       resolve: result => { remove(); resolve(result); },
-      reject: code => { if (method === 'kodi.addSubtitle' && code === 'SOURCE_CHANGED') notSent(); remove(); reject(fixedError(code)); },
+      reject: code => { if (mutationReceipt && code === 'SOURCE_CHANGED') notSent(); remove(); reject(fixedError(code)); },
     };
     pending.set(id, item);
     signal?.addEventListener('abort', abort, { once: true });
@@ -240,6 +241,7 @@ function playback(snapshot) {
   if (state.activeMedia && snapshot.active && snapshot.sourceUrl && snapshot.sourceUrl !== state.activeMedia.url) {
     state.activeMedia = null;
     state.tracks = [];
+    state.catalog = [];
     $('#media-title').textContent = 'Now playing';
   }
   state.playback = snapshot;
@@ -282,11 +284,29 @@ function restoredRemote(value, observedPlayback) {
     indices.add(track.index);
     tracks.push({ index: track.index, language: safeText(track.language, 64), label: safeText(track.label, 200) });
   }
+  const catalog = [];
+  const urls = new Set();
+  const bound = new Set();
+  if (value.catalog !== undefined) {
+    if (!Array.isArray(value.catalog) || value.catalog.length > 128) return null;
+    for (const track of value.catalog) {
+      let trackUrl;
+      try {
+        trackUrl = new URL(track.url);
+        if (!['http:', 'https:'].includes(trackUrl.protocol) || trackUrl.username || trackUrl.password || trackUrl.hash || urls.has(trackUrl.href)) return null;
+      } catch { return null; }
+      if (track.index !== null && (!Number.isInteger(track.index) || !indices.has(track.index) || bound.has(track.index))) return null;
+      if (track.index !== null) bound.add(track.index);
+      urls.add(trackUrl.href);
+      catalog.push({ url: trackUrl.href, contentType: 'text/vtt', language: safeText(track.language, 64), label: safeText(track.label, 200), index: track.index });
+    }
+  }
   return {
     // A service-restored remote is not a newly captured source. Never restore
     // its capture/job tokens or feed it to the handoff coordinator.
     media: { url: url.href, contentType: safeText(value.media.contentType, 100), title: title(value.media.title) },
     tracks,
+    catalog,
     selectedIndex: Number.isInteger(value.selectedIndex) && indices.has(value.selectedIndex) ? value.selectedIndex : null,
     subtitlesEnabled: value.subtitlesEnabled === true,
   };
@@ -302,7 +322,7 @@ function connectionState(snapshot, { initial = false } = {}) {
     if (typeof connection.configured === 'boolean') state.configured = connection.configured;
     if (typeof connection.host === 'string' && privateHost(connection.host)) {
       if (state.host && state.host !== connection.host) {
-        state.activeMedia = null; state.tracks = []; state.selectedIndex = null;
+        state.activeMedia = null; state.tracks = []; state.catalog = []; state.selectedIndex = null;
         $('#media-title').textContent = 'Ready to cast';
         playback({ active: false });
         renderTracks();
@@ -318,10 +338,11 @@ function connectionState(snapshot, { initial = false } = {}) {
   volume(snapshot);
   if (state.connected && $('#message').textContent === 'Connecting to your saved projector…') message('Projector connected. Your remote is ready.');
   if (!state.handoff) {
-    const remote = restoredRemote(snapshot.remote, snapshot.playback);
+    const remote = state.subtitleFlow ? null : restoredRemote(snapshot.remote, snapshot.playback);
     if (remote) {
-      state.activeMedia = remote.media;
+      state.activeMedia = state.activeMedia?.url === remote.media.url ? Object.assign(state.activeMedia, remote.media) : remote.media;
       state.tracks = remote.tracks;
+      state.catalog = remote.catalog;
       state.selectedIndex = remote.selectedIndex;
       state.subtitlesEnabled = remote.subtitlesEnabled;
       $('#media-title').textContent = remote.media.title;
@@ -342,13 +363,13 @@ async function command(method, params, success, consume) {
   state.busy = true;
   renderControls();
   try {
-    const result = await rpc(method, params);
+    const result = await (typeof method === 'function' ? method() : rpc(method, params));
     await consume?.(result);
     if (success) message(success);
     return true;
   } catch (error) {
     if (method === 'app.capture') reportStatus('error', error.code);
-    if (method.startsWith('luma.') && ['CONNECTION_FAILED', 'TIMEOUT', 'NOT_CONNECTED', 'INVALID_RESPONSE'].includes(error.code)) {
+    if (typeof method === 'string' && method.startsWith('luma.') && ['CONNECTION_FAILED', 'TIMEOUT', 'NOT_CONNECTED', 'INVALID_RESPONSE'].includes(error.code)) {
       state.connected = false;
       state.apps = [];
       state.volume = null;
@@ -371,12 +392,13 @@ async function command(method, params, success, consume) {
 }
 
 function handoffParams(options, extra = {}) {
-  return { ...extra, sourceToken: state.jobToken, expectedSourceUrl: options.expectedSourceUrl };
+  return { ...extra, ...(options.phase === 'remote' ? {} : { sourceToken: state.jobToken }), expectedSourceUrl: options.expectedSourceUrl };
 }
 async function handoffRpc(method, params, options) {
   try { return await rpc(method, params, options); }
   catch (error) {
     if (['KODI_AUTH', 'KODI_CONFIG'].includes(error.code)) {
+      if (options.phase === 'remote') { state.subtitleError = error; throw error; }
       state.setupError = error;
       coordinator.cancel();
     }
@@ -390,7 +412,7 @@ const coordinator = createHandoffCoordinator({
   } },
   kodi: {
     connect: options => handoffRpc('kodi.connect', handoffParams(options), options),
-    open: (media, options) => handoffRpc('kodi.open', handoffParams(options, { media }), options),
+    open: (media, options) => handoffRpc('kodi.open', handoffParams(options, { media, ...(options.onlyIfInactive === true ? { onlyIfInactive: true } : {}) }), options),
     status: async options => { const result = await handoffRpc('kodi.status', handoffParams(options), options); playback(result); return result; },
     getSubtitles: options => handoffRpc('kodi.getSubtitles', handoffParams(options), options),
     addSubtitle: (track, options) => handoffRpc('kodi.addSubtitle', handoffParams(options, { track }), options),
@@ -399,6 +421,7 @@ const coordinator = createHandoffCoordinator({
   remote: { async ready(result) {
     state.activeMedia = state.pendingMedia;
     state.tracks = result.tracks;
+    state.catalog = result.catalog || [];
     state.selectedIndex = result.selectedIndex;
     state.subtitlesEnabled = result.selectedIndex !== null;
     $('#media-title').textContent = title(state.activeMedia?.title);
@@ -409,6 +432,7 @@ const coordinator = createHandoffCoordinator({
     const remote = {
       media: { url: state.activeMedia.url, contentType: state.activeMedia.contentType, title: state.activeMedia.title },
       tracks: result.tracks.map(track => ({ index: track.index, language: track.language, label: track.label })),
+      catalog: state.catalog.map(track => ({ url: track.url, language: track.language, label: track.label, index: track.index })),
       selectedIndex: result.selectedIndex,
       subtitlesEnabled: result.selectedIndex !== null,
     };
@@ -455,7 +479,7 @@ async function startCasting() {
     state.jobToken = jobToken;
     selected.sourceToken = jobToken;
     await coordinator.start(selected, { signal: controller.signal, isCurrentSource: () => state.sourceGeneration === generation && state.pendingMedia === selected });
-    if (id === flowId) message('Ready on the projector. You can use the remote.');
+    if (id === flowId) { state.pendingMedia = null; message('Ready on the projector. You can use the remote.'); }
   } catch (error) {
     cancelNative(jobToken);
     if (id !== flowId) return;
@@ -541,16 +565,56 @@ function renderApps() {
   renderControls();
 }
 function renderTracks() {
-  const tracks = [...state.tracks].sort((a, b) => languageRank(a) - languageRank(b) || safeText(a.label).localeCompare(safeText(b.label))).map(track => ({ ...track, name: safeText(track.label) || safeText(track.language) || `Track ${track.index + 1}` }));
+  const tracks = [...(state.catalog.length ? state.catalog : state.tracks)].sort((a, b) => languageRank(a) - languageRank(b) || safeText(a.label).localeCompare(safeText(b.label))).map(track => ({ ...track, name: safeText(track.label) || safeText(track.language) || (Number.isInteger(track.index) ? `Track ${track.index + 1}` : 'Subtitle track') }));
   const result = paged(tracks, $('#subtitle-search').value, state.subtitlePage);
   state.subtitlePage = result.current;
-  $('#subtitle-list').replaceChildren(...result.items.map(track => listButton(track.name, () => command('kodi.setSubtitle', remoteParams({ index: track.index }), 'Subtitle selected. Check the projector.', () => { state.selectedIndex = track.index; state.subtitlesEnabled = true; renderTracks(); }), state.subtitlesEnabled && state.selectedIndex === track.index)));
+  $('#subtitle-list').replaceChildren(...result.items.map(track => listButton(track.name, () => selectSubtitle(track), Number.isInteger(track.index) && state.subtitlesEnabled && state.selectedIndex === track.index)));
   if (!result.items.length) $('#subtitle-list').textContent = 'No matching subtitle tracks.';
   $('#subtitles-off').setAttribute('aria-pressed', String(!state.subtitlesEnabled));
   $('#subtitles-page').textContent = `${result.current + 1} / ${result.total}`;
   $('#subtitles-previous').disabled = result.current === 0;
   $('#subtitles-next').disabled = result.current >= result.total - 1;
   renderControls();
+}
+function remoteDescriptor() {
+  return {
+    media: { url: state.activeMedia.url, contentType: state.activeMedia.contentType, title: state.activeMedia.title },
+    tracks: state.tracks.map(track => ({ index: track.index, language: track.language, label: track.label })),
+    catalog: state.catalog.map(track => ({ url: track.url, language: track.language, label: track.label, index: track.index })),
+    selectedIndex: state.selectedIndex,
+    subtitlesEnabled: state.subtitlesEnabled,
+  };
+}
+async function selectSubtitle(track) {
+  if (state.busy || state.handoff) return;
+  if (!track.url) {
+    void command('kodi.setSubtitle', remoteParams({ index: track.index }), 'Subtitle selected. Check the projector.', () => { state.selectedIndex = track.index; state.subtitlesEnabled = true; renderTracks(); });
+    return;
+  }
+  const media = state.activeMedia;
+  if (!media) return;
+  const catalog = state.catalog.map(item => ({ ...item }));
+  message(Number.isInteger(track.index) ? 'Selecting subtitles…' : 'Loading the selected language…');
+  state.subtitleFlow = true;
+  state.subtitleError = null;
+  try {
+    await command(async () => {
+      try {
+        return await coordinator.selectSubtitle({ ...media, tracks: catalog }, track.url, {
+          knownCatalog: catalog,
+          isCurrentSource: () => state.activeMedia === media && state.connected,
+        });
+      } catch (error) { throw state.subtitleError || error; }
+    }, {}, 'Subtitle selected. Check the projector.', async result => {
+      if (state.activeMedia !== media) throw fixedError('SOURCE_CHANGED');
+      state.tracks = result.tracks;
+      state.catalog = result.catalog;
+      state.selectedIndex = result.selectedIndex;
+      state.subtitlesEnabled = result.selectedIndex !== null;
+      renderTracks();
+      await rpc('app.rememberRemote', { expectedSourceUrl: media.url, remote: remoteDescriptor() });
+    });
+  } finally { state.subtitleFlow = false; state.subtitleError = null; }
 }
 
 async function browse(navigate = false) {
@@ -615,6 +679,7 @@ $('#receiver-form').addEventListener('submit', async event => {
       state.configured = false;
       state.activeMedia = null;
       state.tracks = [];
+      state.catalog = [];
       state.playback = null;
       $('#media-title').textContent = 'Ready to cast';
       $('#playback-status').textContent = 'Choose a video in Browse.';
@@ -769,7 +834,10 @@ $('#show-subtitles').addEventListener('click', () => {
     renderTracks();
   });
 });
-$('#subtitles-off').addEventListener('click', () => command('kodi.setSubtitle', remoteParams({ index: 'off' }), 'Subtitles turned off.', () => { state.subtitlesEnabled = false; state.selectedIndex = null; renderTracks(); }));
+$('#subtitles-off').addEventListener('click', () => command('kodi.setSubtitle', remoteParams({ index: 'off' }), 'Subtitles turned off.', async () => {
+  state.subtitlesEnabled = false; state.selectedIndex = null; renderTracks();
+  if (state.activeMedia && state.catalog.length) await rpc('app.rememberRemote', { expectedSourceUrl: state.activeMedia.url, remote: remoteDescriptor() });
+}));
 $('#open-kodi').addEventListener('click', () => command('luma.launchKodi', {}, 'Kodi launch sent. Check the projector.'));
 $('#stop-video').addEventListener('click', () => command('kodi.stop', remoteParams(), 'Stop requested.', result => { playback(result?.active === false ? result : { active: false }); closeSheet(); }));
 $('#remote-text').addEventListener('input', renderControls);

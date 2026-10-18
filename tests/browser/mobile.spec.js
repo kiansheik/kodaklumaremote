@@ -58,7 +58,8 @@ async function openApp(page, initialSnapshot = null) {
       const { method, params } = request;
       switch (method) {
         case 'app.ready': return { browserUrl: 'https://framextv.xyz/watch/284833/1/1', ...initialSnapshot };
-        case 'app.browse': case 'app.handoffReady': case 'app.handoffStatus': return { accepted: true };
+        case 'app.browse': case 'app.handoffStatus': return { accepted: true };
+        case 'app.handoffReady': case 'app.rememberRemote': receiver.rememberedRemote = params.remote; return { accepted: true };
         case 'app.settings.rescan': return receiver.rescanAutoConnect ? { connected: true, name: 'Other LUMA', devices: [{ host: '192.168.1.51', name: 'Other LUMA', port: 8121 }] } : { connection: { connected: false, configured: false }, devices: [{ host: '192.168.1.51', name: 'Other LUMA', port: 8121 }] };
         case 'app.settings.reset': return { connection: { connected: params.scope === 'kodi', configured: false }, settings: { hasReceiver: params.scope === 'kodi', hasKodi: params.scope === 'receiver', autoConnect: true } };
         case 'app.beginHandoff': receiver.activeJob = `job-${++receiver.job}`; return { sourceToken: receiver.activeJob };
@@ -78,8 +79,10 @@ async function openApp(page, initialSnapshot = null) {
         case 'kodi.pause': receiver.playing = false; return { accepted: true };
         case 'kodi.resume': receiver.playing = true; return { accepted: true };
         case 'kodi.status': return { active: receiver.active, playing: receiver.playing, sourceUrl: receiver.sourceUrl, positionSeconds: receiver.position, durationSeconds: 600, canSeek: true };
-        case 'kodi.getSubtitles': return { tracks: receiver.tracks.map((track, index) => ({ index, name: 'External' })), enabled: receiver.enabled, currentIndex: receiver.currentIndex };
-        case 'kodi.addSubtitle': receiver.tracks.push(params.track); return { accepted: true };
+        case 'kodi.getSubtitles':
+          if (receiver.pendingTrack && --receiver.subtitleDelayReads <= 0) { receiver.tracks.push(receiver.pendingTrack); receiver.pendingTrack = null; }
+          return { tracks: receiver.tracks.map((track, index) => ({ index, name: 'External' })), enabled: receiver.enabled, currentIndex: receiver.currentIndex };
+        case 'kodi.addSubtitle': if (receiver.subtitleDelayReads > 0) receiver.pendingTrack = params.track; else receiver.tracks.push(params.track); return { accepted: true };
         case 'kodi.setSubtitle': receiver.enabled = params.index !== 'off'; receiver.currentIndex = receiver.enabled ? params.index : null; return { accepted: true };
         case 'kodi.seek': receiver.position = params.position; return { accepted: true };
         case 'kodi.stop': receiver.active = false; return { active: false };
@@ -89,6 +92,18 @@ async function openApp(page, initialSnapshot = null) {
     const respond = request => {
       if ((request.method.startsWith('kodi.') || request.method === 'luma.launchKodi') && request.params.sourceToken && request.params.sourceToken !== receiver.activeJob) {
         window.LumaRPC.receive({ id: request.id, ok: false, error: { code: 'SOURCE_CHANGED', message: 'stale job' } });
+        return;
+      }
+      if (request.method === 'kodi.addSubtitle' && receiver.failSubtitle) {
+        window.LumaRPC.receive({ id: request.id, ok: false, error: { code: 'KODI_RESPONSE', message: 'private-subtitle-token' } });
+        return;
+      }
+      if (request.method === 'kodi.getSubtitles' && receiver.failSubtitleAuth) {
+        window.LumaRPC.receive({ id: request.id, ok: false, error: { code: 'KODI_AUTH', message: 'fixture-password private-subtitle-token' } });
+        return;
+      }
+      if (['kodi.addSubtitle', 'kodi.setSubtitle', 'kodi.getSubtitles'].includes(request.method) && request.params.expectedSourceUrl && request.params.expectedSourceUrl !== receiver.sourceUrl) {
+        window.LumaRPC.receive({ id: request.id, ok: false, error: { code: 'SOURCE_CHANGED', message: 'source changed' } });
         return;
       }
       if (request.method === 'kodi.connect' && receiver.failAuth) {
@@ -181,7 +196,7 @@ test('Remote, Devices and secondary panels fit small screens without document sc
   await expect(page.getByLabel('Username', { exact: true })).toHaveValue('');
 });
 
-test('captured video launches Kodi, imports every subtitle and opens the Portuguese-first combined remote without exposing sources', async ({ page }) => {
+test('captured video loads Brazilian Portuguese only and keeps every language in the phone catalog without exposing sources', async ({ page }) => {
   await page.setViewportSize({ width: 360, height: 640 });
   const requests = await openApp(page);
   await setup(page);
@@ -191,14 +206,15 @@ test('captured video launches Kodi, imports every subtitle and opens the Portugu
   const calls = await page.evaluate(() => window.__calls);
   const methods = calls.map(call => call.method);
   expect(methods.indexOf('luma.launchKodi')).toBeLessThan(methods.indexOf('kodi.open'));
-  expect(calls.filter(call => call.method === 'kodi.addSubtitle').map(call => call.params.track.language)).toEqual(['en', 'ja', 'pt-BR', 'de', 'es', 'pt']);
-  expect(calls.filter(call => call.method === 'kodi.setSubtitle').map(call => call.params.index)).toEqual([2]);
+  expect(calls.filter(call => call.method === 'kodi.addSubtitle').map(call => call.params.track.language)).toEqual(['pt-BR']);
+  expect(calls.filter(call => call.method === 'kodi.setSubtitle').map(call => call.params.index)).toEqual([0]);
   expect(calls.filter(call => ['kodi.open', 'kodi.addSubtitle', 'kodi.setSubtitle'].includes(call.method)).every(call => call.params.sourceToken === 'job-1' && call.params.expectedSourceUrl === media.url)).toBe(true);
   expect(calls.filter(call => call.method === 'app.handoffReady')).toHaveLength(1);
   expect(calls.find(call => call.method === 'app.handoffReady').params.remote).toEqual({
     media: { url: media.url, contentType: media.contentType, title: media.title },
-    tracks: media.tracks.map((track, index) => ({ index, language: track.language, label: track.label })),
-    selectedIndex: 2, subtitlesEnabled: true,
+    tracks: [{ index: 0, language: 'pt-BR', label: 'Portuguese (Brazil)' }],
+    catalog: media.tracks.map(track => ({ url: track.url, language: track.language, label: track.label, index: track.language === 'pt-BR' ? 0 : null })),
+    selectedIndex: 0, subtitlesEnabled: true,
   });
   await page.getByRole('button', { name: 'Subtitles', exact: true }).click();
   await expect(page.locator('#subtitle-list button')).toHaveText(['Portuguese (Brazil)', 'English', 'Portuguese']);
@@ -244,7 +260,7 @@ test('manual playback stays bound to the active receiver source while browsing a
   expect(calls.find(call => call.method === 'app.browse').params).toEqual({});
   expect(calls.filter(call => call.method === 'luma.key' && call.params.key === 'enter')).toHaveLength(0);
   expect(calls.find(call => call.method === 'kodi.seek').params).toEqual({ expectedSourceUrl: media.url, position: 1 });
-  expect(calls.filter(call => call.method === 'kodi.setSubtitle').at(-1).params).toEqual({ expectedSourceUrl: media.url, index: 0 });
+  expect(calls.filter(call => call.method === 'kodi.setSubtitle').at(-1).params).toEqual({ expectedSourceUrl: media.url, index: 1 });
 });
 
 test('apps paginate as text and failed typing keeps its draft while clearing a lost projector connection', async ({ page }) => {
@@ -386,13 +402,19 @@ test('Cancel revokes the native token before a queued video write and retry uses
   await page.getByRole('button', { name: 'Cancel casting', exact: true }).click();
   await expect(page.locator('#handoff-label')).toHaveText('Casting was cancelled.');
   await expect.poll(() => page.evaluate(() => window.__calls.some(call => call.method === 'app.cancelHandoff' && call.params.sourceToken === 'job-1'))).toBe(true);
+  expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'kodi.open').length)).toBe(1);
+  await page.getByRole('button', { name: 'Try again', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.__calls.filter(call => call.method === 'kodi.status').length)).toBeGreaterThanOrEqual(3);
+  expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'kodi.open').length)).toBe(1);
   await page.evaluate(() => window.__release());
   expect(await page.evaluate(() => window.__receiver.active)).toBe(false);
-  await page.getByRole('button', { name: 'Try again', exact: true }).click();
   await expect(page.locator('#message')).toHaveText('Ready on the projector. You can use the remote.');
   const calls = await page.evaluate(() => window.__calls);
   expect(calls.filter(call => call.method === 'app.beginHandoff').map(call => call.params.sourceToken)).toEqual(['capture-one', 'capture-one']);
   expect(calls.filter(call => call.method === 'kodi.open').map(call => call.params.sourceToken)).toEqual(['job-1', 'job-2']);
+  expect(calls.filter(call => call.method === 'kodi.open').at(-1).params.expectedSourceUrl).toBe(media.url);
+  expect(calls.filter(call => call.method === 'kodi.open').at(-1).params.onlyIfInactive).toBe(true);
+  expect(calls.filter(call => call.method === 'app.handoffReady')).toHaveLength(1);
   expect(calls.filter(call => call.method === 'kodi.addSubtitle').every(call => call.params.sourceToken === 'job-2')).toBe(true);
 });
 
@@ -409,9 +431,9 @@ test('a cancelled queued subtitle proven not written can be retried without a du
   await page.getByRole('button', { name: 'Try again', exact: true }).click();
   await expect(page.locator('#message')).toHaveText('Ready on the projector. You can use the remote.');
   const result = await page.evaluate(() => ({ tracks: window.__receiver.tracks, calls: window.__calls }));
-  expect(result.tracks.map(track => track.language)).toEqual(['en', 'ja', 'pt-BR', 'de', 'es', 'pt']);
+  expect(result.tracks.map(track => track.language)).toEqual(['pt-BR']);
   expect(result.calls.filter(call => call.method === 'kodi.open')).toHaveLength(1);
-  expect(result.calls.filter(call => call.method === 'kodi.addSubtitle')).toHaveLength(7);
+  expect(result.calls.filter(call => call.method === 'kodi.addSubtitle')).toHaveLength(2);
   expect(result.calls.filter(call => call.method === 'kodi.addSubtitle').slice(1).every(call => call.params.sourceToken === 'job-2')).toBe(true);
 });
 
@@ -688,4 +710,80 @@ test('canceling setup waiting prevents a queued Cast even if native validation f
   await page.getByRole('button', { name: 'Refresh volume', exact: true }).click();
   await expect(page.locator('#message')).toHaveText('Volume refreshed.');
   expect(await page.evaluate(() => window.__calls.some(call => call.method === 'kodi.open' || call.method === 'app.beginHandoff'))).toBe(false);
+});
+
+test('languages load on demand with observed indices and already loaded choices do not add again', async ({ page }) => {
+  await page.setViewportSize({ width: 360, height: 640 });
+  await openApp(page); await setup(page); await cast(page);
+  await page.evaluate(() => { window.LumaApp.onSourceChanged(); window.__receiver.tracks.push({}); window.__receiver.subtitleDelayReads = 2; });
+  await page.getByRole('button', { name: 'Subtitles', exact: true }).click();
+  await expect(page.locator('#subtitle-list button')).toHaveText(['Portuguese (Brazil)', 'English', 'Portuguese']);
+  await page.getByRole('button', { name: 'English', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'English', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  let calls = await page.evaluate(() => window.__calls);
+  const lazyAdd = calls.filter(call => call.method === 'kodi.addSubtitle').at(-1);
+  expect(lazyAdd.params.expectedSourceUrl).toBe(media.url);
+  expect(lazyAdd.params.sourceToken).toBeUndefined();
+  expect(calls.filter(call => call.method === 'kodi.setSubtitle').at(-1).params).toEqual({ expectedSourceUrl: media.url, index: 2 });
+  await page.getByRole('button', { name: 'Portuguese (Brazil)', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Portuguese (Brazil)', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await page.getByRole('button', { name: 'English', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'English', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  calls = await page.evaluate(() => window.__calls);
+  expect(calls.filter(call => call.method === 'kodi.addSubtitle')).toHaveLength(2);
+  expect(calls.filter(call => call.method === 'kodi.open')).toHaveLength(1);
+  const remembered = calls.filter(call => call.method === 'app.rememberRemote').at(-1).params;
+  expect(remembered.expectedSourceUrl).toBe(media.url);
+  expect(remembered.remote.catalog).toHaveLength(media.tracks.length);
+  expect(remembered.remote.catalog.find(track => track.language === 'en').index).toBe(2);
+  expect(remembered.remote.catalog.find(track => track.language === 'ja').index).toBeNull();
+  await layout(page);
+  await expect(page.locator('body')).not.toContainText('private-subtitle-token');
+});
+
+test('service restoration retains the complete lazy catalog and loads a new language without replay', async ({ page }) => {
+  const snapshot = serviceSnapshot();
+  snapshot.remote.tracks = [{ index: 0, language: 'pt-BR', label: 'Portuguese (Brazil)' }];
+  snapshot.remote.catalog = media.tracks.map(track => ({ url: track.url, language: track.language, label: track.label, index: track.language === 'pt-BR' ? 0 : null }));
+  snapshot.remote.selectedIndex = 0;
+  await openApp(page, snapshot);
+  await page.getByRole('button', { name: 'Subtitles', exact: true }).click();
+  await page.getByLabel('Find a language').fill('Japanese');
+  await page.getByRole('button', { name: 'Japanese', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Japanese', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  const calls = await page.evaluate(() => window.__calls);
+  expect(calls.filter(call => call.method === 'kodi.addSubtitle').map(call => call.params.track.language)).toEqual(['ja']);
+  expect(calls.some(call => ['luma.launchKodi', 'kodi.open', 'app.beginHandoff', 'device.connect'].includes(call.method))).toBe(false);
+  expect(calls.filter(call => call.method.startsWith('kodi.')).every(call => call.params.expectedSourceUrl === media.url && call.params.sourceToken === undefined)).toBe(true);
+  await expect(page.locator('body')).not.toContainText('private-subtitle-token');
+});
+
+test('an on-demand subtitle failure leaves the current language and catalog usable without replay', async ({ page }) => {
+  await openApp(page); await setup(page); await cast(page);
+  await page.getByRole('button', { name: 'Subtitles', exact: true }).click();
+  await page.evaluate(() => { window.__receiver.failSubtitle = true; });
+  await page.getByRole('button', { name: 'English', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Portuguese (Brazil)', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('button', { name: 'English', exact: true })).toBeEnabled();
+  await expect(page.locator('#sheet-message')).toHaveAttribute('data-error', 'true');
+  await expect(page.locator('body')).not.toContainText('private-subtitle-token');
+  const calls = await page.evaluate(() => window.__calls);
+  expect(calls.filter(call => call.method === 'kodi.open')).toHaveLength(1);
+  expect(await page.evaluate(() => ({ selected: window.__receiver.currentIndex, playing: window.__receiver.playing }))).toEqual({ selected: 0, playing: true });
+  await page.evaluate(() => { window.__receiver.failSubtitle = false; window.__receiver.failSubtitleAuth = true; });
+  await page.getByRole('button', { name: 'English', exact: true }).click();
+  await expect(page.locator('#kodi-panel')).toBeVisible();
+  await expect(page.locator('#message')).toHaveText('Kodi did not accept the username or password. Check the Kodi connection details.');
+  expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'kodi.open').length)).toBe(1);
+});
+
+test('initial subtitle selection falls back to English when Brazilian Portuguese is absent', async ({ page }) => {
+  await openApp(page); await setup(page);
+  await page.evaluate(value => window.LumaApp.onCapturedMedia({ ...value, tracks: value.tracks.filter(track => track.language !== 'pt-BR') }), media);
+  await expect(page.locator('#message')).toHaveText('Ready on the projector. You can use the remote.');
+  const calls = await page.evaluate(() => window.__calls);
+  expect(calls.filter(call => call.method === 'kodi.addSubtitle').map(call => call.params.track.language)).toEqual(['en']);
+  const remote = calls.find(call => call.method === 'app.handoffReady').params.remote;
+  expect(remote.catalog).toHaveLength(5);
+  expect(remote.selectedIndex).toBe(0);
 });

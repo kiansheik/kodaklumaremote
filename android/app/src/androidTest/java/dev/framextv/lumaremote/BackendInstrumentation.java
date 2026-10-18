@@ -74,6 +74,8 @@ public final class BackendInstrumentation extends UiSmokeInstrumentation {
         check("media open and source guards", () -> {
             call("kodi.open", "media", media(FIRST), "expectedSourceUrl", FIRST, "sourceToken", "current");
             JSONObject status = call("kodi.status"); require(status.getBoolean("active") && FIRST.equals(status.getString("sourceUrl")), "Current media identity missing");
+            rejects("SOURCE_CHANGED", "kodi.open", "media", media(FIRST), "expectedSourceUrl", FIRST, "onlyIfInactive", true, "sourceToken", "current");
+            rejects("INVALID_INPUT", "kodi.open", "media", media(FIRST), "onlyIfInactive", "true", "sourceToken", "current");
             rejects("SOURCE_CHANGED", "kodi.open", "media", media(FIRST), "expectedSourceUrl", FIRST, "sourceToken", "stale");
             rejects("SOURCE_CHANGED", "kodi.open", "media", media(FIRST), "expectedSourceUrl", "https://media.example/other.m3u8", "sourceToken", "current");
             rejects("SOURCE_CHANGED", "kodi.pause", "expectedSourceUrl", "https://media.example/other.m3u8", "sourceToken", "current");

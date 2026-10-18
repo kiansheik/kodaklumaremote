@@ -23,9 +23,10 @@ the living service's remote without reconnecting or replaying media.
 Open **Browse**, visit the frameXTV episode and wait for its player, then tap
 **Cast to LUMA** in the browser toolbar. An HTTPS frameXTV page can also be
 shared from Chrome to this app. The sender launches installed Kodi, waits for
-its API, opens the declared media, registers all unique declared subtitle tracks
-and selects Brazilian Portuguese, falling back to English. The app then opens
-**Remote**. Only one subtitle track displays at a time.
+its API, opens the declared media and loads Brazilian Portuguese, falling back
+to English. The app then opens **Remote**. All website languages remain listed
+under **Subtitles**; selecting another loads it on demand. Only one subtitle
+track displays at a time.
 
 The no-scroll Remote screen keeps Home at upper left, Back at upper right,
 playback and a central five-button D-pad visible. Its volume slider and ±
@@ -85,12 +86,14 @@ Mac loopback fixtures via `10.0.2.2`; it does not discover or contact the actual
 projector. See [phone implementation and acceptance](../docs/agent/phone-app.md)
 for recorded results and physical tests still required.
 
-The mobile UI has 22 passing browser cases, including validated first setup,
+The mobile UI has 26 passing browser cases, including validated first setup,
 saved-settings presentation, cancellation, reset/rescan, volume commits,
 session restoration and notification-open handling. Final checks passed:
-109 Node,65 browser,8 native transport,4 service,5 packaged UI and5 Keystore
-settings checks. Updated0.2.0 is installed on Samsung Android16. Live casting, switching apps,
-lock-screen controls and full phone-off playback remain unconfirmed there.
+121 Node,69 browser,8 native transport,4 service,5 packaged UI and5 Keystore
+settings checks. Updated0.2.1 is installed on Samsung Android16. The user
+confirmed live casting with picture, sound and Portuguese subtitles on0.2.0.
+The repaired cold start, system control display/actions and full phone-off
+playback still need physical acceptance.
 
 The service uses Android’s
 [`connectedDevice` foreground-service type](https://developer.android.com/develop/background-work/services/fgs/service-types#connected-device)

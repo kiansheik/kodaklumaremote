@@ -47,7 +47,8 @@
   boundaries and actual browser flows. `docs/agent/luma-remote.md` records REA
   provenance, physical acceptance and remaining startup/phone work.
 - `src/handoff/coordinator.mjs`: bounded receiver launch/readiness/media/subtitle
-  orchestration, observed-index bindings, cancellation and conservative retry.
+  orchestration, preferred-first/on-demand subtitle catalog, observed-index
+  bindings, cancellation and a guarded cold-start Open retry.
 - `src/mobile/{index.html,app.js,capture.js}`: no-scroll combined phone remote,
   native RPC adapters, same-origin declared source/track capture and matched pause.
 - `android/`: phone APK shell and native networking; browser WebView has no

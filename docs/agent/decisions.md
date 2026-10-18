@@ -131,3 +131,23 @@ A connected-device foreground service owns native I/O and a remote MediaSession;
 the Activity binds to it. Visible-app retries pause on explicit disconnect.
 Native generations reject queued/stale work and permit immediate disconnect.
 First setup authenticates Kodi before saving and continuing the pending video.
+
+## D12: Preferred subtitles first and guarded cold-start recovery
+
+Following phone acceptance, the user requested lower startup latency: load
+Brazilian Portuguese, otherwise English, and retain every declared language's
+URL in service RAM for on-demand loading. Restore explicit URL/index bindings;
+never infer a language from an unknown external Kodi track. Catalog updates
+verify the active source and preserve the existing media-control revision.
+
+Kodi's HTTP API may become ready before its first accepted Open starts video.
+Allow one automatic retry after fresh, sustained inactivity, with a native
+prewrite idle check. Pending/unknown Open outcomes must not overlap another
+Open. Cancel/retry can proceed after explicit native proof that a command was
+never written. Successful command acknowledgement still requires observed
+playback/subtitle state before opening Remote.
+
+Publish a shared session/notification launch target and playback custom actions
+for modern Android system controls. A connection without verified playback uses
+an ordinary service notification. An active notification record is not proof
+that Samsung displays the controls; retain physical acceptance separately.

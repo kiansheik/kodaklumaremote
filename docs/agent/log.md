@@ -118,3 +118,16 @@
   Kodi state showed playing04:51/22:35,19 subtitle tracks, enabled/index6. No media
   or control mutation was sent by this diagnostic. Physical picture/PT-BR and
   phone-off confirmation remain pending; source/credentials were not logged.
+- 2026-10-18 phone acceptance/control repair: User confirmed picture, sound and
+  Portuguese subtitles from Samsung, then reported cold-start stalling and no
+  visible notification/lock controls. Phone diagnostics found granted permission,
+  posted/unblocked notification and fresh active media, with null session launch
+  target. Added shared launch intent, conditional MediaStyle, immediate display,
+  modern Stop/Disconnect actions, preferred-first/lazy subtitles and bounded
+  idle-only Open retry with late prewrite-proof cancellation recovery.
+- 2026-10-18 validation/install:121 Node,69 browser and22 native checks passed
+  across aggregate/narrow final runs. Built/installed0.2.1/code3 and opened it on
+  Samsung. Saved setup connected, ordinary public service notification posted
+  and media-session launch intent is present. Actual Samsung visibility/actions,
+  cold-start retest and phone-off remain pending; see the
+  [system-control handoff](session-handoffs/2026-10-18-phone-system-controls.md).

@@ -411,7 +411,7 @@ public final class MainActivity extends Activity {
                 result.put("browserUrl", browser.getUrl());
                 if (capturedMedia != null) result.put("source", capturedMedia);
                 reply(id, result, null, null);
-            } else if (method.startsWith("app.settings.")) {
+            } else if (method.startsWith("app.settings.") || method.equals("app.rememberRemote")) {
                 if (connectionService == null) { reply(id, null, "BUSY", "The remote is starting. Try again in a moment."); return; }
                 connectionService.request(method, params, new ConnectionService.Callback() {
                     @Override public void success(JSONObject result) { reply(id, result, null, null); }
@@ -453,7 +453,9 @@ public final class MainActivity extends Activity {
                     reply(id, null, "SOURCE_CHANGED", "The page changed. The projector is playing independently."); return;
                 }
                 if (connectionService != null && params.optJSONObject("remote") != null) {
-                    connectionService.rememberHandoff(capturedMedia, params.getJSONObject("remote"));
+                    if (!connectionService.rememberHandoff(capturedMedia, params.getJSONObject("remote"))) {
+                        reply(id, null, "INVALID_SUBTITLE", "Could not retain the subtitle catalog. The projector is playing independently."); return;
+                    }
                 }
                 String script;
                 try (InputStream input = getAssets().open("capture.js")) {

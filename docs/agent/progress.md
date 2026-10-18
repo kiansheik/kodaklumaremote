@@ -72,3 +72,10 @@ cached-IP automatic connection, secondary Settings/reset, corner Home/Back and
 observed-volume slider. First setup must authenticate and then continue the
 selected Cast. Final checks and live acceptance:
 [background/settings handoff](session-handoffs/2026-10-18-phone-background-settings.md).
+
+Phone follow-up: the user confirmed picture, sound and Portuguese subtitles
+from the actual Samsung sender, and reported a cold Kodi start stall and absent
+notification/lock-screen controls. The repair adds a bounded idle-only Open
+retry, preferred-first/lazy subtitle loading and system-control presentation
+fixes. See the [control follow-up](session-handoffs/2026-10-18-phone-system-controls.md)
+for final checks, installed artifact and remaining physical acceptance.

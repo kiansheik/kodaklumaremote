@@ -166,3 +166,22 @@ A read-only Kodi query then reported playing at04:51/22:35,19 available subtitle
 tracks, enabled and index6 selected. This establishes phone handoff completion
 and receiver state; actual projector picture/PT-BR rendering, lock controls and
 phone-off still await explicit user confirmation.
+
+Subsequent user confirmation: Samsung casting has picture, sound and working
+Portuguese subtitles. Reported0.2.0 failures: cold Kodi launch could stall until
+Cancel/Retry, and system controls were not visible. Read-only phone diagnostics
+found permission granted, an unblocked posted foreground notification and a
+fresh active playback session, but its session launch target was null.
+
+Version0.2.1/code3 repairs the launch target, uses an ordinary notification
+before verified media, requests immediate foreground display and publishes
+Stop/Disconnect as modern Android playback custom actions. It also loads only
+PT-BR initially (English fallback), keeps all website languages in service RAM
+for on-demand selection and adds one guarded retry after acknowledged Open plus
+confirmed idle Kodi. Unknown Open outcomes never overlap another Open; explicit
+late prewrite proof permits retry. Current coverage:121 Node,69 browser and22
+native Android checks; final mobile and packaged UI checks were rerun after the
+last web-only receipt changes. Installed/open on Samsung; saved setup connected
+automatically, ordinary public notification posted and session launch target
+nonnull. Physical system-control display/actions and repaired cold start remain
+pending. [Latest handoff](session-handoffs/2026-10-18-phone-system-controls.md).

@@ -12,6 +12,7 @@ import android.content.ServiceConnection;
 import android.content.pm.ServiceInfo;
 import android.media.session.MediaController;
 import android.media.session.MediaSession;
+import android.media.session.PlaybackState;
 import android.media.AudioManager;
 import android.net.Uri;
 import android.os.Build;
@@ -115,9 +116,16 @@ public final class ServiceInstrumentation {
         } finally { connection.disconnect(); }
     }
     private void remember() throws Exception {
-        JSONObject media = object("url", FIRST, "contentType", "application/vnd.apple.mpegurl", "title", "Owned service fixture");
-        JSONObject result = object("tracks", new JSONArray(), "subtitleCount", 0, "selectedIndex", JSONObject.NULL, "selectedLanguage", JSONObject.NULL);
+        JSONObject declared = object("url", "https://media.example/pt.vtt", "language", "pt-BR", "label", "Português", "index", JSONObject.NULL);
+        JSONObject media = object("url", FIRST, "contentType", "application/vnd.apple.mpegurl", "title", "Owned service fixture", "tracks", new JSONArray().put(declared));
+        JSONObject result = object("tracks", new JSONArray(), "catalog", new JSONArray().put(declared), "subtitleCount", 0, "selectedIndex", JSONObject.NULL, "selectedLanguage", JSONObject.NULL);
         runner.runOnMainSync(() -> service.rememberHandoff(media, result));
+    }
+    private JSONObject remoteUpdate() throws Exception {
+        return object("media", object("url", FIRST, "contentType", "application/vnd.apple.mpegurl"),
+            "tracks", new JSONArray().put(object("index", 1, "language", "pt-BR", "label", "Português")),
+            "catalog", new JSONArray().put(object("url", "https://media.example/pt.vtt", "language", "pt-BR", "label", "Português", "index", 1)),
+            "selectedIndex", JSONObject.NULL, "subtitlesEnabled", false);
     }
     private Notification notification() {
         NotificationManager manager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
@@ -142,6 +150,17 @@ public final class ServiceInstrumentation {
         }
         throw new AssertionError("Notification action missing");
     }
+    private PlaybackState.CustomAction customAction(MediaController controller, String title) throws Exception {
+        long end = SystemClock.elapsedRealtime() + 4000;
+        while (SystemClock.elapsedRealtime() < end) {
+            PlaybackState state = controller.getPlaybackState();
+            if (state != null) for (PlaybackState.CustomAction action : state.getCustomActions()) {
+                if (action.getName().toString().toLowerCase(java.util.Locale.ROOT).contains(title)) return action;
+            }
+            Thread.sleep(40);
+        }
+        throw new AssertionError("MediaSession custom action missing");
+    }
     private void waitPlaying(boolean playing) throws Exception {
         long end = SystemClock.elapsedRealtime() + 4000;
         while (SystemClock.elapsedRealtime() < end) {
@@ -161,6 +180,7 @@ public final class ServiceInstrumentation {
             launch.setClassName(context, MainActivity.class.getName()); launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
             activity = (MainActivity) runner.startActivitySync(launch); quietBrowser(activity); bind();
             require(call("device.connect", "host", args.getString("targetHost")).getBoolean("connected"), "Fixture connection failed");
+            require(!waitNotification(true).extras.containsKey(Notification.EXTRA_MEDIA_SESSION), "An idle projector notification was published as active media");
             SettingsStore settings = new SettingsStore(context);
             require(args.getString("targetHost").equals(settings.readReceiver().getString("host")), "Verified projector was not cached");
             call("kodi.configure", "username", "fixture", "password", "wrong-fixture", "port", Integer.parseInt(args.getString("kodiPort")));
@@ -186,6 +206,8 @@ public final class ServiceInstrumentation {
             Notification firstNotification = waitNotification(true);
             MediaSession.Token token = service.getMediaSessionToken();
             require(token.equals(firstNotification.extras.getParcelable(Notification.EXTRA_MEDIA_SESSION)), "Notification is not attached to the service MediaSession");
+            PendingIntent sessionActivity = new MediaController(context, token).getSessionActivity();
+            require(sessionActivity != null && sessionActivity.equals(firstNotification.contentIntent) && context.getPackageName().equals(sessionActivity.getCreatorPackage()), "System media controls cannot open the app remote");
             if (Build.VERSION.SDK_INT >= 29) require((service.getForegroundServiceType() & ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE) != 0, "Service has the wrong foreground type");
             passed("connection is owned by the started foreground service and MediaSession");
 
@@ -203,7 +225,9 @@ public final class ServiceInstrumentation {
             require(service == original && service.snapshot().getJSONObject("connection").getBoolean("connected"), "Closing the Activity ended the background connection");
             require(fixture("").getInt("connections") == 1, "Activity lifecycle opened another projector socket");
             int beforeRestore = fixture("").getInt("mutations");
-            call("device.disconnect"); unbind(); runner.waitForIdleSync();
+            notificationAction(waitNotification(true), "disconnect").send(); waitNotification(false);
+            require(!service.snapshot().getJSONObject("connection").getBoolean("connected"), "Notification disconnect retained the connection");
+            unbind(); runner.waitForIdleSync();
             java.lang.reflect.Field destroyed = ConnectionService.class.getDeclaredField("destroyed"); destroyed.setAccessible(true);
             long destroyedBy = SystemClock.elapsedRealtime() + 3000;
             while (!destroyed.getBoolean(original) && SystemClock.elapsedRealtime() < destroyedBy) Thread.sleep(40);
@@ -229,24 +253,37 @@ public final class ServiceInstrumentation {
             while (fixture("").getInt("volumeKeys") == 0 && SystemClock.elapsedRealtime() < volumeBy) Thread.sleep(40);
             require(fixture("").getInt("volumeKeys") == 1, "Framework remote volume did not send one projector control");
             PendingIntent stalePause = notificationAction(waitNotification(true), "pause");
+            PlaybackState.CustomAction staleStop = customAction(controller, "stop");
+            require(call("app.rememberRemote", "expectedSourceUrl", FIRST, "remote", remoteUpdate()).getBoolean("accepted"), "Source-bound catalog update was rejected");
+            require(service.snapshot().getJSONObject("remote").getJSONArray("catalog").getJSONObject(0).getInt("index") == 1, "Updated lazy catalog binding was not retained in RAM");
+            JSONObject cleared = remoteUpdate().put("tracks", new JSONArray());
+            cleared.getJSONArray("catalog").getJSONObject(0).put("index", JSONObject.NULL);
+            require(call("app.rememberRemote", "expectedSourceUrl", FIRST, "remote", cleared).getBoolean("accepted"), "A removed receiver track could not clear its old catalog binding");
+            JSONObject clearedRemote = service.snapshot().getJSONObject("remote");
+            require(clearedRemote.getJSONArray("tracks").length() == 0 && clearedRemote.getJSONArray("catalog").getJSONObject(0).isNull("index"), "Cleared catalog retained the obsolete receiver index");
+            require(call("app.rememberRemote", "expectedSourceUrl", FIRST, "remote", remoteUpdate()).getBoolean("accepted"), "A cleared catalog could not bind its observed receiver index again");
             JSONObject changed = fixture("?source=other"); int before = changed.getInt("mutations");
-            controller.getTransportControls().pause(); controller.adjustVolume(AudioManager.ADJUST_RAISE, 0); stalePause.send(); Thread.sleep(350); call("kodi.status");
+            PendingCall staleCatalog = submit("app.rememberRemote", "expectedSourceUrl", FIRST, "remote", remoteUpdate());
+            require(staleCatalog.ready.await(3, TimeUnit.SECONDS) && "SOURCE_CHANGED".equals(staleCatalog.failure.get()), "A stale source updated the remote catalog");
+            controller.getTransportControls().pause(); controller.adjustVolume(AudioManager.ADJUST_RAISE, 0); stalePause.send();
+            controller.getTransportControls().sendCustomAction(staleStop.getAction(), staleStop.getExtras()); Thread.sleep(350); call("kodi.status");
             JSONObject untouched = fixture("");
             require(untouched.getInt("mutations") == before && untouched.getInt("volumeKeys") == 1 && untouched.getBoolean("playing") && OTHER.equals(untouched.getString("source")), "A stale media control changed another source");
             fixture("?source=first"); call("kodi.status"); remember(); runner.waitForIdleSync();
             int renewed = fixture("").getInt("mutations");
-            stalePause.send(); Thread.sleep(250); call("kodi.status");
+            stalePause.send(); controller.getTransportControls().sendCustomAction(staleStop.getAction(), staleStop.getExtras()); Thread.sleep(250); call("kodi.status");
             require(fixture("").getInt("mutations") == renewed, "A stale notification retargeted a renewed handoff of the same source");
             passed("MediaSession controls work in background and stale notification/session controls cannot alter another source");
 
             int stops = fixture("").getInt("stops");
+            PlaybackState.CustomAction disconnect = customAction(controller, "disconnect");
             fixture("?hold=1"); PendingCall held = submit("kodi.status");
             long heldBy = SystemClock.elapsedRealtime() + 3000;
             while (fixture("").getInt("held") == 0 && SystemClock.elapsedRealtime() < heldBy) Thread.sleep(40);
             require(fixture("").getInt("held") > 0, "Fixture did not hold a native HTTP read");
             PendingCall queued = submit("kodi.pause", "expectedSourceUrl", FIRST);
             long disconnectStarted = SystemClock.elapsedRealtime();
-            notificationAction(waitNotification(true), "disconnect").send();
+            controller.getTransportControls().sendCustomAction(disconnect.getAction(), disconnect.getExtras());
             long disconnectedBy = disconnectStarted + 750;
             while ((service.snapshot().getJSONObject("connection").getBoolean("connected") || notification() != null) && SystemClock.elapsedRealtime() < disconnectedBy) Thread.sleep(20);
             require(!service.snapshot().getJSONObject("connection").getBoolean("connected") && notification() == null, "Disconnect waited behind a blocked or queued network command");
@@ -258,7 +295,7 @@ public final class ServiceInstrumentation {
             require(!service.snapshot().getJSONObject("connection").getBoolean("connected"), "Disconnect retained the control session");
             require(FIRST.equals(independent.getString("source")) && independent.getBoolean("playing") && independent.getInt("stops") == stops, "Disconnect stopped receiver playback");
             require(notification() == null, "A stale completion revived the disconnected foreground service");
-            passed("notification disconnect bypasses blocked reads, rejects queued writes and preserves receiver playback");
+            passed("system disconnect bypasses blocked reads, rejects queued writes and preserves receiver playback");
             result.putInt("passed", checks); result.putInt("failures", 0); runner.finish(Activity.RESULT_OK, result);
         } catch (Throwable error) {
             result.putInt("passed", checks); result.putInt("failures", 1); result.putString("failure", error.getClass().getSimpleName() + ": " + error.getMessage()); runner.finish(Activity.RESULT_CANCELED, result);

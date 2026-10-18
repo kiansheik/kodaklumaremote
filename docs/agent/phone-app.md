@@ -2,13 +2,14 @@
 
 Implemented on 2026-10-18 after actual Mac-controlled frameXTV playback and
 Portuguese subtitles were confirmed on LUMA Kodi 21.2. A baseline debug APK was
-installed on the Samsung phone running Android 16. Live phone casting,
-background/lock-screen control and phone-off acceptance remain pending.
+installed on the Samsung phone running Android 16. The user confirmed live
+phone casting with picture, sound and Portuguese subtitles. Background/system
+control presentation and phone-off acceptance remain pending.
 
 ## Runtime path
 
 Phone browser → exposed media/track descriptors → native LUMA launch → bounded
-Kodi readiness polling → Kodi `Player.Open` → sequential subtitle registration
+Kodi readiness polling → Kodi `Player.Open` → preferred subtitle registration
 with observed index binding → Portuguese (Brazil), then English → Remote.
 The receiver fetches source URLs directly. No Mac, media proxy, cookie export or
 phone-hosted server participates in this path.
@@ -46,11 +47,17 @@ cannot be undone. Manual controls remain bound to the active receiver source,
 so browsing a new page after a successful cast leaves the video controllable.
 
 The coordinator waits for actual Kodi state instead of treating command
-acknowledgement as playback/subtitle selection. It imports all unique declared
-tracks within explicit bounds, maps observed receiver indices and retains a
-bounded in-memory retry registry. Unknown existing external tracks are never
-assigned guessed language labels. One subtitle displays at a time; all imported
-languages remain available in the app selector.
+acknowledgement as playback/subtitle selection. It loads Brazilian Portuguese
+first, falling back to English, and retains the full website subtitle catalog
+in memory on the phone. Selecting another language loads it on demand and maps
+its observed receiver index. Unknown existing external tracks are never assigned
+guessed language labels. One subtitle displays at a time. Catalog URLs and
+loaded aliases survive Activity recreation through service memory, not storage.
+
+A cold Kodi start may acknowledge the first Open before video playback becomes
+ready. One bounded retry is allowed only after that request settles and fresh
+observations confirm Kodi is idle; a native prewrite guard rejects the retry if
+another video has started. Unknown command outcomes are not blindly repeated.
 
 ## Saved first setup
 
@@ -97,9 +104,18 @@ remembered source matches observed Kodi playback, plus **Disconnect**. A
 [`MediaSession`](https://developer.android.com/reference/android/media/session/MediaSession)
 publishes observed playback state for Android’s
 [system media-control surfaces](https://developer.android.com/media/implement/surfaces/mobile),
-including the lock screen. Presentation depends on Android/Samsung settings;
-actual phone display and actions still need acceptance. Source/revision guards
-prevent an old notification from controlling a different video.
+including the lock screen. The session and notification share a Remote launch
+target. MediaStyle is used only for a verified active source; an ordinary
+connection notification remains available before casting. Android 12+ requests
+immediate foreground notification presentation. Presentation depends on
+Android/Samsung settings; actual phone display and actions still need
+acceptance. Source/revision guards prevent an old notification from controlling
+a different video.
+
+Read-only diagnostics on the installed0.2.0 found notification permission
+granted, an unblocked active foreground notification and an active playing media
+session. Its session launch target was null. The missing target is repaired in
+the follow-up; these diagnostics alone do not establish Samsung visual behavior.
 
 **Disconnect** closes the live controller session and retains saved setup;
 it does not send Kodi Stop. **Stop video** explicitly ends playback. Live
@@ -109,13 +125,16 @@ do not guarantee live-session restoration. Reopening the app can use saved setup
 without automatically replaying media or reconstructing lost subtitle aliases.
 Receiver playback remains independent of this control service and uses no Mac.
 
-Validation: **22 mobile browser cases** pass, including first authentication,
+Validation: **26 mobile browser cases** pass, including first authentication,
 saved setup, reset/rescan, volume commits, cancelled setup preventing auto-Cast,
 restoration without replay, preserved drafts and notification-open navigation.
 Native checks passed:8 backend,4 service,5 packaged UI and5 Keystore settings.
-The final build passed109 Node and65 browser tests and0.2.0 was installed on the
-Samsung. These do not establish
-physical Samsung background, lock-screen or automatic-reconnect behavior.
+Current coverage is121 Node and69 browser tests; the26 mobile cases were rerun
+after the final cancellation receipt changes. Version0.2.1/code3 is installed
+and open on Samsung. Read-only diagnostics confirm automatic saved connection,
+a public ordinary service notification and a nonnull session launch target
+before recasting. Actual Samsung control display/actions still need acceptance.
+See the [system-controls handoff](session-handoffs/2026-10-18-phone-system-controls.md).
 
 ## Files and reproduction
 
@@ -136,12 +155,11 @@ Recorded final checks: [session handoff](session-handoffs/2026-10-18-phone-hando
 
 ## Remaining physical acceptance
 
-The baseline APK is installed on Samsung Android 16; install the updated build
-for the saved-settings/service follow-up. Test first setup with a wrong login,
+The updated APK is installed on Samsung Android 16. Test first setup with a wrong login,
 then correct login and persistence; reopen without re-entering it. Verify the
 cached-projector route, rescan and selective reset. Test cold start with Wi-Fi
 unavailable, discovery/manual connect, source capture from the live episode,
-Kodi closed → launch/readiness → picture/sound → all subtitle registration →
+Kodi closed → launch/readiness → picture/sound → preferred subtitle registration →
 visible matching Brazilian Portuguese → combined remote. Switch to another app
 and return without reconnecting; recreate the Activity and verify the existing
 video and language names return. Lock the screen and test notification/media

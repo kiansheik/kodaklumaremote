@@ -79,7 +79,7 @@ public final class NativeBackend {
         catch (Exception ignored) { return new JSONObject(); }
     }
 
-    private static BackendException fail(String code) {
+    static BackendException fail(String code) {
         String message;
         switch (code) {
             case "INVALID_INPUT": message = "The requested control action is not valid."; break;
@@ -350,7 +350,7 @@ public final class NativeBackend {
         for (JSONObject device : found.values()) result.put(device); return result;
     }
 
-    private static String publicUrl(Object value) throws BackendException {
+    static String publicUrl(Object value) throws BackendException {
         if (!(value instanceof String)) throw fail("INVALID_MEDIA"); String raw = (String) value;
         if (raw.isEmpty() || raw.length() > 8192 || raw.matches("(?s).*[\\x00-\\x20\\x7f|\\\\#].*")) throw fail("INVALID_MEDIA");
         try {
@@ -451,6 +451,8 @@ public final class NativeBackend {
             String url = publicUrl(media.opt("url")), type = media.optString("contentType", "").split(";", 2)[0].trim().toLowerCase(Locale.ROOT);
             if (!(type.equals("video/mp4") || type.equals("video/webm") || type.equals("application/vnd.apple.mpegurl") || type.equals("application/x-mpegurl") || type.equals("application/dash+xml"))) throw fail("INVALID_MEDIA");
             if (params.has("expectedSourceUrl") && !url.equals(publicUrl(params.opt("expectedSourceUrl")))) throw fail("SOURCE_CHANGED");
+            if (params.has("onlyIfInactive") && !(params.opt("onlyIfInactive") instanceof Boolean)) throw fail("INVALID_INPUT");
+            if (params.optBoolean("onlyIfInactive") && player() != null) throw fail("SOURCE_CHANGED");
             rpc("Player.Open", object("item", object("file", url)), true); return object("accepted", true);
         }
         Integer player = player();

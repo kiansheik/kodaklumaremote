@@ -166,8 +166,8 @@ device checks.
 The phone prototype packages a separate no-scroll web remote with a native
 network bridge. It connects directly to LUMA and Kodi without the Mac.
 **Browse → Cast to LUMA** launches Kodi, waits for readiness, opens the exposed
-video, imports all declared subtitle languages and selects Brazilian Portuguese
-with English as the fallback. It then opens the combined **Remote** screen.
+video and loads Brazilian Portuguese with English as the fallback. All website
+languages remain on the phone for loading on demand. It then opens the combined **Remote** screen.
 Playback, volume and navigation stay visible; languages, typing and apps have
 separate panels. The projector fetches the video and subtitles itself.
 
@@ -181,8 +181,9 @@ the video playing; saved setup can be wiped independently.
 Build/setup: [Android README](android/README.md). Implementation, fixture results
 and physical acceptance: [phone app](docs/agent/phone-app.md). Source capture
 currently supports HTTPS frameXTV and readable same-origin players. This is an
-installable debug prototype; live Samsung capture/playback, interrupted-network
-recovery and phone fully off remain to be tested on the actual devices.
+installable debug prototype. The user confirmed Samsung casting with picture,
+sound and Portuguese subtitles. Cold-start recovery, system control display,
+interrupted-network recovery and phone fully off still need physical acceptance.
 
 The [review analysis](docs/agent/luma-review-findings.md) records a bounded sample
 of 220 public written Google Play reviews. Repeated specific complaints informed
