@@ -1,12 +1,12 @@
 {
   "schemaVersion": 1,
   "packageName": "dev.framextv.lumaremote",
-  "versionName": "0.3.1",
-  "versionCode": 8,
-  "minSdk": 23,
-  "apkUrl": "https://github.com/kiansheik/kodaklumaremote/releases/download/v0.3.1/luma-remote-0.3.1.apk",
-  "sha256": "89630f78e8fb41194aa9a3fb82513297e350a0589fad15f769b2e4b300342cec",
-  "sizeBytes": 965037,
-  "releasedAt": "2026-10-18T16:02:39.499Z",
-  "notes": "Fixes browser preflight handling during Media Station X setup. Approved MSX origins can check the setup endpoint before loading it, without claiming or approving a TV.\n\nAdds clearer setup diagnostics for HTTPS requests, rejected connections and expired setup windows. The TV instructions now explain the MSX padlock setting.\n\nThe Philips playback test remains in progress; existing LUMA/Kodi controls and saved login stay available.\n"
+  "versionName": "0.4.0",
+  "versionCode": 9,
+  "minSdk": 24,
+  "apkUrl": "https://github.com/kiansheik/kodaklumaremote/releases/download/v0.4.0/luma-remote-0.4.0.apk",
+  "sha256": "a3f03b098f739d7e4253a0716771cbe7e8a5d7cd1fcf4aa6be73e6d6d93766fa",
+  "sizeBytes": 9631440,
+  "releasedAt": "2026-10-18T16:52:06.486Z",
+  "notes": "Adds Philips TV remote pairing with a QR scanner or manual Matter setup code. This phone's pairing is saved with Android Keystore encryption and reconnects when the app opens.\n\nAdds supported TV navigation, speaker volume, input selection and confirmed power-off controls. “Add another phone” creates a temporary QR/setup code without removing existing phones.\n\nLUMA/Kodi and the Philips remote keep separate connections. Video and external subtitles still require a compatible playback app; Matter remote control does not add video-URL playback to this TV.\n\nRequires 64-bit ARM Android 7 or newer.\n"
 }
