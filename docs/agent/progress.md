@@ -1,0 +1,16 @@
+# Progress
+
+2026-10-18 America/Sao_Paulo. See [experiments](experiments.md) for evidence.
+
+| Phase | Status | Evidence / remaining work |
+| --- | --- | --- |
+| 1 Reconnaissance | Complete for observable bounded scope | Public HTML/chunks mapped; hashes recorded; two clean automated baselines. Manual DevTools/fingerprint trigger not isolated. |
+| 2 Playback analysis | Static mapping + network metadata complete; receiver analysis partial | Same-origin embed → stream API → normalized source → HTML5/hls.js. HLS/MP4 MIME observed; codec/expiry/auth/receiver unknown. |
+| 3 Cast proof | Sender implementation and live SDK initialization checked | Public HTTPS demo uses shared controller; HEAD200 MP4/CORS/ranges. No selected/physical receiver, so direct-playback demonstration pending. |
+| 4 Site integration | Implemented and deterministic MV3 validation | Page-owned CAF reuse, same-origin frames, preserve native UI, declared source extraction. Target hardware acceptance pending. |
+| 5 Reliability | Automated checks passed | Source/nav/removal cancellation, errors, commands, subtitles, cleanup and simulated BFCache. Real device/fullscreen/audio-language limitations documented. |
+| 6 Handoff | Prepared | README, experiment log, manual acceptance checklist, source map and session handoff. |
+
+No native receiver playback success is claimed. No custom receiver or relay is
+justified by the evidence; neither was implemented. Manual Chrome tab casting is
+documented separately as browser-dependent mirroring.

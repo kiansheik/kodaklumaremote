@@ -99,3 +99,110 @@
   disruption. No inference about manual DevTools or extension fingerprinting.
 - **Next:** Validate extension behavior on deterministic fixtures and perform an
   uninstrumented user/physical-receiver acceptance session separately.
+
+## E06 — MV3 architecture and deterministic integration
+
+- **Timestamp/environment:** 2026-10-18 approximately 07:02–07:17
+  America/Sao_Paulo; macOS, Node 24.15.0, Playwright 1.64.0, Chromium 156.
+- **Hypothesis:** Packaged MAIN-world code can reuse the site's existing CAF
+  without loading remote executable code or changing normal inactive playback.
+- **Method:** Compared official Chrome/Google docs (linked in feasibility);
+  built separate production/test manifests; loaded actual MV3 in clean Chromium
+  profiles against loopback synthetic DOM and fake CAF. Node unit tests exercise
+  URL/track validation and session races. No real media downloaded in fixtures.
+- **Observed:** Initial browser run exposed hidden-host CSS, ended-state cleanup
+  and source-change race issues; fixed them and added targeted regressions.
+  Source mutation must be tracked explicitly: with preload-none/404 fixtures,
+  `emptied`/`loadedmetadata` do not reliably fire when the declaration changes.
+  Tests cover no duplicate insertion, native-control preservation, frames,
+  remote commands/subtitles, late loads, sanitized errors, and cleanup.
+- **Evidence:** `src/extension/`, `src/shared/media.js`, `src/cast/session.js`,
+  `tests/`, `scripts/build.mjs`; final command/result in handoff.
+- **Confidence:** High for tested local DOM/session wiring; fake CAF cannot
+  establish actual discovery, network reachability, decode or TV output.
+- **Conclusion:** Existing-page SDK reuse is implemented without an extension
+  SDK loader; source/navigation cancellation is necessary for correct episodes.
+- **Next:** Public actual-SDK initialization, then physical-device checklist.
+
+## E07 — Public Cast SDK readiness over local HTTPS
+
+- **Timestamp/environment:** 2026-10-18 07:15:24 America/Sao_Paulo;
+  installed Chrome 155.0.8059.39, managed clean profile, Playwright 1.64.0.
+- **Hypothesis:** An ordinary HTTPS sender can initialize the actual Google SDK
+  independently of target anti-debugging and extension CSP.
+- **Method:** `npm run build`; `node scripts/public-cast-smoke.mjs`; start
+  loopback HTTPS demo with generated ignored self-signed development TLS key;
+  automation accepts only its local certificate error, waits for SDK readiness,
+  then closes. No Cast button clicked or media fetched.
+- **Observed:** Final smoke exit0: `sdkReady:true`, `secureContext:true`, zero
+  media requests, no device selection. Initial HTTP experiment loaded bootstrap
+  but SDK selected HTTP gstatic subresources blocked by CSP/network. Playwright
+  defaults disable MediaRouter; excluded the exact pinned disabled-features
+  switch while retaining a managed isolated profile. Discarding all defaults
+  was rejected after profile/startup problems; stopped only the two owned Node
+  smoke processes, returned to managed launch.
+- **Evidence:** `scripts/public-cast-smoke.mjs`, `scripts/demo-server.mjs`,
+  `tests/fixtures/cast-demo.html`, `src/cast/demo.js` (same shared adapter).
+- **Confidence:** High for SDK initialization only. Development HTTPS is not a
+  published sender or a receiver acceptance test.
+- **Conclusion:** No extension remote-code exception is needed. HTTPS and native
+  media-router support matter when evaluating live SDK behavior under automation.
+- **Next:** Select physical receiver and verify actual public picture/audio.
+
+## E08 — Public MP4 identity and reachability
+
+- **Timestamp/environment:** 2026-10-18 approximately 07:16 America/Sao_Paulo;
+  Node HTTPS HEAD, official Google Cast source catalog and Blender project page.
+- **Hypothesis:** A public, openly licensed sample can isolate receiver behavior.
+- **Method:** Header-only requests; inspect official
+  [CastVideos source root](https://github.com/googlecast/CastVideos-chrome/blob/master/CastVideos.js)
+  and [media catalog](https://github.com/googlecast/CastVideos-chrome/blob/master/media.js).
+  Film license: [Blender Big Buck Bunny](https://peach.blender.org/about/), CC BY3.0.
+- **Observed:** Old gtv-videos-bucket sample and CastVideos MP4 returned403;
+  guessed Blender unzipped M4V returned404. A Shaka BBB DASH test returned200
+  but was not selected. The **current official Google sample**
+  `https://storage.googleapis.com/cpe-sample-media/content/big_buck_bunny/prog/big_buck_bunny_prog.mp4`
+  returned200, `video/mp4`, `Accept-Ranges: bytes`, CORS `*`, length158008374.
+  No video body saved. Demo updated to that source.
+- **Evidence:** `tests/fixtures/cast-demo.html`; official catalog URLs above;
+  header-only command recorded in session handoff.
+- **Confidence:** High for HTTP availability/MIME/header values at this time;
+  does not prove media codec, playable output or receiver reachability.
+- **Conclusion:** Do not assume a familiar test URL remains available. Use the
+  current source and preserve verification limits.
+- **Next:** Physical receiver acceptance; record version/model/source class.
+
+## E09 — Live extension injection with transient DOM sampling
+
+- **Timestamp/environment:** Report captured 2026-10-18 07:18:10
+  America/Sao_Paulo; Chromium 156.0.8078.4, headless clean ephemeral persistent
+  profile, built site-only MV3 extension enabled, DevTools UI false. Runtime
+  changes were the requested extension only; no anti-debugging patches.
+- **Hypothesis:** Sampling before the final blank document can verify extension
+  loading in the real watch/embed frames and possibly expose a declared source.
+- **Method:** Added opt-in `SAMPLE_DOM=1` and `EXTENSION_DIR` support to
+  `scripts/recon-browser.mjs`, preserving the existing default baseline flow.
+  Ran `SAMPLE_DOM=1 EXTENSION_DIR=dist/extension
+  RECON_OUTPUT=.local/recon/browser-extension.json node scripts/recon-browser.mjs`
+  with permitted network access. Seventeen per-frame snapshots at nominal
+  500-ms intervals covered eight seconds after DOMContentLoaded. Samples retain
+  route category, booleans, media source kind/MIME and dimensions, with no raw
+  source URL, title, query values or device name.
+- **Observed:** Watch-frame extension marker and Cast SDK appeared by ~0.5s;
+  same-origin embed marker/SDK appeared by ~1s. The embed became `about:blank`
+  by ~1.5s and the top level after ~2.5s. No sampled video/source, native Cast
+  button or mounted extension host appeared. This run did not observe a completed
+  stream API request. Final console counts: clear27, log28, table10, warning8,
+  info3; final top-level page blank. No Cast action was requested.
+- **Evidence:** `scripts/recon-browser.mjs` and ignored
+  `.local/recon/browser-extension.json`; `node --check scripts/recon-browser.mjs`
+  passed and the live probe exited0.
+- **Confidence:** High for extension execution in both supported real frames;
+  no evidence of live visible-button/media-extraction or receiver success.
+  Timing differs from earlier visits and does not establish an extension effect;
+  network variation, sampling and automation remain confounders.
+- **Conclusion:** Built extension injection works on the actual origin/frame
+  topology, but page disruption still prevents real-player acceptance. The
+  integration remains dependent on ordinary authorized playback becoming usable.
+- **Next:** Uninstrumented Chrome/player acceptance and physical receiver test;
+  retain deterministic fixture coverage for controls and extraction meanwhile.

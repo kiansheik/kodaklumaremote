@@ -6,7 +6,6 @@ playwright-report/
 dist/
 *.har
 *.mp4
-*.ts
 *.m4s
 *.webm
 .DS_Store

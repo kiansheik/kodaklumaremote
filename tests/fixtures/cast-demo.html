@@ -1,0 +1,17 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Public native Cast test</title>
+<style>body{max-width:760px;margin:32px auto;padding:0 16px;font:16px system-ui}video{width:100%;background:#111}button{padding:12px;font:inherit}</style>
+<h1>Native Cast proof of concept</h1>
+<p>This ordinary web page loads Google's official Sender SDK. The unpacked extension never downloads executable code.</p>
+<video controls preload="none" src="https://storage.googleapis.com/cpe-sample-media/content/big_buck_bunny/prog/big_buck_bunny_prog.mp4"></video>
+<p><button id="cast" disabled>Loading Google Cast…</button> <span id="status" role="status"></span></p>
+<div id="remote" hidden>
+  <button id="pause">Pause</button><button id="resume">Resume</button>
+  <label>Seek <input id="seek" type="range" min="0" max="0" step="1" value="0"></label>
+  <label>Volume <input id="volume" type="range" min="0" max="1" step="0.05" value="1"></label>
+  <button id="disconnect">Disconnect</button>
+</div>
+<p><a href="https://peach.blender.org/about/">Big Buck Bunny, Blender Foundation</a> — CC BY 3.0.
+Source: <a href="https://github.com/googlecast/CastVideos-chrome/blob/master/media.js">Google's Cast sample catalog</a>.
+A successful browser test does not establish real receiver playback. Use Chrome on the receiver's network.</p>
+<script src="/dist/demo/sender.js"></script>
+<script src="https://www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFramework=1"></script>

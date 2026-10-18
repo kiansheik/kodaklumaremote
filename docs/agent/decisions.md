@@ -24,8 +24,8 @@ missing/not-ready SDK, cancelled picker, and unavailable receiver explicitly.
 Remote Playback and a separately hosted HTTPS sender remain possible future
 alternatives, not current implementation requirements. An ordinary local
 `/cast-demo` page can load the official SDK outside the extension to isolate
-receiver/media testing. Its local development manifest must scope localhost
-separately from the production extension.
+receiver/media testing. The loopback extension-test manifest is separate from
+production; the demo is an ordinary webpage, not an extension page.
 
 The [official sender setup](https://developers.google.com/cast/docs/web_sender)
 describes CAF. Runtime visibility and receiver success remain unverified.
@@ -55,7 +55,7 @@ mirroring explicitly labelled browser-dependent and separate from direct play.
 
 ## D6: Separate automated evidence from hardware acceptance
 
-Fixtures may prove discovery, insertion, validation, state transitions, cleanup,
+Fixtures may prove player detection, insertion, validation, state transitions, cleanup,
 and command wiring. They cannot prove LAN discovery, receiver fetch/decode,
 real subtitles, source expiry, or physical remote control. No hardware result
 has been verified in this research task.

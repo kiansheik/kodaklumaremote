@@ -1,0 +1,6 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><title>Cast fixture — episode 1</title>
+<style>body{margin:20px;background:#20232c;color:white;font:16px system-ui}video{display:block;width:640px;height:360px;max-width:100%;background:#090b10}</style>
+<h1>Local test player</h1>
+<div id="player"><video controls preload="none" src="/test-video.mp4"><track kind="subtitles" src="/tests/fixtures/en.vtt" srclang="en" label="English"></video></div>
+<p>Deterministic fixture. The media URL intentionally returns 404; browser tests mock Cast and never download video.</p>
+<script src="/tests/fixtures/mock-cast.js"></script>

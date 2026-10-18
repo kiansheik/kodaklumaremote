@@ -24,6 +24,10 @@ for this static investigation.
   Browser metadata includes successful stream API and HLS/MP4-typed responses.
   Actual decoded playback, codecs, expiry, receiver authorization/CORS and
   Cast-device success remain unverified.
+- An opt-in live run with the built MV3 extension confirmed its execution marker
+  in both watch and same-origin embed frames, with the page Cast SDK present.
+  No video/source or visible extension control was captured before blank-page
+  disruption. This verifies frame injection, not live media/control acceptance.
 
 The wrapper should run in both supported same-origin watch/embed frames,
 preserve a usable existing Cast button, and use ordinary DOM sources. No reason

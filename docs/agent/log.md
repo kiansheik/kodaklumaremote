@@ -15,3 +15,9 @@
   with native Cast enabled. Default Playwright disables MediaRouter; local HTTP
   SDK resources were blocked. Final smoke used a managed ephemeral Chrome profile,
   HTTPS and exact removal of the pinned Playwright disabled-features switch.
+- 2026-10-18 07:18–07:20 America/Sao_Paulo: Actual-origin probe confirmed extension
+  execution in watch/embed, but blanking preceded video/control appearance.
+  Final build +25 unit +15 loaded-MV3 browser tests passed. HTTPS SDK smoke was
+  repeated successfully with no selected device or media requests. Updated public
+  demo from403 sample to current official200 MP4. Handoff and device checklist
+  completed; physical receiver acceptance remains outstanding.

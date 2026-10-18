@@ -46,6 +46,15 @@ The wrapper must preserve a usable native button. Running in the supported
 same-origin embed frame lets the wrapper inspect `video source[src]`; a broad
 cross-origin-frame permission is not justified by this evidence.
 
+At 07:18:10 America/Sao_Paulo an opt-in sampled live Chromium run with the built
+extension recorded its execution marker in the watch frame at roughly 0.5 seconds
+and same-origin embed at roughly 1 second after DOMContentLoaded. Both frames
+reported the existing Cast SDK. Neither a video nor a mounted extension host
+appeared before the embed and then top-level page became blank. Same-origin
+frame injection therefore has real-site evidence; visible control behavior and
+source extraction still rely on deterministic fixtures. See E09 in
+[experiments](experiments.md).
+
 ## Unknown
 
 Loaded assets, source provider and API base may vary by visit because of backend
