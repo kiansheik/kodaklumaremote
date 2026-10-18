@@ -22,8 +22,8 @@ android {
         applicationId 'dev.framextv.lumaremote'
         minSdk 23
         targetSdk 35
-        versionCode 5
-        versionName '0.2.3'
+        versionCode 6
+        versionName '0.2.4'
         testInstrumentationRunner 'dev.framextv.lumaremote.BackendInstrumentation'
     }
     compileOptions {
@@ -31,5 +31,31 @@ android {
         targetCompatibility JavaVersion.VERSION_17
     }
     sourceSets { main { assets.srcDirs = [layout.buildDirectory.dir('generated/lumaAssets')] } }
-    buildTypes { release { minifyEnabled false } }
+    signingConfigs {
+        release {
+            def signingPath = System.getenv('LUMA_KEYSTORE_PATH')
+            if (signingPath) {
+                storeFile file(signingPath)
+                storePassword System.getenv('LUMA_KEYSTORE_PASSWORD')
+                keyAlias System.getenv('LUMA_KEY_ALIAS')
+                keyPassword System.getenv('LUMA_KEY_PASSWORD')
+            }
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.release
+        }
+    }
+}
+
+tasks.configureEach {
+    if (name == 'validateSigningRelease') {
+        doFirst {
+            ['LUMA_KEYSTORE_PATH', 'LUMA_KEYSTORE_PASSWORD', 'LUMA_KEY_ALIAS', 'LUMA_KEY_PASSWORD'].each {
+                if (!System.getenv(it)) throw new GradleException("Set ${it} privately to sign a release APK.")
+            }
+        }
+    }
 }

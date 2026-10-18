@@ -1,0 +1,60 @@
+name: Publish install page
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.repository == 'kiansheik/kodaklumaremote' && (github.event_name != 'release' || !github.event.release.prerelease)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Test release boundaries
+        run: node --test tests/release-manifest.test.mjs
+      - name: Fetch published release metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          release_path="$RUNNER_TEMP/luma-release.json"
+          manifest_path="$RUNNER_TEMP/luma-update.json"
+          gh api "repos/$GITHUB_REPOSITORY/releases/latest" > "$release_path"
+          asset_id="$(node --input-type=module - "$release_path" <<'NODE'
+          import { readFile } from 'node:fs/promises';
+          const release = JSON.parse(await readFile(process.argv[2], 'utf8'));
+          const assets = release.assets?.filter(asset => asset.name === 'update.json');
+          if (release.draft || release.prerelease || assets?.length !== 1 || !Number.isSafeInteger(assets[0].id) || assets[0].id < 1 || assets[0].size < 1 || assets[0].size > 16384) throw new Error('A published release with bounded update.json is required.');
+          process.stdout.write(String(assets[0].id));
+          NODE
+          )"
+          gh api -H 'Accept: application/octet-stream' "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" > "$manifest_path"
+          node scripts/build-pages.mjs --manifest "$manifest_path" --release "$release_path" --out dist/pages
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: dist/pages
+  deploy:
+    needs: build
+    permissions:
+      pages: write
+      id-token: write
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/configure-pages@v5
+      - name: Deploy install page
+        id: deployment
+        uses: actions/deploy-pages@v4

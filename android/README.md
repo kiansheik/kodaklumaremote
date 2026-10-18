@@ -4,6 +4,12 @@ An Android sender with a packaged web remote and native TCP/UDP/Kodi HTTP
 transport. The Mac is not needed at runtime. The projector retrieves media and
 subtitles directly; the phone does not relay them.
 
+Install: **https://kiansheik.github.io/kodaklumaremote/**.
+Published APKs use the stable production signing key. Opening the app checks for
+updates; **Settings → Check for updates** checks immediately. A new version
+offers Later/Update, downloads only on request, verifies the APK and opens
+Android's installation confirmation. See [release guide](../docs/releasing.md).
+
 ## Use
 
 Install the locally built debug APK on the Samsung phone. Keep the phone and

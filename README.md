@@ -1,4 +1,22 @@
-# frameXTV Native Cast
+# LUMA Remote
+
+An independent Android remote for compatible Kodak LUMA projectors and Kodi.
+Control playback, projector volume, navigation and subtitles from the phone,
+notification shade or lock screen. Kodi retrieves media directly.
+
+**[Install for Android](https://kiansheik.github.io/kodaklumaremote/)** ·
+[Releases](https://github.com/kiansheik/kodaklumaremote/releases) ·
+[Android setup](android/README.md)
+
+The app offers optional updates when opened, with a manual check in Settings.
+Downloads are verified and Android asks before installing. Projector setup and
+the encrypted Kodi login remain on the phone. This is an early release; Kodi
+startup and subtitle failures remain under investigation.
+
+For maintainers: [signing and publishing a release](docs/releasing.md).
+The original Cast extension and Mac proof-of-concept tools remain below.
+
+## Original frameXTV Cast experiment
 
 A minimal Manifest V3 extension that uses frameXTV's **existing** Google Cast
 SDK to send an exposed HLS, DASH, or MP4/WebM URL to a receiver. The receiver
@@ -11,7 +29,7 @@ is absent. It supports the target origin's `/watch/` and `/embed/` pages,
 including matching same-origin frames. Cross-origin backup players are outside
 its permission scope.
 
-## Install locally
+## Install the experimental Chrome extension locally
 
 Use Node.js with npm, then run:
 

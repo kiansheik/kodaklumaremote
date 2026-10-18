@@ -1,0 +1,9 @@
+Primeira versão para instalar pelo site do Luma Remote.
+
+• Aviso opcional de atualização ao abrir o app e busca manual em Configurações.
+• Controle do projetor e do Kodi, com reprodução, volume e legendas.
+• Controles na notificação e na tela bloqueada.
+• Botão para desligar com confirmação.
+• Configuração do projetor e login do Kodi guardados no celular.
+
+Esta é uma versão inicial. Algumas tentativas de iniciar o Kodi e carregar legendas ainda podem falhar; estamos investigando.

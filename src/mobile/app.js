@@ -865,6 +865,7 @@ for (const kind of ['apps', 'subtitles']) {
 }
 $('#close-sheet').addEventListener('click', closeSheet);
 $('#show-power').addEventListener('click', () => sheet('power'));
+$('#check-updates').addEventListener('click', () => command('app.checkUpdates', {}, 'Update check requested.'));
 $('#cancel-power').addEventListener('click', closeSheet);
 $('#power-backdrop').addEventListener('click', closeSheet);
 $('#confirm-power').addEventListener('click', async () => {

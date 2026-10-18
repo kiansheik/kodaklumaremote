@@ -237,3 +237,21 @@ checks passed. The live phone suite sent zero controls: cached receiver was
 absent while encrypted Kodi settings remained; user confirmed projector OFF.
 Actual new volume/power and S1E3 retest remain pending. See
 [handoff](session-handoffs/2026-10-18-phone-volume-power.md).
+
+Distribution follow-up: user explicitly authorized publishing to their empty
+public `kiansheik/kodaklumaremote` repository, GitHub Pages install/update metadata
+and signed APK releases using their existing local Android key.0.2.4/code6 adds
+optional foreground update offers (five-minute throttle; Later24h), manual
+Settings checks, verified consent-only downloads and Android installer handoff.
+Site sources, strict derived release manifests, local signing/publishing helpers
+and a scoped Pages workflow are implemented. Signing material stays local;
+only the public certificate fingerprint is tracked. Source history and new
+publication files are reviewed before push. No projector changes were made.
+
+Local checks:134 Node,77 browser, updater6 and packaged UI5 passed. Release
+build/lint passed after fetching the missing official lint dependency; an
+initial Intent chaining compile error was fixed. Emulator signing proof passed
+debug → private API33+ lineage bootstrap → ordinary production signer-only APK,
+preserving encrypted credentials and a private marker without uninstall/reset.
+Final publication and actual-phone migration evidence are recorded in the
+[distribution handoff](session-handoffs/2026-10-18-github-release-updates.md).

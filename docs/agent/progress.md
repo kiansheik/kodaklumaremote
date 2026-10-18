@@ -95,3 +95,11 @@ unconfirmed. Built/installed;130 Node and current74 browser cases are covered
 across full/narrow runs, plus9 backend/5 service/5 packaged UI checks. Actual
 new volume/power and S1E3 retest wait for the projector, confirmed OFF. Encrypted
 Kodi login remains saved. See [handoff](session-handoffs/2026-10-18-phone-volume-power.md).
+
+0.2.4 distribution: user-authorized public GitHub/Pages/APK release, optional
+on-open update offers and manual Settings checks, verified downloads and Android
+installer confirmation. Local production key reused without uploading it;
+private emulator migration preserved encrypted setup across debug→release and
+ordinary release updates.134 Node/77 browser/6 updater/5 packaged UI checks and
+signed release build passed. Live publication results are recorded in the
+[distribution handoff](session-handoffs/2026-10-18-github-release-updates.md).

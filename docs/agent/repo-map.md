@@ -63,6 +63,18 @@
   restoration; no fixture reset, media opening or power commands.
 - `android/app/src/main/res/`: native projector/action vectors and adaptive
   launcher/themed icon; media cards prioritize guarded volume/playback controls.
+- `UpdateManager.java`, `UpdateApkProvider.java`: optional foreground update
+  offers from fixed Pages metadata, verified GitHub release downloads and one
+  temporary read-only APK grant to Android's installer. No background auto-install.
+- `site/`, `.github/workflows/pages.yml`: scoped install page and published-release
+  metadata deployment. `scripts/{generate-update,build-pages,build-android-release,
+  publish-android-release}.mjs` prepare/verify local signed releases and publish.
+  `android/release-certificate.sha256` is a public fingerprint, never a key.
+- `UpdateInstrumentation.java`, `SigningMigrationInstrumentation.java` and
+  updater/migration test runners: emulator-only update fixtures and separately
+  read-only signing/decryption checks. Seed mode is explicitly emulator guarded.
+- `docs/releasing.md`, `release-notes/`: local signing/publication procedure and
+  public plain-text notes. No signing credentials belong in the repository/CI.
 - `tests/handoff.test.mjs`, `tests/browser/mobile*.spec.js`,
   `android/app/src/androidTest/`: coordinator, capture, layouts and Android tests.
 - `docs/agent/{phone-app,luma-review-findings}.md`: phone architecture/acceptance

@@ -43,6 +43,7 @@ public final class MainActivity extends Activity {
     private LinearLayout browserPanel;
     private ProgressBar progress;
     private ConnectionService connectionService;
+    private UpdateManager updateManager;
     private boolean serviceBound;
     private boolean resumed, foregroundStarted, autoConnectPending, notificationAsked;
     private boolean autoConnectEnabled = true;
@@ -112,6 +113,7 @@ public final class MainActivity extends Activity {
         if ((getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
             autoConnectEnabled = !getIntent().getBooleanExtra("dev.framextv.lumaremote.TEST_NO_AUTO_CONNECT", false);
         }
+        if (autoConnectEnabled) updateManager = new UpdateManager(this);
         getWindow().setStatusBarColor(Color.rgb(15, 26, 31));
         getWindow().setNavigationBarColor(Color.rgb(15, 26, 31));
         serviceBound = bindService(new Intent(this, ConnectionService.class), serviceConnection, BIND_AUTO_CREATE);
@@ -411,6 +413,10 @@ public final class MainActivity extends Activity {
                 result.put("browserUrl", browser.getUrl());
                 if (capturedMedia != null) result.put("source", capturedMedia);
                 reply(id, result, null, null);
+            } else if (method.equals("app.checkUpdates")) {
+                if (updateManager == null) { reply(id, null, "BUSY", "Update checking is unavailable in this test session."); return; }
+                updateManager.checkNow();
+                reply(id, new JSONObject().put("accepted", true), null, null);
             } else if (method.startsWith("app.settings.") || method.equals("app.rememberRemote")) {
                 if (connectionService == null) { reply(id, null, "BUSY", "The remote is starting. Try again in a moment."); return; }
                 connectionService.request(method, params, new ConnectionService.Callback() {
@@ -498,6 +504,7 @@ public final class MainActivity extends Activity {
     }
 
     @Override protected void onDestroy() {
+        if (updateManager != null) updateManager.close();
         destroyed = true;
         main.removeCallbacksAndMessages(null);
         if (connectionService != null) {
@@ -512,6 +519,7 @@ public final class MainActivity extends Activity {
 
     @Override protected void onResume() {
         super.onResume();
+        if (updateManager != null) updateManager.onResume();
         resumed = true;
         if (connectionService != null) event("onConnectionState", connectionService.snapshot());
         scheduleAutoConnect(0);
@@ -524,6 +532,7 @@ public final class MainActivity extends Activity {
     }
 
     @Override protected void onPause() {
+        if (updateManager != null) updateManager.onPause();
         resumed = false;
         main.removeCallbacks(autoConnect);
         super.onPause();

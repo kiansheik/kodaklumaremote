@@ -20,6 +20,8 @@ Saved setup: [background controls](session-handoffs/2026-10-18-phone-background-
 System controls: [cold start and lazy subtitles](session-handoffs/2026-10-18-phone-system-controls.md).
 Latest: [playback reattachment and subtitle readiness](session-handoffs/2026-10-18-phone-reattachment-readiness.md).
 Current: [system volume, confirmed power and Kodi error receipts](session-handoffs/2026-10-18-phone-volume-power.md).
+Distribution: [signed releases and optional updates](../releasing.md),
+[GitHub/Pages handoff](session-handoffs/2026-10-18-github-release-updates.md).
 
 Execution: [decisions](decisions.md), [experiments](experiments.md),
 [progress](progress.md), [log](log.md), [handoff](handoff.md).

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108" role="img" aria-label="Projetor">
+  <rect width="108" height="108" rx="25" fill="#101c22"/>
+  <path d="M30 34h48a8 8 0 0 1 8 8v24a8 8 0 0 1-8 8H30a8 8 0 0 1-8-8V42a8 8 0 0 1 8-8m0 40h8v5h-8m40-5h8v5h-8" fill="#e8f4ef"/>
+  <circle cx="66" cy="54" r="13" fill="#101c22"/><circle cx="66" cy="54" r="9" fill="#76d8b7"/>
+  <path d="M31 46h13v4H31m0 8h13v4H31m32-9v10l8-5" fill="#101c22"/>
+</svg>

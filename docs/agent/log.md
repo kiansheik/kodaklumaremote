@@ -161,3 +161,14 @@
   login remains. User confirmed projector OFF. Live volume/power and recurring
   S1E3 crash/subtitle acceptance remain open; see
   [handoff](session-handoffs/2026-10-18-phone-volume-power.md).
+- 2026-10-18 distribution authorized: attached the empty public GitHub repository,
+  implemented install page/scoped Pages workflow, derived signed-APK metadata,
+  local-only production signing and optional foreground/manual app updates.
+  Existing local release key identified; no key/password uploaded. Public
+  fingerprint pins publishing; private debug-to-release migration stays local.
+- 2026-10-18 distribution checks:134 Node/77 browser/updater6/packaged UI5 passed.
+  Corrected an Intent API compile error; fetched official missing lint dependency
+  and passed signed release build. Emulator migration preserved encrypted Kodi
+  settings and marker across bootstrap and ordinary production APK, no uninstall.
+  Publication/actual-phone evidence follows in the
+  [distribution handoff](session-handoffs/2026-10-18-github-release-updates.md).

@@ -189,3 +189,23 @@ Fixed method/category and numeric status diagnostics expose no raw RPC messages.
 The first three ordinary/system media buttons prioritize Volume −, Play/Pause,
 Volume +. Read observed volume after relative keys and preserve exact source and
 control revision guards. Stop/Disconnect remain secondary media/app controls.
+
+## D15: User-owned GitHub distribution and optional Android updates
+
+Use the explicitly requested `kiansheik/kodaklumaremote` repository and GitHub
+Pages. A release publishes a locally signed APK and derived `update.json`;
+Pages deploys only reviewed site files plus validated stable-release metadata.
+Keep the user's existing production signing key local; check its public
+fingerprint. Upload assets to a draft before publishing to prevent deployment
+racing incomplete uploads. No signing key or password is uploaded to Actions.
+
+Check the fixed HTTPS update feed on foreground opens, throttled five minutes;
+manual Settings checking bypasses that limit. Later suppresses the same version
+for24hours. Download only after Update, verify bounded bytes/hash/package/version/
+current signer set and use a temporary read-only content grant. Android owns
+unknown-source permission and installation confirmation. No silent install.
+
+The existing owner's debug APK requires a private API33+ signing-lineage
+bootstrap to preserve data. Public fresh installs and future ordinary updates
+use the production signer only. Validate encrypted-settings preservation across
+bootstrap and ordinary production replacement on an emulator before the phone.

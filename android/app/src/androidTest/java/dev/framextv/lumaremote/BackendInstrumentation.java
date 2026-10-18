@@ -44,7 +44,9 @@ public final class BackendInstrumentation extends UiSmokeInstrumentation {
         }
     }
     @Override public void onStart() {
+        if ("migration-seed".equals(args.getString("mode")) || "migration-check".equals(args.getString("mode"))) { SigningMigrationInstrumentation.run(this, args); return; }
         if ("live-controls".equals(args.getString("mode"))) { LiveControlsInstrumentation.run(this, args); return; }
+        if ("updates".equals(args.getString("mode"))) { UpdateInstrumentation.run(this, args); return; }
         if ("ui".equals(args.getString("mode"))) { super.onStart(); return; }
         if ("service".equals(args.getString("mode"))) { ServiceInstrumentation.run(this, args); return; }
         if ("settings".equals(args.getString("mode"))) { SettingsInstrumentation.run(this); return; }

@@ -58,7 +58,7 @@ async function openApp(page, initialSnapshot = null) {
       const { method, params } = request;
       switch (method) {
         case 'app.ready': return { browserUrl: 'https://framextv.xyz/watch/284833/1/1', ...initialSnapshot };
-        case 'app.browse': case 'app.handoffStatus': return { accepted: true };
+        case 'app.browse': case 'app.handoffStatus': case 'app.checkUpdates': return { accepted: true };
         case 'app.handoffReady': case 'app.rememberRemote': receiver.rememberedRemote = params.remote; return { accepted: true };
         case 'app.settings.rescan': return receiver.rescanAutoConnect ? { connected: true, name: 'Other LUMA', devices: [{ host: '192.168.1.51', name: 'Other LUMA', port: 8121 }] } : { connection: { connected: false, configured: false }, devices: [{ host: '192.168.1.51', name: 'Other LUMA', port: 8121 }] };
         case 'app.settings.reset': return { connection: { connected: params.scope === 'kodi', configured: false }, settings: { hasReceiver: params.scope === 'kodi', hasKodi: params.scope === 'receiver', autoConnect: true } };
@@ -877,6 +877,18 @@ test('projector power requires confirmation, defaults to Cancel and dismisses wi
   }
   expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'luma.powerOff'))).toHaveLength(0);
   expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'luma.key'))).toHaveLength(0);
+});
+
+test('manual update check is a separate Settings action and fits a small phone', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 592 });
+  await openApp(page); await setup(page);
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await layout(page);
+  await page.getByRole('button', { name: 'Check for updates', exact: true }).click();
+  await expect(page.locator('#message')).toHaveText('Update check requested.');
+  expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'app.checkUpdates').map(call => call.params))).toEqual([{}]);
+  expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'luma.powerOff'))).toHaveLength(0);
+  await layout(page);
 });
 
 test('Turn off sends exactly one confirmed power request and disables on connection loss', async ({ page }) => {

@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f4f3e9">
+  <meta name="description" content="Um controle Android independente para projetores LUMA compatíveis: Kodi, reprodução, volume e legendas no seu celular.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'">
+  <title>Luma Remote — seu projetor, um controle melhor</title>
+  <link rel="icon" href="./projector.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <header class="site-header wrap"><a class="brand" href="./"><img src="./projector.svg" alt="" width="40" height="40"><span>Luma Remote</span></a><a class="source-link" href="https://github.com/kiansheik/kodaklumaremote">Código no GitHub <span aria-hidden="true">↗</span></a></header>
+  <main>
+    <section class="hero wrap" aria-labelledby="headline">
+      <div class="hero-copy"><p class="eyebrow">SEU CONTROLE ANDROID</p><h1 id="headline">Seu projetor.<br>Um controle<br><em>melhor.</em></h1><p class="intro">Abra o Kodi, escolha um vídeo e controle a reprodução pelo celular. Simples assim.</p>
+        <a id="download" class="download" aria-disabled="true"><span>Baixar para Android</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M5 16v5h14v-5"/></svg></a>
+        <p id="release-status" class="release-status" role="status" aria-live="polite">Consultando a versão disponível…</p><a class="release-link" href="https://github.com/kiansheik/kodaklumaremote/releases/latest">Ver lançamentos no GitHub ↗</a>
+      </div>
+      <div class="preview" aria-hidden="true"><div class="preview-label"><span class="status-dot"></span> PROJETOR CONECTADO</div><div class="phone"><div class="phone-top"><span>⌂</span><strong>LUMA</strong><span>↶</span></div><div class="preview-title"><span>Na sua tela grande</span><small>O celular fica com o controle.</small></div><div class="preview-play"><span>Ⅱ</span><span>↻</span></div><div class="preview-volume"><span>−</span><div><small>Volume</small><div class="volume-line"></div></div><span>+</span></div><div class="preview-dpad"><span></span><span>↑</span><span></span><span>←</span><span class="preview-ok">OK</span><span>→</span><span></span><span>↓</span><span></span></div><div class="preview-bottom"><span>Legendas</span><span>Mais</span></div></div><p class="preview-caption">No app. Na notificação.<br>Até na tela bloqueada.</p></div>
+    </section>
+    <section class="setup wrap" aria-labelledby="setup-title"><div class="section-heading"><p class="eyebrow">PRONTO EM POUCOS PASSOS</p><h2 id="setup-title">Instale uma vez.<br>Depois, é só conectar.</h2></div><ol class="steps"><li><span class="step-number">01</span><div><h3>Instale no celular</h3><p>Baixe o APK acima e abra o arquivo. Se o Android pedir, permita a instalação por esse navegador.</p></div></li><li><span class="step-number">02</span><div><h3>Prepare o Kodi no projetor</h3><p>Instale o Kodi. Em <strong>Configurações → Serviços → Controle</strong>, ative o controle remoto via HTTP e defina um usuário e uma senha.</p></div></li><li><span class="step-number">03</span><div><h3>Conecte os dois</h3><p>Deixe celular e projetor na mesma rede Wi-Fi. Abra o Luma Remote, conecte o projetor e informe o login do Kodi. O app guarda essa configuração no celular.</p></div></li></ol></section>
+    <section class="receiver-note wrap"><div class="note-mark" aria-hidden="true">↗</div><div><h2>O vídeo fica com o projetor.</h2><p>O Kodi busca a mídia diretamente pela rede. O celular funciona como controle, sem espelhar sua tela.</p></div></section>
+    <section id="release-details" class="release-details wrap" hidden><details><summary>Detalhes desta versão <span id="details-version"></span></summary><p id="release-notes"></p><dl><div><dt>Publicado em</dt><dd id="release-date"></dd></div><div><dt>SHA-256 do APK</dt><dd id="release-hash" class="hash"></dd></div></dl><p class="update-note">Para conferir novas versões, use a opção de atualização no app.</p></details></section>
+  </main>
+  <footer class="site-footer wrap"><p>Projeto independente, sem afiliação à Kodak.<br>Para projetores LUMA compatíveis com o protocolo do app original. Requer Kodi no projetor.</p><a href="https://github.com/kiansheik/kodaklumaremote/issues">Relatar um problema ↗</a></footer>
+  <noscript><p class="wrap">Ative o JavaScript para consultar a versão ou <a href="https://github.com/kiansheik/kodaklumaremote/releases/latest">abra os lançamentos no GitHub</a>.</p></noscript>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
