@@ -1,12 +1,12 @@
 {
   "schemaVersion": 1,
   "packageName": "dev.framextv.lumaremote",
-  "versionName": "0.3.0",
-  "versionCode": 7,
+  "versionName": "0.3.1",
+  "versionCode": 8,
   "minSdk": 23,
-  "apkUrl": "https://github.com/kiansheik/kodaklumaremote/releases/download/v0.3.0/luma-remote-0.3.0.apk",
-  "sha256": "cb2307a077750314ecfe0776e327aacf38e5cbf5a6c8153126bb023e80b26c12",
-  "sizeBytes": 963544,
-  "releasedAt": "2026-10-18T15:46:25.206Z",
-  "notes": "Choose LUMA or Philips from a compact device switcher. Both receivers can stay connected, and changing the selected remote leaves their videos playing.\n\nAdds an experimental Philips receiver using Media Station X. TV setup shows the phone's local address and asks you to approve the TV once. Videos play directly on the TV, with Brazilian Portuguese subtitles preferred and English as fallback; other languages remain available on demand.\n\nThe Philips remote provides playback, seek, subtitles and player volume, including notification and lock-screen controls for the selected receiver. Existing LUMA projector controls stay available separately.\n\nPhilips codec, subtitle and phone-off behavior still need confirmation on the actual TV.\n"
+  "apkUrl": "https://github.com/kiansheik/kodaklumaremote/releases/download/v0.3.1/luma-remote-0.3.1.apk",
+  "sha256": "89630f78e8fb41194aa9a3fb82513297e350a0589fad15f769b2e4b300342cec",
+  "sizeBytes": 965037,
+  "releasedAt": "2026-10-18T16:02:39.499Z",
+  "notes": "Fixes browser preflight handling during Media Station X setup. Approved MSX origins can check the setup endpoint before loading it, without claiming or approving a TV.\n\nAdds clearer setup diagnostics for HTTPS requests, rejected connections and expired setup windows. The TV instructions now explain the MSX padlock setting.\n\nThe Philips playback test remains in progress; existing LUMA/Kodi controls and saved login stay available.\n"
 }
