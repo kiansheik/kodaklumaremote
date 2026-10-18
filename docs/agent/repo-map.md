@@ -66,8 +66,9 @@
 - `UpdateManager.java`, `UpdateApkProvider.java`: optional foreground update
   offers from fixed Pages metadata, verified GitHub release downloads and one
   temporary read-only APK grant to Android's installer. No background auto-install.
-- `site/`, `.github/workflows/pages.yml`: scoped install page and published-release
-  metadata deployment. `scripts/{generate-update,build-pages,build-android-release,
+- `site/`, `Makefile`, `scripts/deploy-gh-pages.mjs`: scoped static install page
+  and direct `gh-pages` branch deployment using `make deploy-gh-pages`.
+  `scripts/{generate-update,build-pages,build-android-release,
   publish-android-release}.mjs` prepare/verify local signed releases and publish.
   `android/release-certificate.sha256` is a public fingerprint, never a key.
 - `UpdateInstrumentation.java`, `SigningMigrationInstrumentation.java` and

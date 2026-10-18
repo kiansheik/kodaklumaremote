@@ -33,4 +33,5 @@ await invoke(['release', 'create', tag, apk, resolve(folder, 'update.json'), '--
   '--target', head.trim(), '--title', `LUMA Remote ${metadata.versionName}`, '--notes-file', resolve(folder, 'notes.txt'), '--draft']);
 // Publish only after both uploads finish, so the Pages event cannot race them.
 await invoke(['release', 'edit', tag, '--repo', 'kiansheik/kodaklumaremote', '--draft=false', '--latest']);
+await run(process.execPath, ['scripts/deploy-gh-pages.mjs', '--tag', tag], { cwd: root, maxBuffer: 1024 * 1024 });
 console.log(`Published https://github.com/kiansheik/kodaklumaremote/releases/tag/${tag}`);

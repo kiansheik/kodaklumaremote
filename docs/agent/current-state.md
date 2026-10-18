@@ -255,3 +255,18 @@ debug → private API33+ lineage bootstrap → ordinary production signer-only A
 preserving encrypted credentials and a private marker without uninstall/reset.
 Final publication and actual-phone migration evidence are recorded in the
 [distribution handoff](session-handoffs/2026-10-18-github-release-updates.md).
+
+Public0.2.4 released from6e4b7df; APK740,817bytes and SHA-256
+`e41a99e4e9120bb1abdeb0217615e920859328b56b4ff280a8f98a6010360adf`.
+Real GitHub/CDN download returned200 and matched hash/size. Account Pages uses
+`https://kiansheik.io/kodaklumaremote/`; HTTPS page and update.json returned200
+with exact release metadata. The original custom workflow deployed after adding
+the required release-tag environment rule. Actual Samsung then passed read-only
+signer/decryption checks before bootstrap, after bootstrap and after installing
+the exact public APK; encrypted Kodi login survived with no uninstall/reset.
+User follow-up prefers `make deploy-gh-pages` and direct static branch hosting;
+that replaces the custom Actions deployment while retaining the release/feed.
+The real Make target passed; Pages now has `build_type=legacy`, source
+`gh-pages:/`, HTTPS enforced and a successful branch build. Seven focused
+release/deploy checks passed. Public files are the five site assets,
+`update.json` and `.nojekyll`; no APK/key/wiki is pushed to that branch.

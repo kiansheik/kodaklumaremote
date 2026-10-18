@@ -103,3 +103,10 @@ private emulator migration preserved encrypted setup across debug→release and
 ordinary release updates.134 Node/77 browser/6 updater/5 packaged UI checks and
 signed release build passed. Live publication results are recorded in the
 [distribution handoff](session-handoffs/2026-10-18-github-release-updates.md).
+
+Public0.2.4 and the HTTPS install/feed are verified. Actual phone migration and
+ordinary public APK replacement preserved encrypted login. Per user follow-up,
+`make deploy-gh-pages` now publishes the plain static site/feed directly to
+`gh-pages`; custom Actions workflow removed. Seven focused release/deploy checks
+and the real deployment command passed. Install:
+https://kiansheik.io/kodaklumaremote/.

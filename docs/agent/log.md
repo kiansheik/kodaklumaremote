@@ -172,3 +172,11 @@
   settings and marker across bootstrap and ordinary production APK, no uninstall.
   Publication/actual-phone evidence follows in the
   [distribution handoff](session-handoffs/2026-10-18-github-release-updates.md).
+- 2026-10-18 publication: source pushed; production0.2.4 published with verified
+  APK/update.json. Corrected current aapt2 minSdk field handling and inherited
+  canonical Pages domain; HTTPS enforced. First deploy was blocked by default
+  main-only environment rule; adding version tags and retrying succeeded.
+  Page/feed returned200; public APK/CDN bytes matched metadata. Actual phone
+  bootstrap→public APK preserved decryption of the existing Kodi login and uses
+  the production signer. User then requested simpler direct `gh-pages` deploy
+  through `make deploy-gh-pages`; no native APK/feed contract change is required.

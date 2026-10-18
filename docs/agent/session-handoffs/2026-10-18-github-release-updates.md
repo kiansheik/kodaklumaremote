@@ -24,7 +24,8 @@ The local archived third-party APK and device details remain ignored.
   validation and read-only temporary installer URI. Unknown-source settings
   return requires explicit Continue; Android owns final installation approval.
 - Mobile Settings manual update action; app label LUMA Remote/version0.2.4/code6.
-- `site/`, Pages workflow and strict manifest/release generation/bundling tests.
+- `site/`, Makefile/direct Pages deployer and strict release generation/bundling
+  tests; the initial custom Actions workflow is removed per user follow-up.
 - Local build/publish helpers, public certificate fingerprint and release notes.
   Keys/passwords are not stored in the repo or GitHub Actions.
 - Updater/migration native fixtures and browser/page tests. Migration seed is
@@ -93,4 +94,29 @@ preserved setup. Continue S1E3 receiver diagnosis when the projector is on.
 
 ## Publication evidence
 
-Pending returned publication and phone-migration results.
+- Repository: https://github.com/kiansheik/kodaklumaremote
+- Public release: https://github.com/kiansheik/kodaklumaremote/releases/tag/v0.2.4
+  from6e4b7df127379bc2785e206346796d10930731e2. APK740,817bytes, SHA-256
+  `e41a99e4e9120bb1abdeb0217615e920859328b56b4ff280a8f98a6010360adf`.
+- Initial workflow39138096966 succeeded after default Pages environment's
+  main-only rule rejected the release tag; a version-tag rule allowed the retry.
+- HTTPS canonical page and `update.json` both returned200. Feed exactly matched
+  the release; public APK downloaded through release-assets.githubusercontent.com
+  with matching hash/size. Chrome opened the live install page.
+- Actual Samsung: existing debug certificate and encrypted-login decryption
+  verified first; private lineage bootstrap accepted; read-only check verified
+  production signer/decryption. Exact public signer-only APK then installed and
+  passed the same check. No uninstall/reset, no credentials printed. Public
+  LUMA Remote0.2.4 opened successfully. The existing receiver cache was already
+  absent, as recorded with the projector OFF; encrypted Kodi login remains.
+- Follow-up preference: `make deploy-gh-pages` publishes the static site/feed
+  directly to a fast-forward `gh-pages` branch. Final branch deployment/source
+  verification follows: actual Make target published0.2.4 successfully. Seven
+  focused release/deploy checks passed, including local bare-Git new branch,
+  fast-forward update, idempotence, unexpected-file rejection and unchanged main
+  checkout. The custom Actions workflow is removed; GitHub Pages serves the
+  `gh-pages` branch root with HTTPS. The exact branch was allowed in the Pages
+  deployment environment. Release publishing invokes the same thin deployer.
+  GitHub's branch build returned `built` for
+  `77c0ec1a04d9c486e24ffadf8d904f985dc8a982`; its tree contains exactly the seven
+  reviewed static files. No APK, signing material or source wiki is in that branch.

@@ -198,6 +198,10 @@ Pages deploys only reviewed site files plus validated stable-release metadata.
 Keep the user's existing production signing key local; check its public
 fingerprint. Upload assets to a draft before publishing to prevent deployment
 racing incomplete uploads. No signing key or password is uploaded to Actions.
+The user's follow-up explicitly prefers plain Pages plus a Makefile deploy.
+`make deploy-gh-pages` therefore publishes only the validated static payload to
+`gh-pages` using a fast-forward push; Pages serves that branch root. No custom
+Actions workflow remains. The release publisher invokes that same deployer.
 
 Check the fixed HTTPS update feed on foreground opens, throttled five minutes;
 manual Settings checking bypasses that limit. Later suppresses the same version

@@ -14,6 +14,7 @@ the encrypted Kodi login remain on the phone. This is an early release; Kodi
 startup and subtitle failures remain under investigation.
 
 For maintainers: [signing and publishing a release](docs/releasing.md).
+Deploy the static install/update page with `make deploy-gh-pages`.
 The original Cast extension and Mac proof-of-concept tools remain below.
 
 ## Original frameXTV Cast experiment

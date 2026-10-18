@@ -7,6 +7,18 @@ and `update.json` beneath that URL. GitHub Releases hosts the APK itself.
 Pages deploys only the small `site/` page and validated release metadata, never
 the source wiki, private settings, local analysis or signing material.
 
+## Deploy the page
+
+```sh
+make deploy-gh-pages
+```
+
+This builds the plain HTML/CSS/JavaScript page with the latest published release's
+validated `update.json` and pushes only those files to `gh-pages`. It uses your
+existing Git/GitHub CLI login, leaves the main checkout alone and never force
+pushes. GitHub Pages serves the branch root over HTTPS. No custom Actions
+workflow or signing key is needed to update the page.
+
 ## Prepare a release locally
 
 Use the existing production signing key. Its public certificate fingerprint is
@@ -50,16 +62,15 @@ npm run publish:android -- --directory .local/releases/v0.2.4
 ```
 
 The publisher checks committed version/source, production signature and APK
-hash/size, creates a draft with both assets, then publishes it. This ensures the
-release event cannot reach Pages before its metadata/APK uploads finish. If a
+hash/size, creates a draft with both assets, then publishes it and deploys the
+page for that exact version. If a
 network failure leaves a draft, inspect that draft before retrying; do not
 overwrite a public release's APK or metadata under the same version.
 
-The **Publish install page** workflow reads the latest stable published release,
-checks its package/repository/tag/asset/size/digest metadata, runs the release
-boundary tests and deploys the reviewed page plus `update.json`. It can also be
-run manually after a deployment failure. It does not require a signing secret.
-Verify Pages and the release download after publication.
+To retry a page deployment or publish page-only edits, use `make deploy-gh-pages`.
+The deployer checks the stable release's package/repository/tag/asset/size/digest
+metadata before publishing the page and update feed. Verify the page and APK
+download after publication.
 
 ## Phone update behavior
 
