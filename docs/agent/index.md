@@ -10,6 +10,7 @@ Device follow-up: [Philips TV evidence](philips-tv.md),
 [mobile phone-off target](mobile-target.md),
 [Kodak LUMA options](luma-receiver-options.md),
 [Kodi/VLC receiver interfaces](receiver-apps.md).
+Working Kodi stepping stone: [setup and physical test](../../tests/manual-kodi.md).
 
 Execution: [decisions](decisions.md), [experiments](experiments.md),
 [progress](progress.md), [log](log.md), [handoff](handoff.md).

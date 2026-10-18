@@ -32,3 +32,12 @@ but exact model/Android and app installability remain unknown. Test an existing
 receiver before implementing a custom APK. See [receiver interfaces](receiver-apps.md)
 and [LUMA options](luma-receiver-options.md). No LUMA installation, playback or
 phone-off acceptance occurred.
+
+Subsequent Kodi increment: user configured Kodi, identified over authenticated
+HTTP as 21.2. Public Big Buck Bunny playback has user-confirmed picture/sound;
+pause/resume and queued absolute seek were checked. Playback advanced with Mac
+controller stopped. `npm run kodi` supplies a loopback public-sample controller
+with no media relay or saved credentials. 44 Node tests (11 new Kodi) and three
+Kodi browser tests passed; prior MV3 browser results unchanged. This completes
+the initial LUMA receiver experiment, not the phone sender or intended-source
+acceptance. See [manual evidence](../../tests/manual-kodi.md).

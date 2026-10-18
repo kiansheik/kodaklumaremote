@@ -18,8 +18,8 @@
 8. Full mobile acceptance is phone fully OFF, receiver still fetching media.
    Which direct receiver transport will be supported by the Android controller?
    Miracast-only targets need another player and cannot satisfy this alone.
-9. Which Kodak LUMA model/Android/CPU does the user own, and can it install Kodi,
-   VLC or a DLNA receiver? Does its advertised built-in DLNA expose a usable
+9. Which Kodak LUMA model/Android/CPU does the user own? Kodi is installed and
+   public-media playback worked on version 21.2. Does built-in DLNA expose a usable
    MediaRenderer? Documented app interfaces are [here](receiver-apps.md), and
    manufacturer/commercial options are [here](luma-receiver-options.md).
 
@@ -29,3 +29,6 @@ public demo live SDK ready over HTTPS. These do not settle receiver feasibility.
 Additional resolved observations: TV discovered after user brought it online;
 YouTube app-specific playback physically confirmed by user. Generic Cast and
 phone-off target-media playback are still unverified.
+Kodi public MP4 playback on LUMA is now physically confirmed, with remote
+pause/resume/seek and bounded continuation after the Mac controller stopped.
+Phone sender, full phone shutdown and intended source integration remain open.

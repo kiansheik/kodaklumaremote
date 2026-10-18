@@ -1,8 +1,11 @@
 # Kodak LUMA receiver options
 
 Research checked 2026-10-18. Exact user projector model, installed Android
-version, application store and firmware are still unknown. No APK was installed
-and no projector playback or phone-off test was performed.
+version, application store and firmware are still unknown. The user subsequently
+installed/configured Kodi 21.2: public-film playback and controls worked, with
+user-confirmed picture/sound and bounded continuation after the Mac controller
+stopped. See [hardware evidence](../../tests/manual-kodi.md). No APK was installed
+by the agent and no actual phone-off test was performed.
 
 ## Start with the existing receiver
 

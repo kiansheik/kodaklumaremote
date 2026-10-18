@@ -44,3 +44,13 @@
   commercial DLNA receivers and a possible thin receiver APK. Documented first
   experiment and phone-off acceptance. No app installation/device playback or
   application-code changes; documentation whitespace/local-link checks only.
+- 2026-10-18 08:10–08:14 America/Sao_Paulo: User configured Kodi. Bounded Bonjour
+  discovery found its HTTP service and resolved the user's matching endpoint.
+  Implemented loopback Mac UI/allowlisted JSON-RPC commands. Authenticated Kodi
+  21.2 accepted public MP4; user confirmed picture/sound. Pause/resume and later
+  position confirmed queued seek. Controller stopped at 08:12:01; read-only
+  status at 08:12:29 showed ongoing playback. Native Chrome password notification
+  blocked initial UI clicks; dismissing it and using native window controls
+  yielded live Playing status. No app-code fault established; helpers scoped as
+  a module. 44 Node tests +3 new Kodi browser tests passed. No target stream,
+  phone app/full phone shutdown or stored credentials/device addresses.

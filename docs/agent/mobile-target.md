@@ -13,7 +13,7 @@ Do not silently substitute mirroring or a phone-hosted relay.
 | UPnP/DLNA MediaRenderer | Potentially | Renderer HTTP GET follows SetAVTransportURI/Play independently of control point. TV must expose those services and accept media. Philips description received, but no recognized AVTransport was advertised. |
 | Miracast-only display | No by itself | Source sends an ongoing encoded display stream. Needs another source/player left running; switching phone off stops its stream. |
 | YouTube's TV receiver | YouTube playback verified; phone-off not tested | User confirmed public film picture and sound. Does not accept arbitrary frameXTV URLs through our Cast adapter. |
-| Android receiver app on LUMA | Yes in principle | Kodi JSON-RPC or a DLNA renderer can own retrieval; VLC Remote access is another candidate. Model, installation and physical playback remain untested. |
+| Kodi 21.2 on LUMA | Public MP4 receiver playback confirmed; phone-off pending | User confirmed picture/sound; controls and progression after Mac controller stopped checked. Phone sender/intended media/model/Android remain unverified. |
 
 Primary sources: [Google Cast overview](https://developers.google.com/cast/docs/overview),
 [receiver lifetime](https://developers.google.com/cast/docs/web_receiver/basic),
@@ -25,7 +25,9 @@ Primary sources: [Google Cast overview](https://developers.google.com/cast/docs/
 
 1. Establish receiver capability and a public-media direct-playback proof before
    building a mobile shell. Existing Philips results are [here](philips-tv.md).
-   For the user's app-capable LUMA, test built-in DLNA or installable Kodi/VLC;
+   LUMA Kodi 21.2 public-media playback now passes the initial receiver gate;
+   see [hardware evidence](../../tests/manual-kodi.md). Integrate a phone sender
+   and the intended authorized source next. For other receivers, test DLNA/Kodi/VLC;
    see [LUMA options](luma-receiver-options.md) and [interfaces](receiver-apps.md).
 2. For actual Cast receivers, use the official Android Sender SDK for device
    selection, media LOAD and remote controls. Keep source discovery independent
@@ -44,6 +46,11 @@ is the natural Cast controller for the user's Android phone. No Android app/APK
 has been implemented or installed in this increment. A Chrome Native Messaging
 helper on Mac would still need a real supported transport; it does not turn
 Miracast into independent media retrieval.
+
+`npm run kodi` is a Mac-only stepping stone: localhost UI → authenticated Kodi
+HTTP commands → receiver fetches fixed public MP4. It neither integrates with
+the MV3 extension nor substitutes for the future phone controller. Kodi uses a
+different transport from Google Cast; both can be adapters behind source selection.
 
 ## Required acceptance
 

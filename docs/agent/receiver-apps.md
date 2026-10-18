@@ -1,8 +1,9 @@
 # Android receiver app routes
 
-Research checked 2026-10-18. No LUMA model, Android release, CPU ABI, installed
-player or physical receiver playback was inspected. App-store restrictions do
-not by themselves establish whether an official compatible APK can be installed.
+Research checked 2026-10-18. Subsequent user setup and authenticated control
+confirmed Kodi 21.2 on the LUMA and public MP4 picture/sound. See
+[hardware test](../../tests/manual-kodi.md). Exact model, Android and CPU remain
+unknown. Other app compatibility and sideloading were not tested.
 The acceptance criterion remains [phone fully powered off](mobile-target.md).
 
 ## Documented candidates
@@ -83,5 +84,8 @@ phone-dependent token renewal can still fail the phone-off test with any app.
 - [VideoLAN Android downloads](https://www.videolan.org/vlc/download-android.html)
 - [VideoLAN Android / LibVLC integration and licenses](https://github.com/videolan/vlc-android#libvlc)
 
-Validation: source/document review only. No installation, device discovery,
-playback command, active media URL extraction, app code change or hardware test.
+Initial research was source/document review only. Subsequent implementation:
+`npm run kodi` runs a Mac localhost controller for the fixed public MP4;
+authenticated connection, playback, controls and bounded continuation after the
+controller stopped were checked on Kodi 21.2. No intended-source extraction or
+phone app/full phone-off test occurred. See [manual evidence](../../tests/manual-kodi.md).

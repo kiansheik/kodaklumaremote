@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Kodi receiver test</title>
+  <style>
+    :root { font-family: system-ui, sans-serif; color: #173139; background: #f1f5f3; line-height: 1.5; }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 32px 18px; }
+    main { max-width: 740px; margin: auto; }
+    h1 { font-size: clamp(1.8rem, 5vw, 2.5rem); line-height: 1.15; margin: 0 0 14px; }
+    h2 { font-size: 1.15rem; margin: 0 0 14px; }
+    p { margin: 0 0 14px; }
+    .intro { max-width: 60ch; color: #435c62; }
+    .card { background: #fff; border: 1px solid #d4dfdc; border-radius: 16px; padding: 24px; margin-top: 20px; }
+    ol { padding-left: 22px; margin-bottom: 0; }
+    li + li { margin-top: 8px; }
+    .fields { display: grid; grid-template-columns: minmax(0, 2fr) minmax(100px, 1fr); gap: 14px; }
+    label { display: block; font-weight: 600; font-size: .95rem; }
+    input { display: block; width: 100%; margin-top: 6px; border: 1px solid #839a98; border-radius: 7px; padding: 11px 12px; font: inherit; color: inherit; background: #fff; }
+    button { padding: 11px 16px; border: 1px solid #53726d; border-radius: 8px; font: inherit; font-weight: 600; color: #173139; background: #f6f9f7; cursor: pointer; }
+    button.primary { background: #12644f; color: #fff; border-color: #12644f; }
+    button:disabled { opacity: .5; cursor: default; }
+    :focus-visible { outline: 3px solid #d88121; outline-offset: 3px; }
+    .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; margin-top: 16px; }
+    .seek-label { max-width: 180px; }
+    .hint { font-size: .9rem; color: #435c62; margin-top: 12px; }
+    #message { min-height: 1.5em; margin: 16px 0 0; font-weight: 600; overflow-wrap: anywhere; }
+    #message[data-error="true"] { color: #a02e1f; }
+    .status { margin: 16px 0 0; padding: 14px; border-radius: 8px; background: #eef4f1; overflow-wrap: anywhere; }
+    @media (max-width: 480px) { body { padding: 24px 12px; } .card { padding: 18px; } .fields { grid-template-columns: minmax(0, 1fr); } .row button { flex-grow: 1; } }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Kodi receiver test</h1>
+    <p class="intro">Send a public Big Buck Bunny video to Kodi on your projector. The projector retrieves and plays the video itself.</p>
+
+    <section class="card" aria-labelledby="setup-heading">
+      <h2 id="setup-heading">Prepare the projector</h2>
+      <ol>
+        <li>Open Kodi. In <strong>Settings → Services → Control</strong>, enable <strong>Allow remote control via HTTP</strong>. Set a username and password, and note the port (usually 8080).</li>
+        <li>Find the projector’s IP address in <strong>Settings → System information → Network</strong>. Keep Kodi open and connect the Mac to the same home network.</li>
+      </ol>
+    </section>
+
+    <section class="card" aria-labelledby="receiver-heading">
+      <h2 id="receiver-heading">Connect to Kodi</h2>
+      <form id="connect-form" autocomplete="off">
+        <div class="fields">
+          <label>Projector IP address
+            <input id="host" name="host" type="text" inputmode="decimal" placeholder="192.168.1.50" required spellcheck="false" autocomplete="off" aria-describedby="address-hint">
+          </label>
+          <label>HTTP port
+            <input id="port" name="port" type="number" min="1" max="65535" value="8080" required>
+          </label>
+          <label>Username
+            <input id="username" name="username" type="text" required spellcheck="false" autocomplete="off">
+          </label>
+          <label>Password
+            <input id="password" name="password" type="password" required autocomplete="off">
+          </label>
+        </div>
+        <p id="address-hint" class="hint">Enter the projector’s private IPv4 address, beginning with 10., 172.16–31., or 192.168. This controller does not save credentials.</p>
+        <div class="row"><button id="connect" class="primary" type="submit">Connect</button></div>
+      </form>
+      <p id="message" role="status" aria-live="polite">Enter the Kodi settings to connect.</p>
+    </section>
+
+    <section class="card" aria-labelledby="playback-heading">
+      <h2 id="playback-heading">Public video test</h2>
+      <div class="row">
+        <button id="play" class="primary" type="button" data-action="play" disabled>Play Big Buck Bunny</button>
+        <button type="button" data-action="status" disabled>Refresh status</button>
+      </div>
+      <div class="row">
+        <button type="button" data-action="pause" disabled>Pause</button>
+        <button type="button" data-action="resume" disabled>Resume</button>
+        <button type="button" data-action="stop" disabled>Stop</button>
+      </div>
+      <form id="seek-form" class="row">
+        <label class="seek-label">Position in seconds
+          <input id="position" type="number" min="0" max="86399" step="1" value="60" required disabled>
+        </label>
+        <button id="seek" type="submit" disabled>Seek</button>
+      </form>
+      <p id="playback-status" class="status" aria-live="polite">No receiver connected.</p>
+      <p class="hint">After picture and sound start, close this page to check that playback continues. The final phone test will require powering the phone fully off while the projector keeps playing over its own network connection. This Mac test does not establish phone compatibility.</p>
+    </section>
+  </main>
+  <script type="module">
+    const connectForm = document.querySelector('#connect-form');
+    const seekForm = document.querySelector('#seek-form');
+    const receiverInputs = [...connectForm.querySelectorAll('input')];
+    const playbackButtons = [...document.querySelectorAll('[data-action]'), document.querySelector('#seek')];
+    const connectButton = document.querySelector('#connect');
+    const positionInput = document.querySelector('#position');
+    const message = document.querySelector('#message');
+    const playbackStatus = document.querySelector('#playback-status');
+    let connected = false;
+    let busy = false;
+
+    function updateControls() {
+      connectButton.disabled = busy;
+      receiverInputs.forEach(input => { input.disabled = busy; });
+      playbackButtons.forEach(button => { button.disabled = busy || !connected; });
+      positionInput.disabled = busy || !connected;
+    }
+
+    function showMessage(text, error = false) {
+      message.textContent = text;
+      message.dataset.error = String(error);
+    }
+
+    function clock(seconds) {
+      if (!Number.isFinite(seconds) || seconds < 0) return null;
+      const total = Math.floor(seconds);
+      const hours = Math.floor(total / 3600);
+      const minutes = Math.floor((total % 3600) / 60);
+      const remainder = String(total % 60).padStart(2, '0');
+      return hours ? `${hours}:${String(minutes).padStart(2, '0')}:${remainder}` : `${minutes}:${remainder}`;
+    }
+
+    function showPlayback(result) {
+      if (!result || typeof result.active !== 'boolean') return;
+      if (!result.active) {
+        playbackStatus.textContent = 'Kodi is connected. No active video.';
+        return;
+      }
+      const parts = [result.playing ? 'Playing' : 'Paused'];
+      if (typeof result.title === 'string' && result.title.trim()) parts.push(result.title);
+      const position = clock(result.positionSeconds);
+      const duration = clock(result.durationSeconds);
+      if (position) parts.push(duration ? `${position} / ${duration}` : position);
+      playbackStatus.textContent = parts.join(' · ');
+    }
+
+    async function request(action, extra = {}) {
+      if (busy) return;
+      busy = true;
+      updateControls();
+      showMessage(action === 'connect' ? 'Connecting to Kodi…' : 'Sending command…');
+      const receiver = Object.fromEntries(receiverInputs.map(input => [input.name, input.name === 'port' ? Number(input.value) : input.value]));
+      receiver.host = receiver.host.trim();
+      try {
+        const response = await fetch('/api/kodi', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ receiver, action, ...extra })
+        });
+        const data = await response.json();
+        if (!response.ok || data.ok !== true) {
+          if (action === 'connect') connected = false;
+          const reason = typeof data.error === 'string' && data.error.length <= 240
+            ? data.error : 'Could not complete the request. Check Kodi and your connection.';
+          showMessage(reason, true);
+          return;
+        }
+        if (action === 'connect') {
+          connected = true;
+          const name = typeof data.result?.name === 'string' ? data.result.name : 'Kodi';
+          const version = typeof data.result?.version === 'string' ? ` (${data.result.version})` : '';
+          showMessage(`Connected to ${name}${version}.`);
+          playbackStatus.textContent = 'Ready to play the public test video.';
+        } else {
+          const labels = { play: 'Video requested. Confirm picture and sound on the projector, then refresh status.', status: 'Status refreshed.', pause: 'Pause requested.', resume: 'Resume requested.', seek: 'Seek requested.', stop: 'Stop requested.' };
+          showMessage(labels[action] || 'Command completed.');
+          showPlayback(data.result);
+          if (action === 'play') playbackStatus.textContent = 'Waiting for Kodi to open the video. Refresh status to check playback.';
+          if (action === 'stop' && typeof data.result?.active !== 'boolean') playbackStatus.textContent = 'Playback stopped.';
+        }
+      } catch {
+        if (action === 'connect') connected = false;
+        showMessage('Could not reach the local controller. Check that it is running, then try again.', true);
+      } finally {
+        busy = false;
+        updateControls();
+      }
+    }
+
+    receiverInputs.forEach(input => input.addEventListener('input', () => {
+      connected = false;
+      playbackStatus.textContent = 'Reconnect after changing receiver settings.';
+      showMessage('Receiver settings changed. Connect to continue.');
+      updateControls();
+    }));
+    connectForm.addEventListener('submit', event => {
+      event.preventDefault();
+      request('connect');
+    });
+    document.querySelectorAll('[data-action]').forEach(button => button.addEventListener('click', () => {
+      if (connected) request(button.dataset.action);
+    }));
+    seekForm.addEventListener('submit', event => {
+      event.preventDefault();
+      if (connected && positionInput.checkValidity()) request('seek', { position: Number(positionInput.value) });
+    });
+  </script>
+</body>
+</html>

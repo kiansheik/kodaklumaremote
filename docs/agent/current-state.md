@@ -14,9 +14,10 @@ Cast UI. A separate ordinary HTTPS demo uses the same controller with a public
 Big Buck Bunny MP4. No SDK injection, relay, auth/DRM bypass, telemetry, or media
 bundling is part of the extension.
 
-Latest validation: build, 33 Node unit/diagnostic tests, and 16 loaded-MV3 Chromium
-fixture tests passed. The full check passed 30/16 before three independent
-discovery-tool tests were added. Cast is mocked in fixtures. Production manifest and separate
+Latest validation: 44 Node tests passed, including 11 new Kodi tests; three new
+Kodi browser tests passed with mocked transport. Prior build and 16 loaded-MV3
+Chromium fixture tests passed; those browser fixtures were not rerun for the
+separate Kodi tool. Cast is mocked in fixtures. Production manifest and separate
 loopback test manifest are generated from checked-in source configuration.
 Live SDK smoke: Chrome 155.0.8059.39, 2026-10-18 07:15:24 America/Sao_Paulo,
 HTTPS secure context, SDK ready, zero media requests; no receiver selected.
@@ -57,11 +58,23 @@ receiver experiment if installable; VLC Android 3.6+ Remote access is another
 candidate, with network-URL launch confirmed in released 3.6.5 source only.
 AirPin and other commercial DLNA receivers are alternatives. An installable
 thin receiver APK could receive LAN commands and own playback or launch a local
-player. These are researched routes, not installed or hardware-tested features.
+player. These were researched routes; Kodi now has the public-media test below.
 See [LUMA options](luma-receiver-options.md) and [receiver interfaces](receiver-apps.md).
 
-No generic receiver/media LOAD, target codec/CORS/expiry, mobile app or phone-off
-acceptance is established. TV-side generic Cast receiver/app availability is
+User subsequently installed/configured Kodi. A bounded Bonjour query discovered
+its HTTP service and resolved a private address/port matching the user's report.
+Authenticated connection identified Kodi 21.2. `Player.Open` of the public MP4
+started receiver playback; user confirmed projector picture and sound. Pause/
+resume succeeded, and later position confirmed an absolute seek to 90 seconds.
+Playback advanced with the Mac controller process stopped (28-second bounded
+check). New `npm run kodi` serves a loopback-only UI for credentials and public
+sample controls; it sends only Kodi JSON-RPC, with no media fetch/relay or saved
+credentials. Live Chrome connection/status worked; native password notification
+obstructed initial clicks, not an established app-code failure. See
+[Kodi evidence](../../tests/manual-kodi.md).
+
+No generic Google Cast/target-source LOAD, target codec/CORS/expiry, mobile app
+or full phone-off acceptance is established. TV-side generic Cast app availability is
 unknown. System Settings computer access was unavailable, so macOS local-network
 permission was not inspected or changed. Chrome debug internals were disabled
 and were not enabled. No anti-debugging/auth/DRM bypass was performed.

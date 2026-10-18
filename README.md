@@ -92,3 +92,27 @@ Chrome disables the TV for frameXTV with “Available for specific video sites�
 The intended final mobile solution must keep playing after the phone is fully
 off; a Miracast-only mirror cannot meet that requirement. See
 [receiver evidence](docs/agent/philips-tv.md) and [mobile target](docs/agent/mobile-target.md).
+
+## Kodi on an Android projector
+
+The user's LUMA running Kodi 21.2 played the public Big Buck Bunny MP4 with
+user-confirmed picture and sound. Pause/resume and absolute seek were checked;
+playback advanced after the Mac controller process stopped. This establishes a
+public-media Kodi route, not frameXTV playback or final phone-off acceptance.
+
+```sh
+npm run kodi
+```
+
+Open **http://127.0.0.1:4175** in Chrome. On the projector, enable Kodi's
+**Settings → Services → Control → Allow remote control via HTTP**, set its
+username/password, and keep Kodi open on the same home network. Enter those
+details in the local controller, connect, and choose **Play Big Buck Bunny**.
+Use **Refresh status** after a playback command; Kodi starts/seeks asynchronously.
+Closing the page does not stop the video; use **Stop** explicitly.
+
+This Mac-only test controller sends authenticated JSON-RPC commands to one
+private IPv4 address. Credentials are not persisted, and only the fixed public
+sample URL can be opened. The Mac does not fetch or relay video. It adds no Kodi
+button to the extension and is not yet an Android phone controller.
+See [Kodi testing and discovery](tests/manual-kodi.md).

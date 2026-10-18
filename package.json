@@ -11,7 +11,8 @@
     "serve": "node scripts/serve.mjs",
     "demo": "node scripts/demo-server.mjs",
     "smoke:cast": "node scripts/public-cast-smoke.mjs",
-    "discover:tv": "node scripts/discover-tv.mjs"
+    "discover:tv": "node scripts/discover-tv.mjs",
+    "kodi": "node scripts/kodi-controller.mjs"
   },
   "devDependencies": {
     "@playwright/test": "1.64.0",

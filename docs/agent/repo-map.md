@@ -27,7 +27,13 @@
   phone-powered-off retrieval requirement; no mobile app implemented yet.
 - `docs/agent/{luma-receiver-options,receiver-apps}.md`: manufacturer DLNA claims,
   existing Android receiver apps, Kodi/VLC control interfaces and proposed tests;
-  no LUMA install or hardware acceptance yet.
+  Kodi public-media acceptance is recorded in `tests/manual-kodi.md`.
+- `scripts/kodi-controller.mjs`, `src/kodi/controller.html`: Mac loopback UI and
+  allowlisted authenticated Kodi JSON-RPC for the fixed public sample; no media
+  relay, credential persistence or arbitrary-source endpoint.
+- `tests/kodi-controller.test.mjs`, `tests/browser/kodi.spec.js`: Kodi transport/
+  localhost boundaries and real UI with mocked receiver. `tests/manual-kodi.md`:
+  setup/discovery, actual Kodi 21.2 public-film/control/continuation evidence.
 - `docs/agent/`: concise evidence, decisions, and reproducible handoffs.
 - `artifacts/`, `.local/`: ignored local evidence; never commit credentials/media.
 - `README.md`: build/load instructions; `package-lock.json`: pinned npm tools.
