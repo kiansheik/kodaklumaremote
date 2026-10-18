@@ -11,6 +11,15 @@
 | 5 Reliability | Automated checks passed | Source/nav/removal cancellation, errors, commands, subtitles, cleanup and simulated BFCache. Real device/fullscreen/audio-language limitations documented. |
 | 6 Handoff | Prepared | README, experiment log, manual acceptance checklist, source map and session handoff. |
 
-No native receiver playback success is claimed. No custom receiver or relay is
+Follow-up: Philips43PFG6910/78 was discovered but disabled by native Chrome for
+frameXTV/general tab mode (“Available for specific video sites”). YouTube's own
+receiver path worked and the user confirmed TV picture/sound. This does not
+establish arbitrary-source Cast. Improved session/media error classification was
+built, tested and reloaded in the installed extension. Latest full check at that
+point passed30 unit/16 browser tests; separate discovery-tool checks follow.
+
+The final product is an Android/Samsung-phone controller whose receiver keeps
+retrieving media after phone power-off. See [mobile target](mobile-target.md).
+No native arbitrary-media receiver playback success is claimed. No custom receiver or relay is
 justified by the evidence; neither was implemented. Manual Chrome tab casting is
 documented separately as browser-dependent mirroring.

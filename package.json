@@ -10,7 +10,8 @@
     "check": "npm run build && npm test && npm run test:browser",
     "serve": "node scripts/serve.mjs",
     "demo": "node scripts/demo-server.mjs",
-    "smoke:cast": "node scripts/public-cast-smoke.mjs"
+    "smoke:cast": "node scripts/public-cast-smoke.mjs",
+    "discover:tv": "node scripts/discover-tv.mjs"
   },
   "devDependencies": {
     "@playwright/test": "1.64.0",

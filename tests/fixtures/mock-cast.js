@@ -21,6 +21,7 @@
     setOptions: options => calls.push(['options',options]),
     requestSession: async () => {
       calls.push(['request']);
+      if (control.sessionError) throw {code:control.sessionError,description:'private source URL must never be displayed'};
       if (control.failSession) throw {code:'cancel'};
       control.session=session;
       emit('session',{sessionState:'started'});

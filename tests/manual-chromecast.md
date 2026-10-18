@@ -1,6 +1,11 @@
 # Physical Chromecast / Google TV acceptance
 
-Status: **not performed**. Automated tests use a fake CAF SDK and cannot prove
+Status: **partial app-specific hardware test**, generic Cast still unverified.
+Philips43PFG6910/78 was discovered but disabled for frameXTV with “Available for
+specific video sites”. YouTube's public Blender film connected; the user
+confirmed actual TV picture and sound. Sender pause/seek/resume and stopping the
+test were exercised. This does not pass the extension's arbitrary-media path.
+Automated tests use a fake CAF SDK and cannot prove
 device discovery, network access, decoding, TV output, or live subtitles. Fill
 this checklist with observed results; do not turn an untested item into a pass.
 
@@ -126,17 +131,18 @@ the browser remaining active and does not satisfy independent receiver playback.
 | Check | Result and sanitized evidence |
 | --- | --- |
 | Public demo SDK ready | Passed isolated smoke 2026-10-18 07:15 America/Sao_Paulo, Chrome 155; no device selected |
-| Device discovered and selected | Untested |
+| Device discovered and selected | Philips43PFG6910/78 discovered; selected successfully through YouTube only |
 | TV retrieved/played public media | Untested |
-| Target native Cast control / duplicate handling | Untested |
+| Target native Cast control / duplicate handling | Live extension fallback visible without duplicate; TV unavailable for generic frameXTV route |
 | Target media picture and audio on TV | Untested |
 | Local playback paused after remote success | Untested |
-| Pause/resume, seek, volume | Untested |
+| Pause/resume, seek, volume | YouTube sender pause/seek/resume observed; extension controls and volume untested on hardware |
 | Subtitles / alternate audio | Untested; use N/A only after checking |
-| Disconnect and local return paused | Untested |
+| Disconnect and local return paused | Own YouTube route stopped; local sender returned paused. Extension path untested |
 | Episode change / pending request invalidation | Untested |
 | Player replacement / Back-Forward return | Untested |
 | Narrow window / fullscreen / keyboard | Untested |
+| Phone fully powered off, receiver keeps fetching | Untested; final mobile acceptance requirement |
 
 Document blockers and remaining questions in the
 [handoff](../docs/agent/handoff.md). A completed device test must identify the

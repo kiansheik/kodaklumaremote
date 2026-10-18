@@ -57,5 +57,16 @@ mirroring explicitly labelled browser-dependent and separate from direct play.
 
 Fixtures may prove player detection, insertion, validation, state transitions, cleanup,
 and command wiring. They cannot prove LAN discovery, receiver fetch/decode,
-real subtitles, source expiry, or physical remote control. No hardware result
-has been verified in this research task.
+real subtitles, source expiry, or physical remote control. Follow-up YouTube
+hardware picture/sound was user-confirmed; generic arbitrary-media Cast remains
+unverified. Do not promote that app-specific result into generic acceptance.
+
+## D7: Mobile acceptance is phone power-off, not just a remote-looking UI
+
+User clarified that the final Samsung-phone controller must be able to power
+fully off while the receiver retrieves media. Desktop Chrome is a stepping
+stone. Standard Cast and an actually supported UPnP MediaRenderer are suitable
+candidate transports; a Miracast-only sink is not. A native helper does not make
+mirroring into independent retrieval. Do not build a phone proxy/hotspot path as
+if it met this requirement. See [mobile target](mobile-target.md) and
+[Philips hardware evidence](philips-tv.md). No mobile app is implemented yet.

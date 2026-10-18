@@ -86,3 +86,9 @@ See the [handoff](docs/agent/handoff.md), [investigation](docs/agent/investigati
 [playback findings](docs/agent/playback-analysis.md), and
 [Cast feasibility](docs/agent/chromecast-feasibility.md) for evidence and remaining
 questions. Keep live source URLs, cookies, credentials, and media out of Git.
+
+Live Philips43PFG6910/78 testing found YouTube-specific playback working, while
+Chrome disables the TV for frameXTV with “Available for specific video sites”.
+The intended final mobile solution must keep playing after the phone is fully
+off; a Miracast-only mirror cannot meet that requirement. See
+[receiver evidence](docs/agent/philips-tv.md) and [mobile target](docs/agent/mobile-target.md).

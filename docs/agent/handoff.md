@@ -2,6 +2,7 @@
 
 2026-10-18 America/Sao_Paulo. Detailed record:
 [session handoff](session-handoffs/2026-10-18-native-cast.md).
+Latest follow-up: [live Philips test and mobile goal](session-handoffs/2026-10-18-philips-mobile.md).
 
 ## Outcome
 
@@ -60,7 +61,9 @@ Static `--assets` outputs remain ignored; asset hashes may change with site buil
 
 ## Evidence and limits
 
-- `npm run check`: passed build, **25 unit +15 loaded-MV3 browser tests**.
+- Error-classification follow-up `npm run check`: passed build, **30 unit +16
+  loaded-MV3 browser tests**. Subsequent `npm test` passed **33** tests including
+  three independent discovery-tool tests.
   Browser CAF is mocked. Actual MV3 injection, frame scope and page-world bridge
   are tested, not device discovery/decode.
 - Actual SDK smoke passed in Chrome155.0.8059.39 over local HTTPS, secure context,
@@ -74,11 +77,20 @@ Static `--assets` outputs remain ignored; asset hashes may change with site buil
 - Live extension injection confirmed in watch and same-origin embed with CAF
   present. Blanking occurred before video/source/control appeared in that probe;
   actual-origin control/media behavior remains unverified.
-- Physical receiver playback, target codec/expiry/authorization/CORS, actual
+- Generic Cast receiver playback, target codec/expiry/authorization/CORS, actual
   subtitles and local-return behavior on hardware remain unverified.
 - No audio-language selector, internal HLS/blob subtitle conversion, cross-origin
   iframe permission, custom receiver or relay. Direct `<video>` fullscreen cannot
   display an overlay outside the replaced element; wrapper fullscreen is handled.
+- User-confirmed hardware exception: YouTube public test played picture/sound on
+  Philips43PFG6910/78. Native Chrome disables that TV for frameXTV with
+  “Available for specific video sites”. This is app-specific playback; generic
+  Cast target-media success and phone-off playback remain unverified.
+
+Final mobile acceptance and candidate transports: [mobile target](mobile-target.md).
+Bounded read-only renderer discovery: `npm run discover:tv`; sanitized output
+stays ignored under `.local/tv-discovery.json`. A negative probe is not proof
+that the TV has no service under another mode/network configuration.
 
 ## Next highest-value work
 

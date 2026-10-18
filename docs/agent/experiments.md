@@ -206,3 +206,83 @@
   integration remains dependent on ordinary authorized playback becoming usable.
 - **Next:** Uninstrumented Chrome/player acceptance and physical receiver test;
   retain deterministic fixture coverage for controls and extraction meanwhile.
+
+## E10 — User Chrome, Philips discovery and YouTube hardware control
+
+- **Timestamp/environment:** 2026-10-18 approximately07:27–07:46
+  America/Sao_Paulo; user's ordinary Chrome profile via native UI, existing
+  unpacked extension from `dist/extension`; Philips43PFG6910/78.
+- **Hypothesis:** The earlier generic extension error may precede media LOAD;
+  native Chrome discovery and a supported public site can isolate the stage.
+- **Method:** Read installed path and live player UI. Native Chrome menu Cast,
+  then YouTube's Play on TV for Blender's public
+  [Big Buck Bunny film](https://www.youtube.com/watch?v=aqz-KE-bpKQ). No DevTools,
+  runtime overrides, raw media URL extraction, or TV firmware settings changed.
+- **Observed:** Player/extension were visible in ordinary Chrome. Initial native
+  picker said “No devices found”; user later reported TV had been offline. After
+  reconnect, exact target was discovered but disabled for frameXTV, “Available
+  for specific video sites”. YouTube enabled the target, connected and reported
+  playing; user explicitly confirmed physical TV picture and sound. Sender
+  pause, +5s seek and resume changed remote UI state. Stopped the task's own
+  YouTube route and observed local paused playback afterward. Cast tab was the
+  selected native source; no screen mirroring was started.
+- **Evidence:** Native UI observations and user confirmation in session;
+  concise record [TV evidence](philips-tv.md) and manual acceptance table. No raw
+  AX/browser screenshots or personal browser content saved to repository.
+- **Confidence:** High for discovery/UI and user-confirmed YouTube picture/audio;
+  no direct frameXTV, generic Default Media Receiver or phone-off test success.
+- **Conclusion:** Site-specific receiver playback works. Generic media routing
+  is separately unavailable in the observed mode; Chromecast SDK readiness/media
+  codecs should not be blamed from that session failure alone.
+- **Next:** Identify any independent general media receiver, preserve final
+  phone-power-off requirement, and validate actual URL retrieval only if supported.
+
+## E11 — Sanitized error-stage correction
+
+- **Timestamp/environment:** 2026-10-18 approximately07:35–07:43
+  America/Sao_Paulo; Node24/Playwright1.64; existing user Chrome extension.
+- **Hypothesis:** Separate connection/discovery from media errors without exposing
+  SDK descriptions or source URLs, and retain correct UI wording after rejection.
+- **Method:** Read official [error enum](https://developers.google.com/cast/docs/reference/web_sender/chrome.cast#ErrorCode),
+  [requestSession](https://developers.google.com/cast/docs/reference/web_sender/cast.framework.CastContext#requestSession),
+  and [loadMedia](https://developers.google.com/cast/docs/reference/web_sender/cast.framework.CastSession#loadMedia).
+  Update adapter stage mapping/UI fixed-message allowlist; test string/object
+  errors, cancellation, unavailable receiver, readiness, timeout, media rejection.
+- **Observed:** `npm run check` passed build +30 unit +16 browser tests. Built
+  extension reloaded in the user's verified unpacked instance, player refreshed;
+  live retry now says it could not connect to a Cast receiver. Generic LOAD/CORS
+  claims no longer replace that error. No raw SDK detail shown.
+- **Evidence:** `src/cast/session.js`, `src/extension/player.js`, session/browser
+  tests and fake CAF regression; native Chrome showed Reloaded and updated error.
+- **Confidence:** High for tested classifications and actual updated message;
+  exact raw SDK failure was not collected and no media LOAD was established.
+- **Conclusion:** Connection failures retain their stage; an unavailable receiver
+  no longer implies a stream compatibility failure.
+- **Next:** Receiver capabilities before building another sender frontend.
+
+## E12 — Bounded read-only direct-renderer discovery
+
+- **Timestamp/environment:** 2026-10-18 07:48:07 initial probe,07:49:29 final
+  America/Sao_Paulo; Node UDP/HTTP on one private physical IPv4 interface. User
+  confirmed normal Home/YouTube TV mode before final probe.
+- **Hypothesis:** Philips may expose UPnP MediaRenderer/AVTransport for direct
+  URL retrieval without a phone-hosted relay or continuing screen stream.
+- **Method:** `node scripts/discover-tv.mjs`; three specific SSDP search types,
+  final run repeats once after1s within4.5s; no port scan. Only private numeric
+  responder description origins accepted, short XML GETs capped256KiB, no redirects
+  or credential use; exact-model/manufacturer gate and sanitized output. No SOAP
+  playback/control requests and no media requests. Three parser/boundary tests pass.
+- **Observed:** Initial permitted probe returned no accepted response. Final
+  confirmed-normal-mode run received and read **one exact Philips43PFG6910/78
+  device description**, no discovery/description errors. Recognized service list
+  and AVTransport action list were empty; no SCPD or media/control fetch followed.
+  The protocol type of that SSDP response was not retained by the sanitized report.
+- **Evidence:** `scripts/discover-tv.mjs`, `tests/discovery.test.mjs`, ignored
+  `.local/tv-discovery.json`. Report contains no addresses, UDNs, serials or URLs.
+- **Confidence:** High for received matching description and absent recognized
+  service entries in it. Not proof of all firmware/mode/network capabilities.
+- **Conclusion:** SSDP reachability is demonstrated; a direct DLNA renderer has
+  not been established. Combined with Chrome/YouTube, this is consistent with an
+  app-specific receiver, but do not label the protocol definitively DIAL from it.
+- **Next:** Check for a supported TV-side generic receiver app/mode, or validate
+  against an actual general Cast/DLNA receiver before the mobile implementation.

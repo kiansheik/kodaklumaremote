@@ -6,6 +6,8 @@ Start with [current state](current-state.md), [repo map](repo-map.md), and
 Research: [investigation](investigation.md), [site architecture](site-architecture.md),
 [anti-debugging](anti-debugging.md), [network](network-analysis.md),
 [playback](playback-analysis.md), [Cast feasibility](chromecast-feasibility.md).
+Device follow-up: [Philips TV evidence](philips-tv.md),
+[mobile phone-off target](mobile-target.md).
 
 Execution: [decisions](decisions.md), [experiments](experiments.md),
 [progress](progress.md), [log](log.md), [handoff](handoff.md).

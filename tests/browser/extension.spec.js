@@ -63,7 +63,7 @@ test('failed LOAD leaves local playback alone and does not leak errors',async({p
   await open(page);
   await page.evaluate(()=>{window.castMock.failLoad=true;window.pauseCount=0;document.querySelector('video').pause=()=>window.pauseCount++;});
   await host(page).getByRole('button',{name:'Cast video',exact:true}).click();
-  await expect(host(page).getByRole('status')).toContainText('Cast could not start');
+  await expect(host(page).getByRole('status')).toContainText('receiver connected but could not load');
   expect(await page.evaluate(()=>window.pauseCount)).toBe(0);
   await expect(host(page)).not.toContainText('private signed');
 });
@@ -148,4 +148,12 @@ test('post-LOAD source validation failure cleans receiver without pausing local'
   await page.evaluate(()=>{Object.defineProperty(document.querySelector('video'),'mediaKeys',{value:{},configurable:true});window.castMock.resolveLoad();});
   await expect.poll(()=>page.evaluate(()=>window.castMock.calls.some(x=>x[0]==='end'))).toBe(true);
   expect(await page.evaluate(()=>window.pauseCount)).toBe(0);
+});
+test('no compatible receiver is a discovery failure without a media LOAD',async({page})=>{
+  await open(page);
+  await page.evaluate(()=>{window.castMock.sessionError='receiver_unavailable';});
+  await host(page).getByRole('button',{name:'Cast video',exact:true}).click();
+  await expect(host(page).getByRole('status')).toContainText('No compatible Cast receiver is available');
+  expect(await page.evaluate(()=>window.castMock.calls.some(x=>x[0]==='load'))).toBe(false);
+  await expect(host(page)).not.toContainText('private source URL');
 });

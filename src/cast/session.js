@@ -1,6 +1,26 @@
 const error = (code, message) => Object.assign(new Error(message), { code });
 const finite = (value, fallback = 0) => Number.isFinite(value) && value >= 0 ? value : fallback;
-const canceled = (reason) => ['cancel', 'cancelled', 'canceled'].includes(String(reason?.code ?? reason).toLowerCase());
+const errorCode = (reason) => (typeof reason === 'string' ? reason : typeof reason?.code === 'string' ? reason.code : '').toLowerCase();
+
+function connectionError(reason, phase) {
+  const code = errorCode(reason);
+  // Classify by the operation that failed; a failed chooser has not tested media access.
+  // Never pass through SDK descriptions/details, which may contain active media URLs.
+  if (phase === 'selection' && ['cancel', 'cancelled', 'canceled'].includes(code)) {
+    return error('CANCELED', 'Device selection canceled.');
+  }
+  if (phase === 'initialization' && code === 'sdk_unavailable') return error('SDK_UNAVAILABLE', 'This page has not provided the Google Cast sender SDK.');
+  if (phase === 'initialization' || (phase !== 'loading' && code === 'api_not_initialized')) {
+    return error('SDK_NOT_READY', 'The page’s Cast sender is not ready yet. Wait for the player to finish loading, then try again.');
+  }
+  if (phase === 'selection') {
+    if (code === 'receiver_unavailable') return error('RECEIVER_UNAVAILABLE', 'No compatible Cast receiver is available. Check that the TV supports Google Cast and is on the same network.');
+    if (code === 'timeout') return error('SESSION_TIMEOUT', 'The Cast receiver did not connect in time. Check the TV and try again.');
+    return error('SESSION_FAILED', 'Could not connect to a Cast receiver. Check Chrome’s Cast menu and the TV’s network connection.');
+  }
+  if (phase === 'loading') return error('LOAD_FAILED', 'The Cast receiver connected but could not load this media. Check receiver format support and direct access to the source.');
+  return error('CAST_FAILED', 'Cast could not start.');
+}
 
 function validateURL(value) {
   try {
@@ -139,26 +159,38 @@ export class CastController {
     let session;
     let opened = false;
     let loadAccepted = false;
+    let phase = 'initialization';
     this._status('connecting', 'Select a Cast device.');
     try {
       this._cleanup();
       this._initialize();
+      phase = 'selection';
       session = this._context.getCurrentSession();
       if (!session) {
         opened = true;
-        await this._context.requestSession();
+        let selection;
+        try {
+          selection = this._context.requestSession();
+        } catch {
+          // CAF documents a synchronous throw when the page has not set its Cast options.
+          throw error('API_NOT_INITIALIZED', 'The page has not initialized its Cast options.');
+        }
+        await selection;
         session = this._context.getCurrentSession();
       }
       if (generation !== this._generation || this._disposed) throw error('STALE', 'Cast connection was canceled.');
       if (!session) throw error('SESSION_UNAVAILABLE', 'No Cast session is available.');
       this._session = session;
+      phase = 'preparation';
       const request = this._request(media);
       this._player = new this._framework.RemotePlayer();
       this._remote = new this._framework.RemotePlayerController(this._player);
+      phase = 'loading';
       const result = await session.loadMedia(request);
       if (result != null) throw error('LOAD_FAILED', 'The receiver could not load this media.');
       loadAccepted = true;
       if (generation !== this._generation || this._disposed) throw error('STALE', 'Cast connection was canceled.');
+      phase = 'connected';
       this._last = { ...this._last, currentTime: finite(media.currentTime), duration: finite(media.duration), paused: false };
       const events = this._framework.RemotePlayerEventType || {};
       const types = events.ANY_CHANGE ? [events.ANY_CHANGE] : [events.CURRENT_TIME_CHANGED, events.DURATION_CHANGED, events.IS_PAUSED_CHANGED, events.VOLUME_LEVEL_CHANGED, events.IS_MUTED_CHANGED, events.IS_CONNECTED_CHANGED];
@@ -178,14 +210,11 @@ export class CastController {
       if ((opened || (stale && loadAccepted)) && session) {
         try { await this._end(session); } catch { /* Preserve the original sanitized failure. */ }
       }
-      if (!stale) {
-        const state = reason?.code === 'SDK_UNAVAILABLE' ? 'unavailable' : canceled(reason) ? 'canceled' : 'error';
-        this._status(state, state === 'unavailable' ? 'This page has not provided the Google Cast sender SDK. Use Chrome’s Cast menu for tab mirroring.' : state === 'canceled' ? 'Device selection canceled.' : 'Cast could not start. Check receiver format support and direct access to the media.');
-      }
       if (stale) throw error('CANCELED', 'Cast connection was canceled.');
-      if (canceled(reason)) throw error('CANCELED', 'Device selection canceled.');
-      if (reason?.code === 'SDK_UNAVAILABLE') throw error('SDK_UNAVAILABLE', 'This page has not provided the Google Cast sender SDK.');
-      throw error('CAST_FAILED', 'Cast could not start. Check receiver format support and direct access to the media.');
+      const failure = connectionError(reason, phase);
+      const state = ['SDK_UNAVAILABLE', 'SDK_NOT_READY'].includes(failure.code) ? 'unavailable' : failure.code === 'CANCELED' ? 'canceled' : 'error';
+      this._status(state, failure.message);
+      throw failure;
     } finally {
       this._pending = false;
     }

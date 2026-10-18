@@ -20,6 +20,11 @@
 - `tests/browser/extension.spec.js`: actual loaded MV3 + mocked CAF in Chromium.
 - `tests/fixtures/`: synthetic player/SDK/VTT and public-demo HTML, no media files.
 - `tests/manual-chromecast.md`: hardware acceptance checklist and evidence table.
+- `scripts/discover-tv.mjs`: bounded read-only SSDP/descriptor probe for the
+  exact Philips TV; no playback controls/media/port scanning. Companion parser
+  and output/URL-boundary tests: `tests/discovery.test.mjs`.
+- `docs/agent/{philips-tv,mobile-target}.md`: actual TV evidence and final
+  phone-powered-off retrieval requirement; no mobile app implemented yet.
 - `docs/agent/`: concise evidence, decisions, and reproducible handoffs.
 - `artifacts/`, `.local/`: ignored local evidence; never commit credentials/media.
 - `README.md`: build/load instructions; `package-lock.json`: pinned npm tools.

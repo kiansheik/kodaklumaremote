@@ -111,9 +111,18 @@ export function install(win) {
     // Adapter/media errors are sanitized. Never render arbitrary SDK/page errors.
     if (error?.code === 'CANCELED') {status('Device selection canceled.'); return;}
     if (error?.code === 'DRM_UNSUPPORTED') {status('Encrypted playback cannot be sent by this integration.'); return;}
+    const castMessages = {
+      SDK_UNAVAILABLE: 'This page has not provided the Google Cast sender SDK.',
+      SDK_NOT_READY: 'The page’s Cast sender is not ready yet. Wait for the player to finish loading, then try again.',
+      RECEIVER_UNAVAILABLE: 'No compatible Cast receiver is available. Check that the TV supports Google Cast and is on the same network.',
+      SESSION_TIMEOUT: 'The Cast receiver did not connect in time. Check the TV and try again.',
+      SESSION_FAILED: 'Could not connect to a Cast receiver. Check Chrome’s Cast menu and the TV’s network connection.',
+      LOAD_FAILED: 'The Cast receiver connected but could not load this media. Check receiver format support and direct access to the source.'
+    };
+    if (Object.hasOwn(castMessages, error?.code)) {status(castMessages[error.code]); return;}
     status(['SOURCE_UNSUPPORTED', 'SOURCE_UNAVAILABLE'].includes(error?.code)
       ? 'This player does not expose a supported direct media URL. Blob/MSE sources cannot be sent directly.'
-      : 'Cast could not start. Check that the page’s Cast SDK is ready and the receiver can access this source.');
+      : 'Cast could not start.');
   }
   async function cast() {
     if (!active || connecting || casting) return;

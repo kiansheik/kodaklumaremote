@@ -143,14 +143,82 @@ test('chooser cancellation returns a sanitized error and leaves no own listeners
   assert.equal(f.calls.some(([name]) => name === 'load'), false);
 });
 
+test('CAF string cancellation is distinguished from a receiver connection failure', async () => {
+  const f = fixture({ request: () => Promise.reject('cancel') });
+  await assert.rejects(f.controller.connect(media), { code: 'CANCELED' });
+  assert.equal(f.statuses.at(-1).state, 'canceled');
+  assert.equal(f.context.count, 1);
+});
+
+test('receiver discovery errors do not claim the receiver rejected media', async () => {
+  for (const reason of ['receiver_unavailable', { code: 'receiver_unavailable', description: 'https://secret.example/?token=hidden' }]) {
+    const f = fixture({ request: () => Promise.reject(reason) });
+    await assert.rejects(f.controller.connect(media), (error) => {
+      assert.equal(error.code, 'RECEIVER_UNAVAILABLE');
+      assert.match(error.message, /No compatible Cast receiver/);
+      assert.doesNotMatch(error.message, /media|source|secret|hidden|https/);
+      return true;
+    });
+    assert.equal(f.calls.some(([name]) => name === 'load'), false);
+    assert.equal(f.statuses.at(-1).state, 'error');
+    assert.equal(f.context.count, 1);
+  }
+});
+
+test('SDK readiness is distinct from discovery and does not reconfigure page options', async () => {
+  const notInitialized = fixture({ request: () => Promise.reject('api_not_initialized') });
+  const notConfigured = fixture();
+  notConfigured.context.requestSession = () => { throw new Error('https://secret.example/?token=hidden'); };
+  for (const f of [notInitialized, notConfigured]) {
+    await assert.rejects(f.controller.connect(media), { code: 'SDK_NOT_READY' });
+    assert.equal(f.statuses.at(-1).state, 'unavailable');
+    assert.equal(f.calls.some(([name]) => name === 'load'), false);
+    assert.doesNotMatch(JSON.stringify(f.statuses), /secret|hidden|https/);
+    assert.equal(f.context.count, 1);
+  }
+});
+
+test('session timeout and unknown connection errors stay separate from media load failures', async () => {
+  for (const [reason, code] of [
+    ['timeout', 'SESSION_TIMEOUT'],
+    ['session_error', 'SESSION_FAILED'],
+    [{ code: 'channel_error', details: 'https://secret.example/?token=hidden' }, 'SESSION_FAILED'],
+    [new Error('https://secret.example/?token=hidden'), 'SESSION_FAILED'],
+  ]) {
+    const f = fixture({ request: () => Promise.reject(reason) });
+    await assert.rejects(f.controller.connect(media), { code });
+    assert.equal(f.calls.some(([name]) => name === 'load'), false);
+    assert.doesNotMatch(JSON.stringify(f.statuses), /media|source|secret|hidden|https/);
+    assert.equal(f.context.count, 1);
+  }
+});
+
 test('load failure stops a newly opened session but preserves a reused page session', async () => {
   for (const existing of [false, true]) {
     const f = fixture({ existing, load: () => Promise.reject(new Error('https://secret.example/?token=hidden')) });
-    await assert.rejects(f.controller.connect(media), { code: 'CAST_FAILED' });
+    await assert.rejects(f.controller.connect(media), { code: 'LOAD_FAILED' });
     assert.equal(f.calls.filter(([name]) => name === 'end').length, existing ? 0 : 1);
     assert.equal(f.statuses.at(-1).state, 'error');
     assert.equal(f.context.count, 1);
     assert.doesNotMatch(JSON.stringify(f.statuses), /secret|token|hidden/);
+  }
+});
+
+test('both resolved and rejected CAF load errors report media failure after connection', async () => {
+  for (const load of [
+    () => 'load_media_failed',
+    () => Promise.reject('load_media_failed'),
+    () => Promise.reject({ code: 'cancel', description: 'https://secret.example/?token=hidden' }),
+    () => Promise.reject('receiver_unavailable'),
+  ]) {
+    const f = fixture({ load });
+    await assert.rejects(f.controller.connect(media), { code: 'LOAD_FAILED' });
+    assert.equal(f.statuses.at(-1).state, 'error');
+    assert.match(f.statuses.at(-1).message, /connected but could not load/);
+    assert.doesNotMatch(JSON.stringify(f.statuses), /secret|hidden|https/);
+    assert.equal(f.calls.filter(([name]) => name === 'load').length, 1);
+    assert.equal(f.calls.filter(([name]) => name === 'end').length, 1);
+    assert.equal(f.context.count, 1);
   }
 });
 
