@@ -4,7 +4,7 @@ An independent Android remote for compatible Kodak LUMA projectors and Kodi.
 Control playback, projector volume, navigation and subtitles from the phone,
 notification shade or lock screen. Kodi retrieves media directly.
 
-**[Install for Android](https://kiansheik.github.io/kodaklumaremote/)** ·
+**[Install for Android](https://kiansheik.io/kodaklumaremote/)** ·
 [Releases](https://github.com/kiansheik/kodaklumaremote/releases) ·
 [Android setup](android/README.md)
 

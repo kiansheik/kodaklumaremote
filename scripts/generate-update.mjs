@@ -12,7 +12,8 @@ const execFile = promisify(execFileCallback);
 export function apkMetadata(badging) {
   const attributes = badging.match(/^package:.*$/m)?.[0];
   const attribute = name => attributes?.match(new RegExp(`(?:^| )${name}='([^']*)'`))?.[1];
-  const minSdk = badging.match(/^sdkVersion:'(\d+)'$/m)?.[1];
+  const sdkFields = badging.split(/\r?\n/).filter(line => /^(?:minSdkVersion|sdkVersion):/.test(line));
+  const minSdk = sdkFields.length === 1 ? sdkFields[0].match(/^(?:minSdkVersion|sdkVersion):'(\d+)'$/)?.[1] : undefined;
   const versionCode = attribute('versionCode');
   if (!/^\d+$/.test(versionCode || '') || !minSdk) throw new Error('APK version metadata is missing.');
   return { packageName: attribute('name'), versionName: attribute('versionName'), versionCode: Number(versionCode), minSdk: Number(minSdk) };

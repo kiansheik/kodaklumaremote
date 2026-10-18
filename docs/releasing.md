@@ -2,7 +2,7 @@
 
 Public repository: https://github.com/kiansheik/kodaklumaremote
 
-Install page/update feed: https://kiansheik.github.io/kodaklumaremote/
+Install page/update feed: https://kiansheik.io/kodaklumaremote/
 and `update.json` beneath that URL. GitHub Releases hosts the APK itself.
 Pages deploys only the small `site/` page and validated release metadata, never
 the source wiki, private settings, local analysis or signing material.

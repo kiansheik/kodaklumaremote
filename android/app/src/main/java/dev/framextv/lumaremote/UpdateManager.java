@@ -42,7 +42,7 @@ import java.util.concurrent.Executors;
 
 /** Optional, foreground-only update offers. Android always owns installation. */
 public final class UpdateManager {
-    static final String MANIFEST_URL = "https://kiansheik.github.io/kodaklumaremote/update.json";
+    static final String MANIFEST_URL = "https://kiansheik.io/kodaklumaremote/update.json";
     static final long MAX_APK_BYTES = 64L * 1024 * 1024;
     private static final long CHECK_INTERVAL = 5L * 60 * 1000;
     private static final long LATER_INTERVAL = 24L * 60 * 60 * 1000;

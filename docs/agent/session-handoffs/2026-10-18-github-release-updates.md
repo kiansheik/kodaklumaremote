@@ -70,6 +70,11 @@ The first compile caught an Android API chaining mistake; fixed and rebuilt.
 Offline release lint needed a previously uncached official dependency; fetched
 without disabling checks. No signing credentials or private key were included
 in source, releases or GitHub Actions.
+The real APK check caught Build Tools36 badging's `minSdkVersion` field; the
+parser now supports modern/legacy formats and rejects duplicates (five focused
+tests passed). Pages inherited the account's `kiansheik.io` domain, so the fixed
+native feed and public install links use its verified HTTPS canonical URL;
+the GitHub.io URL redirects. HTTPS was enabled for the new Pages project.
 
 ## Remaining questions
 

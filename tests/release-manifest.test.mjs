@@ -56,6 +56,17 @@ test('manifest generation verifies the signer before deriving actual APK metadat
   } finally { await rm(folder, { recursive: true, force: true }); }
 });
 
+test('APK metadata accepts modern and legacy minimum SDK fields but rejects duplicate or conflicting declarations', () => {
+  const header = "package: name='dev.framextv.lumaremote' versionCode='6' versionName='0.2.4'\n";
+  const expected = { packageName: 'dev.framextv.lumaremote', versionName: '0.2.4', versionCode: 6, minSdk: 23 };
+  assert.deepEqual(apkMetadata(`${header}minSdkVersion:'23'\n`), expected);
+  assert.deepEqual(apkMetadata(`${header}sdkVersion:'23'\n`), expected);
+  assert.deepEqual(apkMetadata(`${header}minSdkVersion:'23'\r\n`), expected);
+  for (const fields of ["minSdkVersion:'23'\nsdkVersion:'24'", "minSdkVersion:'23'\nsdkVersion:'23'", "sdkVersion:'23'\nsdkVersion:'23'", "minSdkVersion:'23'\nminSdkVersion:'23'", "minSdkVersion:'not-a-number'", "minSdkVersion:'23'\nsdkVersion:'not-a-number'"]) {
+    assert.throws(() => apkMetadata(`${header}${fields}\n`), /metadata is missing/);
+  }
+});
+
 test('Pages bundles only the reviewed site files and metadata, refusing unexpected output files', async () => {
   const folder = await mkdtemp(path.join(os.tmpdir(), 'luma-pages-'));
   try {
