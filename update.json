@@ -1,12 +1,12 @@
 {
   "schemaVersion": 1,
   "packageName": "dev.framextv.lumaremote",
-  "versionName": "0.4.2",
-  "versionCode": 11,
+  "versionName": "0.4.3",
+  "versionCode": 12,
   "minSdk": 24,
-  "apkUrl": "https://github.com/kiansheik/kodaklumaremote/releases/download/v0.4.2/luma-remote-0.4.2.apk",
-  "sha256": "886e1711953a88257f8dbd0fdbc5c2dd85d859cc11c2cf469ee8eb7609a9032f",
-  "sizeBytes": 9632212,
-  "releasedAt": "2026-10-18T23:34:49.624Z",
-  "notes": "Fixes Kodi startup recovery when the movie begins before its start request finishes responding. A failed subtitle load now leaves the playing video and remote usable, with all captured languages available for a subtitle-only retry.\n\nWaits for Kodi's subtitle player to be ready. Prefers Brazilian Portuguese, then English when a rejected subtitle request is confirmed not to have loaded.\n\nKeeps lock-screen and notification controls during temporary connection failures and completes button actions while the screen is locked. Kodi playback controls can remain connected when the projector's separate hardware-control connection drops.\n\nMotorola device confirmation is still pending; fixes are covered by local and Android emulator regressions.\n\nRequires 64-bit ARM Android 7 or newer.\n"
+  "apkUrl": "https://github.com/kiansheik/kodaklumaremote/releases/download/v0.4.3/luma-remote-0.4.3.apk",
+  "sha256": "f3703b75ceae7678a6908ea4aa096c177b7e9f651920dd07c4ebfa3afda6b7a8",
+  "sizeBytes": 9648884,
+  "releasedAt": "2026-10-19T21:44:55.680Z",
+  "notes": "Video starts before subtitle setup. Open Subtitles after playback starts and choose any language supplied by the website; missing Portuguese no longer triggers a fallback or holds up casting.\n\nKodi launch, video opening and subtitle changes are spaced by at least a second. Existing checks still prevent duplicate video starts when a response is uncertain.\n\nVolume taps and slider changes update the remote immediately. Repeated changes combine after a two-second cooldown into one final volume command. LUMA notification and lock-screen volume buttons share the same background queue.\n\nThe first-start Kodi crash still needs a physical-device retest; this update reduces startup command bursts without claiming a confirmed crash diagnosis.\n"
 }
