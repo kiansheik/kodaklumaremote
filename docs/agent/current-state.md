@@ -609,5 +609,19 @@ starts Browse at `.cc`, adds `.cc` VIEW links and separates origin/asset/script
 errors. Eight focused browser checks, debug/test builds, lintDebug and all7
 packaged Android UI checks pass, including actual production capture across an
 intercepted `.xyz`→`.cc` page change, both direct origins, track catalog and
-navigation revocation. Signing/publication and live-phone verification follow in the
+navigation revocation. Release and live-phone evidence are in the
 [hotfix handoff](session-handoffs/2026-10-19-capture-domain.md).
+
+Release0.4.4/code13 is public from source
+`743b890e4d657b2154b1461541ebb488c3be99c7`. Signed committed-source build,
+lintVital and16KB ZIP alignment passed. APK9,648,904bytes, SHA-256
+`2b8ed48a21d05d170c99075f66f5f505b80a1df1ba2758735ef923d38f380c42`.
+Pages commit`6587626102ac3f9d4226e2958c2954a5e99c74db` built/no error;
+public feed/APK GET200, exact metadata/hash/production signer verified.
+The signed APK was installed with `adb install -r` on the connected Samsung,
+preserving saved setup; package reports0.4.4/code13. One live default-page Cast
+captured22 HLS subtitle tracks, progressed launching→waiting→opening→remote→ready
+and showed the combined remote with Kodi-reported Playing/22:35. Full URLs and
+UI images/logs remain ignored locally. Visible projector picture/sound and manual
+subtitle rendering were not separately confirmed. Chrome was unavailable for an
+optional install-page render check; public HTTPS assets were verified directly.

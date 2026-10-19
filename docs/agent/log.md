@@ -409,3 +409,11 @@
   failure messages. Eight focused browser checks, debug/test/lintDebug and native
   UI7 (real capture after an intercepted HTTPS domain change) passed. Signing,
   release and live-phone verification follow. [Handoff](session-handoffs/2026-10-19-capture-domain.md).
+- 2026-10-19 deployed0.4.4/code13 from743b890; committed-source signing/lintVital/
+  16KB alignment passed. Pages6587626 built; public feed/APK GET200, exact
+  metadata/hash/signer verified (9,648,904bytes, SHA-256
+  `2b8ed48a21d05d170c99075f66f5f505b80a1df1ba2758735ef923d38f380c42`).
+  Installed the signed update on the connected Samsung without reset. One live
+  default-page Cast captured22 HLS tracks and reached ready/combined Remote with
+  Kodi-reported playback. Projector picture/sound and subtitles not independently
+  observed. No extra volume, power, navigation or subtitle commands were sent.

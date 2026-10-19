@@ -37,6 +37,22 @@ address bar were inspected; full UI output stays ignored locally.
   intercepted `.xyz`→`.cc` page change, both direct domains, source tokens,
   declared tracks, bridge isolation and no-scroll320×592 layout.
 -97 local documentation links and whitespace checks passed.
+- Committed-source release build through the ignored local signing loader;
+  production certificate, lintVital and16KB ZIP alignment passed. Source/tag
+  target`743b890e4d657b2154b1461541ebb488c3be99c7`.
+- `git push origin main`; `npm run publish:android -- --directory
+  .local/releases/v0.4.4`: publicv0.4.4/code13. Pages commit
+  `6587626102ac3f9d4226e2958c2954a5e99c74db` built/no error.
+- Anonymous HTTPS feed/APK GET200, served metadata equals prepared, downloaded
+  APK9,648,904bytes, SHA-256
+  `2b8ed48a21d05d170c99075f66f5f505b80a1df1ba2758735ef923d38f380c42`,
+  production signer matches. Chrome unavailable for optional page-render check.
+- Explicit connected-Samsung `adb install -r` plus launch; package inspection
+  reports0.4.4/code13. Read local screenshot, tapped the visible native Cast
+  button once on the default page, then inspected screenshot/sanitized native
+  log. It captured22 HLS tracks and reached launching→waiting→opening→remote→ready;
+  service accepted metadata and Remote showed Kodi-reported Playing/22:35.
+  No extra subtitle, volume, navigation, power or Stop commands were sent.
 
 ## What worked
 
@@ -45,21 +61,29 @@ only `.xyz`, while the live site redirects to `.cc`. Both remain HTTPS. Capture
 now accepts those two exact origins with default/443 ports and no credentials;
 unrelated hosts and arbitrary subdomains remain rejected. Script loading and
 evaluation errors no longer claim the website failed an HTTPS requirement.
+The signed update is installed on the actual Samsung, with saved LUMA setup
+preserved. The default live page now passes capture and completes the cast.
+This is native/phone/Kodi-state evidence; physical projector output was not read.
 
 ## What failed
 
 Earlier UI smoke checks injected capture metadata and missed the native hostname
 gate. The first phone dump to `/dev/tty` returned only a status line; a normal
-read-only hierarchy dump confirmed the actual address. This issue does not
+read-only hierarchy dump confirmed the actual address. A later hierarchy had no
+text, so a current screenshot supplied control coordinates and visible state.
+Chrome was unavailable for install-page rendering; public feed and APK were
+verified via normal HTTPS without trust changes. This issue does not
 diagnose the earlier physical Kodi startup crash or subtitle rendering.
 
 ## Remaining questions
 
-Does the signed hotfix capture the live default episode on the connected phone?
-First-start Kodi stability and manual subtitle rendering still need separate
+Live default-episode capture is verified on the connected phone. Cold-start Kodi
+stability and visible manual subtitle rendering still need separate
 physical acceptance; this hotfix does not change those playback paths.
 
 ## Suggested next prompt
 
-Update to0.4.4, open the default episode and tap Cast. Confirm it passes capture,
-then test manual subtitle selection once receiver playback starts.
+Update Julia's app to0.4.4 through Settings → Check for updates. The Samsung is
+already updated and left in Remote after a successful cast. Test manual subtitle
+selection once receiver playback starts; report any different failure with the
+address-bar hostname and exact episode.
