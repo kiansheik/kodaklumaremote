@@ -5,7 +5,8 @@ import { resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { mkdir } from 'node:fs/promises';
 
-// Explicit emulator-only startup/bridge/token checks. No projector is contacted.
+// Explicit emulator-only startup/bridge/token and intercepted HTTPS capture checks.
+// No public website, media source or projector is contacted by the capture fixture.
 const run = promisify(execFile);
 const adb = process.env.ADB || resolve(process.env.ANDROID_HOME || `${homedir()}/Library/Android/sdk`, 'platform-tools/adb');
 const serial = process.env.ANDROID_TEST_SERIAL || 'emulator-5554';
@@ -21,11 +22,11 @@ for (const [apk, expected] of [['android/app/build/outputs/apk/debug/app-debug.a
 const { stdout, stderr } = await run(adb, ['-s', serial, 'shell', 'am', 'instrument', '-w', '-e', 'mode', 'ui', `${appPackage}.test/dev.framextv.lumaremote.BackendInstrumentation`], { timeout: 60000, maxBuffer: 128 * 1024 });
 process.stdout.write(stdout); if (stderr) process.stderr.write(stderr);
 assert.match(stdout, /INSTRUMENTATION_RESULT: failures=0/u);
-assert.match(stdout, /INSTRUMENTATION_RESULT: passed=5/u);
+assert.match(stdout, /INSTRUMENTATION_RESULT: passed=7/u);
 assert.match(stdout, /INSTRUMENTATION_CODE: -1/u);
 if (stdout.includes('INSTRUMENTATION_RESULT: screenshot=')) {
   await mkdir('.local', { recursive: true });
   await run(adb, ['-s', serial, 'pull', `/sdcard/Android/data/${appPackage}/files/mobile-ui-smoke.png`, resolve('.local/mobile-ui-smoke.png')], { timeout: 10000 });
   console.log('Saved .local/mobile-ui-smoke.png');
 }
-console.log('Packaged Android UI: 5 emulator smoke checks passed.');
+console.log('Packaged Android UI: 7 emulator startup, bridge, source-token and intercepted HTTPS capture checks passed.');

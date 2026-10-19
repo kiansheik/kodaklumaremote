@@ -597,3 +597,17 @@ Pages commit`6a7346ab1e0eb023d32bb732b796116762312943` is built/no error.
 Anonymous update feed/APK GET200; exact metadata, downloaded bytes and production
 signer match the prepared release. Chrome shows0.4.3 and the exact APK link.
 No physical phone installation or projector/TV commands were part of this work.
+
+Capture follow-up: the user reports Cast rejecting the default episode with an
+HTTPS-page message after updating. Live HTTPS HEAD follows the original `.xyz`
+episode link to HTTP200 on `framextv.cc`; the connected Samsung's address bar
+also shows HTTPS `.cc`. MainActivity accepted only exact `.xyz`, so the new
+host was rejected before capture. Both APKs contain identical9,395-byte capture
+assets; this is a domain restriction, not a missing script or HTTP downgrade.
+0.4.4/code13 accepts both exact HTTPS hosts (same port/credential boundaries),
+starts Browse at `.cc`, adds `.cc` VIEW links and separates origin/asset/script
+errors. Eight focused browser checks, debug/test builds, lintDebug and all7
+packaged Android UI checks pass, including actual production capture across an
+intercepted `.xyz`→`.cc` page change, both direct origins, track catalog and
+navigation revocation. Signing/publication and live-phone verification follow in the
+[hotfix handoff](session-handoffs/2026-10-19-capture-domain.md).

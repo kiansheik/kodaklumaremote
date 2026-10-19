@@ -75,6 +75,9 @@
   selection preserves the playing remote/catalog without another video Open.
 - `src/mobile/{index.html,app.js,capture.js}`: no-scroll combined phone remote,
   native RPC adapters, same-origin declared source/track capture and matched pause.
+  Native capture accepts the current HTTPS `framextv.cc` and legacy `.xyz`
+  exact origins. Packaged UI fixtures exercise capture across that page change,
+  not only mocked capture metadata.
 - `android/`: phone APK shell and native networking; browser WebView has no
   native bridge. MainActivity owns capture/job lifecycle and visible-app retries;
   ConnectionService owns background TCP/UDP/Kodi, MediaSession/notification and

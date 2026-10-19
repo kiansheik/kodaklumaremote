@@ -25,9 +25,12 @@ An ordinary website cannot open LUMA's raw TCP/UDP sockets. The Android shell
 packages the web UI and adds native networking. Its browsing WebView has no
 JavaScript bridge; the trusted local asset WebView alone has the narrow RPC
 interface. Packaged UI requests cannot navigate to a remote site. Captures are
-limited to HTTPS `framextv.xyz` and readable same-origin documents, using the
+limited to HTTPS `framextv.cc`, legacy `framextv.xyz` and readable same-origin documents, using the
 same declared-media validation as the extension. Shared HTTPS episode links can
 open in the app. Capture is user-triggered; no anti-debugging or DRM bypass.
+The original `.xyz` episode link now redirects to `.cc`; both exact hosts are
+accepted, and0.4.4 starts Browse at `.cc`. Capture asset/evaluation failures have
+separate messages rather than being mislabeled as an HTTPS restriction.
 
 ## Interface
 

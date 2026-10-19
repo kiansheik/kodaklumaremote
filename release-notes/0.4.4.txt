@@ -1,0 +1,3 @@
+Fix Cast rejecting frameXTV’s current HTTPS address. The original framextv.xyz link now redirects to framextv.cc; both addresses are supported, and Browse starts at the current address.
+
+Capture loading errors are reported separately from unsupported website addresses. Video-first startup, manual subtitles and the volume cooldown from0.4.3 are retained.

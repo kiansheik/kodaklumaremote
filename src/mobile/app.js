@@ -1,7 +1,7 @@
 import { createHandoffCoordinator } from '../handoff/coordinator.mjs';
 
 const $ = selector => document.querySelector(selector);
-const DEFAULT_SITE = 'https://framextv.xyz/watch/284833/1/1';
+const DEFAULT_SITE = 'https://framextv.cc/watch/284833/1/1';
 const MSX_SETUP_HINTS = Object.freeze({
   HTTPS_REQUEST: 'The TV is trying a secure connection. In Media Station X setup, leave the padlock open.',
   ORIGIN_REJECTED: 'The TV reached this phone, but its app connection was rejected. Share the error shown on the TV.',

@@ -208,8 +208,9 @@ alone; **Settings → Forget saved setup** removes the chosen stored details.
 The app does not install a boot receiver or promise automatic session recovery
 after force-stop, reboot or process death.
 
-Source capture currently accepts only HTTPS `framextv.xyz` pages and readable
-same-origin players. Unsupported/encrypted/bare-blob sources and cross-origin
+Source capture accepts HTTPS `framextv.cc` and legacy `framextv.xyz` pages and
+readable same-origin players. The original site redirects to `.cc`; Browse
+starts there directly. Unsupported/encrypted/bare-blob sources and cross-origin
 players are rejected. The website WebView has no native JavaScript bridge. A
 separate local-only WebView hosts the trusted remote. No cookies or browser
 authorization headers are copied to Kodi. Kodak protocol pairing that requires a PIN,

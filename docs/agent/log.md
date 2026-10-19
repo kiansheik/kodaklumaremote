@@ -402,3 +402,10 @@
   bytes, SHA-256`f3703b75ceae7678a6908ea4aa096c177b7e9f651920dd07c4ebfa3afda6b7a8`.
   Chrome shows0.4.3 and its download link. No household device controls or real
   phone installation; first-start crash and visible subtitles require retest.
+- 2026-10-19 capture hotfix: default `.xyz` URL now resolves over HTTPS to `.cc`,
+  confirmed in the connected Samsung's app address bar. The exact-host capture
+  guard rejected it and conflated origin and script failures.0.4.4/code13 allows
+  both exact origins, starts at `.cc`, supports its VIEW links and separates
+  failure messages. Eight focused browser checks, debug/test/lintDebug and native
+  UI7 (real capture after an intercepted HTTPS domain change) passed. Signing,
+  release and live-phone verification follow. [Handoff](session-handoffs/2026-10-19-capture-domain.md).

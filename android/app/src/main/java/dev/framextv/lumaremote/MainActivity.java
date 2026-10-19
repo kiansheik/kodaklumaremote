@@ -37,7 +37,7 @@ import java.util.concurrent.atomic.AtomicLong;
 /** Separate WebViews keep the native bridge entirely outside untrusted sites. */
 public final class MainActivity extends Activity {
     private static final String LOCAL_ORIGIN = "https://luma.invalid";
-    private static final String START_URL = "https://framextv.xyz/watch/284833/1/1";
+    private static final String START_URL = "https://framextv.cc/watch/284833/1/1";
     private static final int SCAN_MATTER = 6031;
     private String pendingMatterScan;
     private WebView controls, browser;
@@ -331,16 +331,20 @@ public final class MainActivity extends Activity {
         final long generation = pageGeneration.get();
         final long attempt = captureSequence.incrementAndGet();
         final String url = browser.getUrl();
+        if (!supportsCapturePage(url)) {
+            captureFailure(requestId, "Open a frameXTV HTTPS video page (framextv.cc or framextv.xyz), then tap Cast.");
+            return;
+        }
+        final String script;
         try {
-            URI uri = new URI(url == null ? "" : url);
-            if (!"https".equals(uri.getScheme()) || !"framextv.xyz".equals(uri.getHost())
-                || uri.getUserInfo() != null || uri.getPort() != -1 && uri.getPort() != 443) {
-                throw new Exception("unsupported origin");
-            }
-            String script;
             try (InputStream input = getAssets().open("capture.js")) {
                 script = new String(readBounded(input, 256 * 1024), StandardCharsets.UTF_8);
             }
+        } catch (Exception ignored) {
+            captureFailure(requestId, "Video capture could not load. Restart the app and try again.");
+            return;
+        }
+        try {
             browser.evaluateJavascript(script, value -> {
                 if (destroyed) return;
                 if (generation != pageGeneration.get() || attempt != captureSequence.get() || !url.equals(browser.getUrl())) {
@@ -367,8 +371,17 @@ public final class MainActivity extends Activity {
                 } catch (Exception ignored) { captureFailure(requestId, "This player did not expose a supported video link."); }
             });
         } catch (Exception ignored) {
-            captureFailure(requestId, "Video capture currently supports frameXTV HTTPS pages.");
+            captureFailure(requestId, "Video capture could not start. Reopen the video and try again.");
         }
+    }
+
+    static boolean supportsCapturePage(String value) {
+        try {
+            URI uri = new URI(value == null ? "" : value);
+            return "https".equalsIgnoreCase(uri.getScheme())
+                && ("framextv.cc".equalsIgnoreCase(uri.getHost()) || "framextv.xyz".equalsIgnoreCase(uri.getHost()))
+                && uri.getUserInfo() == null && (uri.getPort() == -1 || uri.getPort() == 443);
+        } catch (Exception ignored) { return false; }
     }
 
     private void captureFailure(String id, String message) {

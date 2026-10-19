@@ -29,6 +29,7 @@ Dual receiver: [Philips MSX and LUMA selection](msx-receiver.md),
 Native phone implementation: [Matter pairing and hardware remote](session-handoffs/2026-10-18-native-matter-phone.md).
 Current published release: [0.4.3 video-first startup and coalesced volume](session-handoffs/2026-10-19-video-first-volume.md).
 Current repair: [video-first startup, manual subtitles and coalesced volume](session-handoffs/2026-10-19-video-first-volume.md).
+Capture hotfix: [current frameXTV domain and native capture regression](session-handoffs/2026-10-19-capture-domain.md).
 Mac evidence and isolated UI checks: [controller/browser handoff](session-handoffs/2026-10-18-matter-controller-browser.md).
 Current playback experiment: [Philips local browser API](philips-jointspace.md),
 [paired API, unverified browser launch and Mac receiver proof](session-handoffs/2026-10-18-philips-browser-setup.md).
