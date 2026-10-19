@@ -120,6 +120,7 @@ test('both receivers stay connected and switching isolates playback, subtitles a
   await expect(page.locator('#play-toggle')).toHaveText('Resume');
   await page.locator('#volume-up').click();
   await expect(page.locator('#volume-level')).toHaveText('41%');
+  await expect.poll(() => page.evaluate(() => window.__calls.filter(call => call.method === 'msx.volume').length)).toBe(1);
   await page.evaluate(() => window.LumaApp.onConnectionState({ connection: { connected: false }, playback: { active: false } }));
   await expect(page.locator('#target-luma')).toHaveAttribute('data-connected', 'false');
   await expect(page.locator('#device-badge')).toHaveAttribute('data-connected', 'true');
@@ -131,6 +132,26 @@ test('both receivers stay connected and switching isolates playback, subtitles a
   expect(calls.filter(call => /disconnect|open|kodi\.|luma\./u.test(call.method))).toEqual([]);
   expect(calls.filter(call => call.method === 'msx.playPause').map(call => call.params)).toEqual([{ play: false, expectedSourceUrl: 'https://media.example.org/existing-tv.mp4' }]);
   expect(calls.filter(call => call.method === 'msx.volume').map(call => call.params)).toEqual([{ value: 41, expectedSourceUrl: 'https://media.example.org/existing-tv.mp4' }]);
+});
+
+test('TV volume combines taps after a cooldown and changing target cancels an unsent change', async ({ page }) => {
+  await page.clock.install();
+  await openApp(page, { selectedTarget: 'philips' });
+  await page.locator('#volume-up').click();
+  await page.locator('#volume-up').click();
+  await page.locator('#volume-down').click();
+  await page.evaluate(() => window.LumaApp.onConnectionState({ receivers: { philips: window.__tv } }));
+  await expect(page.locator('#volume-level')).toHaveText('41%');
+  expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'msx.volume'))).toEqual([]);
+  await page.clock.runFor(2100);
+  expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'msx.volume').map(call => call.params.value))).toEqual([41]);
+  await page.locator('#volume-up').click();
+  await page.evaluate(() => { window.__holdMethod = 'app.selectTarget'; });
+  await page.locator('#target-luma').click();
+  await page.clock.runFor(2100);
+  expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'msx.volume').length)).toBe(1);
+  await page.evaluate(() => window.__release());
+  await expect(page.locator('#target-luma')).toHaveAttribute('aria-pressed', 'true');
 });
 
 test('Philips capture binds its attempt, sends all language metadata and locks destination until acknowledged', async ({ page }) => {
@@ -149,7 +170,7 @@ test('Philips capture binds its attempt, sends all language metadata and locks d
   await expect(page.getByRole('button', { name: 'English', exact: true })).toHaveAttribute('aria-pressed', 'true');
   const calls = await page.evaluate(() => window.__calls);
   expect(calls.find(call => call.method === 'app.beginHandoff').params).toEqual({ sourceToken: tvMedia.sourceToken, target: 'philips' });
-  expect(calls.find(call => call.method === 'msx.open').params).toEqual({ sourceToken: 'attempt-tv', source: tvMedia.url, mimeType: tvMedia.contentType, title: tvMedia.title, subtitles: tvMedia.tracks, preferredLanguage: 'pt-BR' });
+  expect(calls.find(call => call.method === 'msx.open').params).toEqual({ sourceToken: 'attempt-tv', source: tvMedia.url, mimeType: tvMedia.contentType, title: tvMedia.title, subtitles: tvMedia.tracks, preferredLanguage: 'pt-BR', autoSubtitles: false });
   expect(calls.find(call => call.method === 'app.handoffReady').params).toEqual({ target: 'philips', sourceToken: 'attempt-tv' });
   expect(calls.find(call => call.method === 'msx.subtitle').params).toEqual({ index: 0, enabled: true, expectedSourceUrl: tvMedia.url });
   expect(calls.some(call => /^(kodi|luma)\./u.test(call.method))).toBe(false);

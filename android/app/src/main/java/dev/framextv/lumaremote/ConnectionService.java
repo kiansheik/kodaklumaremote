@@ -91,6 +91,16 @@ public final class ConnectionService extends Service {
     private long lastNotificationPost;
     private boolean notificationFlushQueued;
     private final Runnable notificationFlush = this::flushNotifications;
+    private static final long VOLUME_COOLDOWN = 2000;
+    // Protected by stateLock; all timers and presentation updates use main.
+    private JSONObject confirmedVolume;
+    private Integer queuedVolume;
+    private long volumeVersion, volumeEpoch, volumeDue;
+    private boolean volumeInFlight;
+    private String volumeSource = "", volumeRevision = "", volumeWriteToken;
+    private long volumeWriteVersion, volumeWriteEpoch, volumeWriteGeneration;
+    private PowerManager.WakeLock volumeWakeLock;
+    private final Runnable volumeFlush = this::flushQueuedVolume;
 
     @Override public void onCreate() {
         super.onCreate();
@@ -211,7 +221,7 @@ public final class ConnectionService extends Service {
     }
     private NativeBackend newBackend() {
         NativeBackend transport = new NativeBackend(getApplicationContext());
-        transport.setSourceGuard(token -> "luma".equals(authorizedTarget) && token != null && token.equals(authorizedToken));
+        transport.setSourceGuard(token -> token != null && ("luma".equals(authorizedTarget) && token.equals(authorizedToken) || currentVolumeWrite(token)));
         return transport;
     }
     private interface NetworkAction { void run(Work work); }
@@ -257,9 +267,9 @@ public final class ConnectionService extends Service {
             if ("app.selectTarget".equals(method)) {
                 String target = args.optString("target");
                 if (!"luma".equals(target) && !"philips".equals(target)) { reject(callback, "INVALID_REQUEST", "Choose a receiver."); return; }
+                if (!target.equals(selectedTarget)) { cancelQueuedVolume(); mediaRevision = UUID.randomUUID().toString(); }
                 selectedTarget = target;
                 getSharedPreferences("receiver-selection", MODE_PRIVATE).edit().putString("target", target).apply();
-                mediaRevision = UUID.randomUUID().toString();
                 synchronized (stateLock) { put(state, "selectedTarget", selectedTarget); }
                 publish();
                 if (callback != null) callback.success(snapshot());
@@ -268,6 +278,8 @@ public final class ConnectionService extends Service {
             if (method != null && method.startsWith("msx.")) { requestTelevision(method, args, callback); return; }
             if (method != null && method.startsWith("matter.")) { requestMatter(method, args, callback); return; }
             if ("device.disconnect".equals(method)) { disconnect(callback); return; }
+            if ("luma.queueVolume".equals(method)) { queueVolume(args, callback); return; }
+            if ("device.connect".equals(method) || "luma.setVolume".equals(method)) cancelQueuedVolume();
             boolean auto = "app.settings.autoConnect".equals(method), rescan = "app.settings.rescan".equals(method);
             if (auto && autoConnectPaused) { if (callback != null) callback.success(object("connected", connected(), "paused", true, "devices", new JSONArray())); return; }
             if (rescan || "app.settings.reset".equals(method) && ("all".equals(args.optString("scope")) || "receiver".equals(args.optString("scope")))) disconnect(null);
@@ -282,6 +294,7 @@ public final class ConnectionService extends Service {
                 } catch (RuntimeException ignored) { demote(); reject(callback, "BACKGROUND_START", "Open the app to connect to the projector."); return; }
             }
             if ("kodi.open".equals(method)) {
+                cancelQueuedVolume();
                 mediaRevision = UUID.randomUUID().toString();
                 synchronized (stateLock) {
                     JSONObject media = args.optJSONObject("media"), remembered = preparedRemote == null ? null : preparedRemote.optJSONObject("media");
@@ -296,9 +309,11 @@ public final class ConnectionService extends Service {
         });
     }
     private void disconnect(Callback callback) {
+        cancelQueuedVolume();
         if ("luma".equals(authorizedTarget)) revokeTokens();
         generation++; mediaRevision = UUID.randomUUID().toString();
         candidateKodi = null; candidateGeneration = -1; autoConnectPaused = true;
+        confirmedVolume = null;
         NativeBackend old = backend; backend = null;
         if (old != null) old.close();
         for (Work work : pending) work.cancel();
@@ -320,6 +335,111 @@ public final class ConnectionService extends Service {
         Work work = new Work(action, callback, userMediaAction); pending.add(work);
         try { network.execute(work); return true; }
         catch (RejectedExecutionException ignored) { work.releaseWakeLock(); pending.remove(work); reject(callback, "BUSY", "Please wait for the current controls to finish."); return false; }
+    }
+    /** Local projection shared by UI and system buttons. No network work per tap. */
+    private void queueVolume(JSONObject args, Callback callback) {
+        try {
+            JSONObject projected;
+            synchronized (stateLock) {
+                JSONObject connection = state.optJSONObject("connection"), volume = state.optJSONObject("volume");
+                if (!"luma".equals(selectedTarget) || connection == null || !connection.optBoolean("connected")) throw NativeBackend.fail("NOT_CONNECTED");
+                if (volume == null || volume.optInt("max") <= 0) throw NativeBackend.fail("INVALID_RESPONSE");
+                Object raw = args.opt("value");
+                if (!(raw instanceof Number)) throw NativeBackend.fail("INVALID_INPUT");
+                double value = ((Number) raw).doubleValue(); int maximum = volume.optInt("max");
+                if (!Double.isFinite(value) || value != Math.floor(value) || value < 0 || value > maximum) throw NativeBackend.fail("INVALID_INPUT");
+                String source = args.has("expectedSourceUrl") ? NativeBackend.publicUrl(args.opt("expectedSourceUrl")) : "";
+                if (!source.isEmpty() && (!source.equals(rememberedSource()) || !matches(state.optJSONObject("remote"), state.optJSONObject("playback")))) throw NativeBackend.fail("SOURCE_CHANGED");
+                if (queuedVolume == null && (int) value == volume.optInt("current")) {
+                    if (callback != null) callback.success(object("volume", copy(volume), "volumePending", false, "queued", false));
+                    return;
+                }
+                if (queuedVolume == null) { volumeSource = source; volumeRevision = mediaRevision; }
+                else if (!source.isEmpty()) volumeSource = source;
+                queuedVolume = (int) value; volumeVersion++; volumeDue = SystemClock.elapsedRealtime() + VOLUME_COOLDOWN;
+                projected = object("current", queuedVolume, "max", maximum, "pending", true);
+                put(state, "volume", projected); put(state, "volumePending", true);
+                if (volumeWakeLock == null) {
+                    volumeWakeLock = getSystemService(PowerManager.class).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "LumaRemote:VolumeCooldown");
+                    volumeWakeLock.setReferenceCounted(false);
+                }
+                volumeWakeLock.acquire(30000);
+            }
+            main.removeCallbacks(volumeFlush); main.postDelayed(volumeFlush, VOLUME_COOLDOWN); publish();
+            if (callback != null) callback.success(object("volume", copy(projected), "volumePending", true, "queued", true));
+        } catch (NativeBackend.BackendException failure) { reject(callback, failure.code, failure.getMessage()); }
+    }
+    private boolean currentVolumeWrite(String token) {
+        synchronized (stateLock) {
+            return !destroyed && token.equals(volumeWriteToken) && queuedVolume != null && "luma".equals(selectedTarget)
+                    && volumeWriteGeneration == generation && volumeWriteEpoch == volumeEpoch && volumeWriteVersion == volumeVersion
+                    && volumeRevision.equals(mediaRevision);
+        }
+    }
+    private void observeVolume(JSONObject observed) {
+        synchronized (stateLock) {
+            if (observed == null) return;
+            confirmedVolume = object("current", observed.optInt("current"), "max", observed.optInt("max"));
+            JSONObject projected = state.optJSONObject("volume");
+            if (queuedVolume != null && projected != null && projected.optInt("max") != confirmedVolume.optInt("max")) cancelQueuedVolume();
+            if (queuedVolume == null) { put(state, "volume", copy(confirmedVolume)); put(state, "volumePending", false); }
+        }
+    }
+    private void cancelQueuedVolume() {
+        synchronized (stateLock) {
+            volumeEpoch++; queuedVolume = null; volumeSource = ""; volumeRevision = "";
+            volumeWriteToken = null; volumeInFlight = false;
+            if (confirmedVolume != null) put(state, "volume", copy(confirmedVolume));
+            put(state, "volumePending", false);
+            if (volumeWakeLock != null && volumeWakeLock.isHeld()) volumeWakeLock.release();
+        }
+        main.removeCallbacks(volumeFlush);
+    }
+    private void flushQueuedVolume() {
+        final int value; final long version, epoch; final String source, token;
+        synchronized (stateLock) {
+            if (destroyed || queuedVolume == null || volumeInFlight) return;
+            if (!"luma".equals(selectedTarget) || !volumeRevision.equals(mediaRevision)) { cancelQueuedVolume(); publish(); return; }
+            long remaining = volumeDue - SystemClock.elapsedRealtime();
+            if (remaining > 0) { main.postDelayed(volumeFlush, remaining); return; }
+            value = queuedVolume; version = volumeVersion; epoch = volumeEpoch; source = volumeSource;
+            token = UUID.randomUUID().toString(); volumeWriteToken = token; volumeInFlight = true;
+            volumeWriteVersion = version; volumeWriteEpoch = epoch; volumeWriteGeneration = generation;
+        }
+        boolean accepted = enqueue(work -> {
+            JSONObject observed = null; NativeBackend.BackendException error = null;
+            try {
+                if (work.current() && currentVolumeWrite(token)) {
+                    JSONObject args = object("value", value, "sourceToken", token);
+                    if (!source.isEmpty()) put(args, "expectedSourceUrl", source);
+                    observed = work.transport.handle("luma.setVolume", args);
+                }
+            } catch (NativeBackend.BackendException failure) { error = failure; }
+            finally {
+                JSONObject result = observed; NativeBackend.BackendException failure = error;
+                JSONObject connection = work.transport.connectionSnapshot();
+                main.post(() -> finishQueuedVolume(token, version, epoch, result, failure, connection));
+            }
+        }, null, true);
+        if (!accepted) finishQueuedVolume(token, version, epoch, null, NativeBackend.fail("CONNECTION_FAILED"), null);
+    }
+    private void finishQueuedVolume(String token, long version, long epoch, JSONObject result, NativeBackend.BackendException failure, JSONObject connection) {
+        synchronized (stateLock) {
+            if (destroyed || !token.equals(volumeWriteToken)) return;
+            volumeInFlight = false; volumeWriteToken = null;
+            if (connection != null) put(state, "connection", copy(connection));
+            if (result != null) observeVolume(result.optJSONObject("volume"));
+            if (volumeEpoch == epoch && version == volumeVersion) {
+                queuedVolume = null; volumeSource = ""; volumeRevision = "";
+                if (confirmedVolume != null) put(state, "volume", copy(confirmedVolume));
+                put(state, "volumePending", false);
+                if (volumeWakeLock != null && volumeWakeLock.isHeld()) volumeWakeLock.release();
+                if (failure != null) { observeKodiFailure(failure); notice = failure.getMessage(); }
+            } else if (volumeEpoch == epoch && queuedVolume != null) {
+                main.removeCallbacks(volumeFlush); main.postDelayed(volumeFlush, Math.max(0, volumeDue - SystemClock.elapsedRealtime()));
+            }
+        }
+        publish();
     }
     private void perform(Work work, String method, JSONObject args) {
         try {
@@ -346,16 +466,22 @@ public final class ConnectionService extends Service {
                 if (!work.current()) return;
                 JSONObject old = state.optJSONObject("connection");
                 if (connecting && old != null && !old.optString("host").equals(connection.optString("host"))) {
+                    cancelQueuedVolume(); confirmedVolume = null; state.remove("volume");
                     state.remove("remote"); state.remove("playback");
                 }
                 put(state, "connection", connection);
                 put(state, "settings", settings.metadata());
                 if ("kodi.status".equals(method)) { put(state, "playback", copy(result)); adoptObservedPlayback(result); }
-                if (("luma.status".equals(method) || "luma.setVolume".equals(method)) && result.optJSONObject("volume") != null) put(state, "volume", copy(result.optJSONObject("volume")));
+                if (("luma.status".equals(method) || "luma.setVolume".equals(method)) && result.optJSONObject("volume") != null) {
+                    observeVolume(result.optJSONObject("volume")); put(result, "volume", copy(state.optJSONObject("volume"))); put(result, "volumePending", queuedVolume != null);
+                }
                 if ("kodi.getSubtitles".equals(method)) observeSubtitles(result);
                 if ("app.settings.reset".equals(method)) state.remove("playback");
             }
             work.post(() -> {
+                if ("luma.status".equals(method) || "luma.setVolume".equals(method)) {
+                    synchronized (stateLock) { put(result, "volume", copy(state.optJSONObject("volume"))); put(result, "volumePending", queuedVolume != null); }
+                }
                 if ("luma.powerOff".equals(method)) {
                     work.complete(result, null, null);
                     disconnect(null);
@@ -463,6 +589,7 @@ public final class ConnectionService extends Service {
             televisionGeneration++;
             television.disconnect(); televisionRunning = false;
             televisionNetwork.getQueue().clear();
+            cancelQueuedVolume();
             mediaRevision = UUID.randomUUID().toString();
             updateTelevisionState(); publish();
             if (!connected()) demote();
@@ -482,6 +609,7 @@ public final class ConnectionService extends Service {
         if ("msx.open".equals(method)) {
             String token = args.optString("sourceToken");
             if (token.isEmpty() || !token.equals(authorizedToken)) { reject(callback, "SOURCE_CHANGED", "Choose the video again."); return; }
+            cancelQueuedVolume();
             mediaRevision = UUID.randomUUID().toString();
         }
         final long session = televisionGeneration;
@@ -504,6 +632,7 @@ public final class ConnectionService extends Service {
                     if ("msx.start".equals(method)) { televisionStarting = false; televisionRunning = error == null; }
                     if ("msx.disconnect".equals(method) || "msx.reset".equals(method)) {
                         televisionRunning = false; televisionGeneration++;
+                        cancelQueuedVolume();
                         mediaRevision = UUID.randomUUID().toString();
                     }
                     updateTelevisionState();
@@ -622,8 +751,14 @@ public final class ConnectionService extends Service {
         catch (NativeBackend.BackendException ignored) { return false; }
         main.post(() -> {
             if (destroyed || session != generation || !java.util.Objects.equals(token, authorizedToken) || !configured()) return;
-            mediaRevision = UUID.randomUUID().toString();
-            synchronized (stateLock) { put(state, "remote", remote); }
+            synchronized (stateLock) {
+                JSONObject mediaData = remote.optJSONObject("media"), prepared = preparedRemote == null ? null : preparedRemote.optJSONObject("media");
+                boolean completingPrepared = token != null && token.equals(preparedToken) && preparedGeneration == generation
+                        && prepared != null && mediaData != null && prepared.optString("url").equals(mediaData.optString("url"))
+                        && mediaData.optString("url").equals(rememberedSource());
+                if (!completingPrepared) { cancelQueuedVolume(); mediaRevision = UUID.randomUUID().toString(); }
+                put(state, "remote", remote);
+            }
             publish(); schedulePoll(0);
         });
         return true;
@@ -747,6 +882,7 @@ public final class ConnectionService extends Service {
             catch (NativeBackend.BackendException ignored) { return; }
             put(state, "remote", object("media", object("url", source, "contentType", "", "title", "Kodi video"),
                     "tracks", new JSONArray(), "catalog", new JSONArray(), "selectedIndex", JSONObject.NULL, "subtitlesEnabled", false));
+            cancelQueuedVolume();
             mediaRevision = UUID.randomUUID().toString();
         }
     }
@@ -765,6 +901,13 @@ public final class ConnectionService extends Service {
         String expected = rememberedSource();
         String revision = mediaRevision;
         if (expected.isEmpty() || !configured()) return;
+        if ("volume-down".equals(method) || "volume-up".equals(method)) {
+            JSONObject volume = snapshot().optJSONObject("volume");
+            if (volume != null && volume.optInt("max") > 0) queueVolume(object("value", Math.max(0, Math.min(volume.optInt("max"),
+                    volume.optInt("current") + ("volume-up".equals(method) ? 1 : -1))), "expectedSourceUrl", expected), null);
+            return;
+        }
+        if ("mute".equals(method)) cancelQueuedVolume();
         if ((method.startsWith("volume-") || method.equals("mute")) && !connected()) return;
         enqueue(work -> {
             try {
@@ -783,7 +926,7 @@ public final class ConnectionService extends Service {
                 synchronized (stateLock) {
                     if (!work.current()) return;
                     put(state, "playback", observed); put(state, "connection", work.transport.connectionSnapshot());
-                    if (projector != null && projector.optJSONObject("volume") != null) put(state, "volume", projector.optJSONObject("volume"));
+                    if (projector != null && projector.optJSONObject("volume") != null) observeVolume(projector.optJSONObject("volume"));
                 }
                 work.post(this::publish);
             } catch (NativeBackend.BackendException failure) {
@@ -812,7 +955,7 @@ public final class ConnectionService extends Service {
                 if (connected() && (now - lastHeartbeat >= 15000 || lastHeartbeat == 0)) {
                     try {
                         JSONObject result = work.transport.handle("luma.status", new JSONObject());
-                        synchronized (stateLock) { if (!work.current()) return; if (result.optJSONObject("volume") != null) put(state, "volume", result.optJSONObject("volume")); }
+                        synchronized (stateLock) { if (!work.current()) return; if (result.optJSONObject("volume") != null) observeVolume(result.optJSONObject("volume")); }
                     } catch (NativeBackend.BackendException failure) { work.post(() -> notice = failure.getMessage()); }
                     work.post(() -> lastHeartbeat = now);
                 }
@@ -975,6 +1118,7 @@ public final class ConnectionService extends Service {
         return PendingIntent.getService(this, requestCode, intent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
     }
     @Override public void onDestroy() {
+        cancelQueuedVolume();
         cancelNotificationFlush();
         destroyed = true; generation++; revokeTokens(); main.removeCallbacksAndMessages(null); listeners.clear();
         for (Work work : pending) work.cancel();

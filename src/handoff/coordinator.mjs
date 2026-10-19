@@ -94,7 +94,7 @@ function abortableWait(ms, { signal }) {
 export function createHandoffCoordinator({
   receiver, kodi, remote, onStatus = () => {},
   now = () => performance.now(), wait = abortableWait,
-  preferredLanguages = ['pt-BR', 'en'], limits = {},
+  limits = {},
 } = {}) {
   if (typeof receiver?.launchKodi !== 'function' || typeof remote?.ready !== 'function'
       || ['connect', 'open', 'status', 'getSubtitles', 'addSubtitle', 'setSubtitle'].some(name => typeof kodi?.[name] !== 'function')) throw fail('ADAPTER_FAILED');
@@ -108,12 +108,11 @@ export function createHandoffCoordinator({
     poll: bounded(limits.pollMs, 350, 2000, 100),
     tracks: Math.floor(bounded(limits.maxTracks, 64, 128)),
   };
-  const preferences = (Array.isArray(preferredLanguages) ? preferredLanguages : []).slice(0, 8)
-    .filter(value => typeof value === 'string').map(value => value.toLowerCase().replaceAll('_', '-'));
   // Metadata only, never media bytes. Reuses confirmed bindings on a retry of
   // the still-active source. Unknown existing external tracks are not inferred.
   const sources = new Map();
   let current = null;
+  let lastMutationAt = -Infinity;
 
   function check(ctx) {
     if (ctx.controller.signal.aborted || current !== ctx) throw fail('CANCELLED');
@@ -129,8 +128,7 @@ export function createHandoffCoordinator({
   }
 
   function stage(ctx, duration, code) {
-    const deadline = Math.min(ctx.deadline, now() + duration,
-      code === 'SUBTITLE_TIMEOUT' ? ctx.subtitleDeadline ?? Infinity : Infinity);
+    const deadline = Math.min(ctx.deadline, now() + duration);
     return { deadline, code: deadline === ctx.deadline ? 'HANDOFF_TIMEOUT' : code };
   }
 
@@ -178,6 +176,26 @@ export function createHandoffCoordinator({
     await call(ctx, options => wait(Math.min(settings.poll, window.deadline - now()), options), window);
   }
 
+  async function settleMutation(ctx, window) {
+    while (now() - lastMutationAt < 1000) {
+      const remaining = Math.min(1000 - (now() - lastMutationAt), window.deadline - now());
+      if (remaining <= 0) throw fail(window.code);
+      await call(ctx, options => wait(remaining, options), window);
+    }
+  }
+
+  function invokeMutation(operation) {
+    lastMutationAt = now();
+    try { return Promise.resolve(operation()).finally(() => { lastMutationAt = Math.max(lastMutationAt, now()); }); }
+    catch (error) { lastMutationAt = Math.max(lastMutationAt, now()); throw error; }
+  }
+
+  async function mutate(ctx, operation, window, sourceBound = false) {
+    await settleMutation(ctx, window);
+    if (sourceBound) await assertPlayback(ctx, window);
+    return call(ctx, options => invokeMutation(() => operation(options)), window);
+  }
+
   async function read(ctx, operation, window) {
     while (true) {
       try { return await call(ctx, operation, window); }
@@ -209,7 +227,6 @@ export function createHandoffCoordinator({
         if (!Number.isInteger(track?.index) || track.index < 0 || track.index > 1024 || indices.has(track.index)) throw fail('SUBTITLE_BINDING');
         indices.add(track.index);
       }
-      ctx.subtitleObserved = snapshot;
       return snapshot;
     }
   }
@@ -238,13 +255,6 @@ export function createHandoffCoordinator({
     if (!cache) { cache = { bindings: new Map(), pending: null, opening: null }; sources.set(media.url, cache); }
     while (sources.size > 4) sources.delete(sources.keys().next().value);
     return cache;
-  }
-
-  function preferred(tracks) {
-    return [...new Set(preferences.flatMap(preference => tracks.filter(track => {
-      const code = language(track);
-      return code === preference || (preference === 'en' && code.startsWith('en-'));
-    })))];
   }
 
   function resultFor(ctx, cache, selectedIndex) {
@@ -288,13 +298,12 @@ export function createHandoffCoordinator({
     if (!track || cache.bindings.has(track.url)) return snapshot;
     const existing = snapshot.tracks.find(item => item.url === track.url);
     if (existing) { cache.bindings.set(track.url, existing.index); return snapshot; }
-    await assertPlayback(ctx);
     const pending = { url: track.url, before: new Set(snapshot.tracks.map(item => item.index)), invoked: false };
     cache.pending = pending;
     const window = stage(ctx, settings.subtitle, 'SUBTITLE_TIMEOUT');
     let rejected;
     try {
-      await call(ctx, options => {
+      await mutate(ctx, options => {
         pending.invoked = true;
         return kodi.addSubtitle(track, {
           ...options,
@@ -303,7 +312,7 @@ export function createHandoffCoordinator({
             if (pending.boundIndex !== undefined && cache.bindings.get(pending.url) === pending.boundIndex) cache.bindings.delete(pending.url);
           },
         });
-      }, window);
+      }, window, true);
     } catch (error) {
       if (error.code !== 'ADAPTER_FAILED' || error.retryable !== true) throw error;
       rejected = error;
@@ -319,10 +328,9 @@ export function createHandoffCoordinator({
   async function selectTrack(ctx, cache, track) {
     const index = track ? cache.bindings.get(track.url) : null;
     if (track && !Number.isInteger(index)) throw fail('SUBTITLE_BINDING');
-    status(ctx, 'selecting', track ? 'Selecting the preferred subtitles…' : 'Keeping subtitles off…');
-    await assertPlayback(ctx);
+    status(ctx, 'selecting', track ? 'Selecting the chosen subtitles…' : 'Keeping subtitles off…');
     let rejected;
-    try { await call(ctx, options => kodi.setSubtitle(index ?? 'off', options), stage(ctx, settings.subtitle, 'SUBTITLE_TIMEOUT')); }
+    try { await mutate(ctx, options => kodi.setSubtitle(index ?? 'off', options), stage(ctx, settings.subtitle, 'SUBTITLE_TIMEOUT'), true); }
     catch (error) {
       if (error.code !== 'ADAPTER_FAILED' || error.retryable !== true) throw error;
       rejected = error;
@@ -353,14 +361,14 @@ export function createHandoffCoordinator({
       // not overlap an old native request whose receiver outcome is unknown.
       return Promise.resolve().then(() => {
         check(ctx); attempt.invoked = true;
-        return kodi.open(ctx.media, {
+        return invokeMutation(() => kodi.open(ctx.media, {
           ...options, ...(onlyIfInactive ? { onlyIfInactive: true } : {}),
           onSettled() { attempt.nativeSettled = true; forgetCompletedPlayback(); },
           onNotSent() {
             attempt.unsent = true; attempt.invoked = false;
             attempt.settled = true; attempt.acknowledged = false;
           },
-        });
+        }));
       })
         .then(result => {
           if (attempt.unsent) throw fail('ADAPTER_FAILED');
@@ -407,7 +415,7 @@ export function createHandoffCoordinator({
         const completedPrevious = attempt?.owner !== ctx && attempt?.nativeSettled && attempt.playbackObserved;
         const retryAcknowledged = attempt?.settled && (attempt.unsent || (attempt.acknowledged
           && now() - attempt.acceptedAt >= settings.openRetry && now() - inactiveSince >= settings.poll * 2));
-        if (sent < 2 && (completedPrevious || retryAcknowledged)) {
+        if (sent < 2 && now() - lastMutationAt >= 1000 && (completedPrevious || retryAcknowledged)) {
           // A later explicit cast can resume when the old invocation finishes;
           // that old playback is not an Open sent by this new attempt.
           if (attempt.unsent || completedPrevious) sent--;
@@ -425,8 +433,9 @@ export function createHandoffCoordinator({
   async function run(ctx) {
     status(ctx, 'launching', 'Opening Kodi on the projector…');
     const startup = stage(ctx, settings.startup, 'KODI_START_TIMEOUT');
-    await call(ctx, options => receiver.launchKodi(options), startup);
+    await mutate(ctx, options => receiver.launchKodi(options), startup);
     status(ctx, 'waiting', 'Waiting for Kodi…');
+    await settleMutation(ctx, startup);
     while (true) {
       try {
         if ((await call(ctx, options => kodi.connect(options), startup))?.ready === true) break;
@@ -444,44 +453,12 @@ export function createHandoffCoordinator({
       status(ctx, 'opening', 'Starting the selected video…');
       await openVideo(ctx, cache, initial);
     }
-    status(ctx, 'subtitles', 'Loading the preferred subtitles…');
-    // Leave time to reconcile playback and publish the remote when a subtitle
-    // server/decoder fails. Subtitle failure must never invite replay of video.
-    ctx.subtitleDeadline = Math.min(ctx.deadline - Math.min(20000, settings.overall / 6), now() + settings.subtitle * 2);
-    let result, subtitleFailure;
-    try {
-      let snapshot = await observeTracks(ctx, cache);
-      const candidates = preferred(ctx.media.tracks);
-      if (!candidates.length) result = await selectTrack(ctx, cache, null);
-      for (const [position, selected] of candidates.entries()) {
-        try {
-          await loadTrack(ctx, cache, selected, snapshot);
-          result = await selectTrack(ctx, cache, selected);
-          break;
-        } catch (error) {
-          // Only explicit non-application proof permits another Add. An
-          // uncertain Add retains its pending index observation for later.
-          if (error.code !== 'ADAPTER_FAILED' || !cache.pending || cache.pending.invoked
-              || position === candidates.length - 1
-              || ['KODI_AUTH', 'KODI_CONFIG', 'SOURCE_CHANGED'].includes(error.adapterCode)) throw error;
-          cache.pending = null;
-          snapshot = await observeTracks(ctx, cache);
-        }
-      }
-    } catch (error) {
-      if (!['SUBTITLE_TIMEOUT', 'SUBTITLE_BINDING', 'ADAPTER_FAILED'].includes(error.code)
-          || ['KODI_AUTH', 'KODI_CONFIG', 'SOURCE_CHANGED'].includes(error.adapterCode)) throw error;
-      subtitleFailure = error;
-    } finally { ctx.subtitleDeadline = null; }
-    if (subtitleFailure) {
-      await assertPlayback(ctx, stage(ctx, settings.active, 'VIDEO_TIMEOUT'));
-      const observed = ctx.subtitleObserved;
-      result = resultFor(ctx, cache, observed?.enabled === true ? observed.currentIndex : null);
-      result.subtitleError = subtitleFailure.code;
-    }
+    // Video readiness is independent of subtitle metadata. Keep every captured
+    // language available; only an explicit subtitle selection performs I/O.
+    const result = resultFor(ctx, cache, null);
     status(ctx, 'remote', 'Casting is ready. Opening the remote…');
     await call(ctx, options => remote.ready(result, options));
-    status(ctx, 'ready', result.subtitleError ? 'Video is playing. Retry subtitles from the remote.' : 'Casting is ready.');
+    status(ctx, 'ready', 'Video is playing. Choose subtitles from the remote.');
     return result;
   }
 

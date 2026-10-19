@@ -80,10 +80,25 @@ let keyboardCompact = false;
 let msxPolling = false;
 let deferredNativeTarget = null;
 let changingTarget = false;
+let pendingVolume = null;
+let volumeTimer = null;
+let volumeFlight = false;
+const VOLUME_COOLDOWN_MS = 2000;
 
 function receiver(target = state.target) { return target === 'philips' ? state.philips : state; }
 function tvConnected() { return state.philips.connected || state.matter.connected; }
+function volumeContext() {
+  if (state.target !== 'philips') return state.connected ? { route: 'luma', key: `luma:${state.host}` } : null;
+  if (state.matter.connected && state.matter.capabilities.volume && state.matter.volume) return { route: 'matter', key: 'philips:matter' };
+  return state.philips.connected ? { route: 'msx', key: `philips:msx:${state.philips.host}:${state.philips.activeMedia?.url || ''}` } : null;
+}
+function clearPendingVolume() {
+  clearTimeout(volumeTimer);
+  volumeTimer = null;
+  pendingVolume = null;
+}
 function remoteVolume() {
+  if (pendingVolume && pendingVolume.key === volumeContext()?.key) return pendingVolume.volume;
   if (state.target !== 'philips') return state.volume;
   if (state.matter.connected && state.matter.capabilities.volume && state.matter.volume) return state.matter.volume;
   return state.philips.connected ? state.philips.volume : null;
@@ -191,6 +206,7 @@ function msxState(value) {
 
 async function selectTarget(target) {
   if (!['luma', 'philips'].includes(target) || target === state.target || state.busy || state.handoff) return;
+  clearPendingVolume();
   changingTarget = true;
   try { await command('app.selectTarget', { target }, '', result => {
     state.target = target;
@@ -382,6 +398,7 @@ function sheet(name) {
   renderControls();
 }
 function renderControls() {
+  if (pendingVolume && pendingVolume.key !== volumeContext()?.key) clearPendingVolume();
   const free = state.native && !state.busy && !state.handoff;
   const tv = state.target === 'philips';
   const remote = receiver();
@@ -705,7 +722,6 @@ const coordinator = createHandoffCoordinator({
     // completion. Receiver playback remains successful if local pausing fails.
     await rpc('app.handoffReady', { sourceToken: state.jobToken, remote }, { timeoutMs: 2000 }).catch(() => {});
   } },
-  preferredLanguages: ['pt-BR', 'en'],
   onStatus({ step, message: text }) {
     reportStatus(step);
     const steps = ['launching', 'waiting', 'opening', 'subtitles', 'selecting', 'remote', 'ready'];
@@ -717,6 +733,7 @@ const coordinator = createHandoffCoordinator({
 
 async function startCasting() {
   if (!state.pendingMedia || state.handoff || state.busy) return;
+  clearPendingVolume();
   state.autoStart = false;
   if (state.pendingTarget === 'philips') { await startMsxCasting(); return; }
   if (state.target !== 'luma') {
@@ -751,9 +768,7 @@ async function startCasting() {
     const result = await coordinator.start(selected, { signal: controller.signal, isCurrentSource: () => state.sourceGeneration === generation && state.pendingMedia === selected });
     if (id === flowId) {
       state.pendingMedia = null;
-      message(result.subtitleError
-        ? 'Video is playing. Subtitles could not be loaded. Open Subtitles to try again.'
-        : 'Ready on the projector. You can use the remote.', Boolean(result.subtitleError));
+      message('Video is playing. Choose a language in Subtitles.');
     }
   } catch (error) {
     cancelNative(jobToken);
@@ -796,6 +811,7 @@ async function startMsxCasting() {
       sourceToken: jobToken, source: selected.url, mimeType: selected.contentType,
       title: title(selected.title), subtitles: (selected.tracks || []).map(track => ({ url: track.url, language: track.language, label: track.label })),
       preferredLanguage: 'pt-BR',
+      autoSubtitles: false,
     }, { signal: controller.signal, timeoutMs: 60000 });
     if (id !== flowId) return;
     state.philips.activeMedia = { url: selected.url, contentType: selected.contentType, title: title(selected.title) };
@@ -1048,9 +1064,11 @@ $('#show-reset').addEventListener('click', () => {
 });
 $('#forget-matter-local').addEventListener('click', async () => {
   if (state.target !== 'philips' || state.sheet !== 'reset' || !state.matter.paired || state.busy) return;
+  clearPendingVolume();
   if (await command('matter.forget', { confirmed: true, localOnly: true }, 'Pairing forgotten on this phone. The TV may still list this phone until removed in its settings.', matterState)) { closeSheet(); page('devices'); }
 });
 for (const button of document.querySelectorAll('[data-reset]')) button.addEventListener('click', async () => {
+  clearPendingVolume();
   if (state.target === 'philips') {
     if (state.matter.paired && state.tvSetup === 'remote') {
       if (await command('matter.forget', { confirmed: true }, 'TV pairing removed from this phone.', matterState)) { closeSheet(); page('devices'); }
@@ -1148,6 +1166,7 @@ $('#rescan-projectors').addEventListener('click', async () => {
   });
 });
 function disconnect() {
+  clearPendingVolume();
   if (state.target === 'philips') return command(async () => {
     if (state.matter.paired) matterState(await rpc('matter.disconnect', {}));
     return rpc('msx.disconnect', {});
@@ -1184,6 +1203,7 @@ async function configureKodi() {
     progress('launching', 'Opening Kodi on the projector…', 2);
     await rpc('luma.launchKodi', {}, options());
     progress('waiting', 'Waiting for Kodi and checking its login…', 3);
+    await waitSetup(1000, controller.signal);
     while (true) {
       if (controller.signal.aborted) throw fixedError('CANCELLED');
       if (performance.now() >= deadline) throw fixedError('SETUP_TIMEOUT');
@@ -1240,12 +1260,56 @@ $('#refresh-playback').addEventListener('click', () => state.target === 'philips
 $('#refresh-volume').addEventListener('click', () => state.target === 'philips' ? state.matter.connected ? command('matter.status', {}, 'Volume refreshed.', matterState) : command('msx.status', {}, 'Volume refreshed.', msxState) : command('luma.status', {}, 'Volume refreshed.', volume));
 function setVolume(value) {
   const currentVolume = remoteVolume();
-  if (!currentVolume || !Number.isInteger(value) || value < (currentVolume.min || 0) || value > currentVolume.max) return;
-  if (state.target === 'philips' && state.matter.connected && state.matter.volume) { void command('matter.volume', { value }, 'Volume refreshed.', matterState); return; }
-  if (state.target === 'philips') { void command('msx.volume', msxParams({ value }), 'Volume refreshed.', msxState); return; }
-  void command('luma.setVolume', { value }, 'Volume refreshed.', async result => volume(result?.volume ? result : await rpc('luma.status')));
+  const context = volumeContext();
+  if (!state.native || state.busy || state.handoff || !context || !currentVolume || !Number.isInteger(value) || value < (currentVolume.min || 0) || value > currentVolume.max) return;
+  const queued = { ...context, volume: { ...currentVolume, current: value }, due: performance.now() + VOLUME_COOLDOWN_MS,
+    params: context.route === 'msx' ? msxParams({ value }) : { value } };
+  pendingVolume = queued;
+  renderControls();
+  if (context.route === 'luma') {
+    // The service owns this cooldown so it continues with the screen locked,
+    // and notification taps combine with taps made here.
+    void rpc('luma.queueVolume', { value }).then(result => {
+      if (pendingVolume !== queued) return;
+      volume(result);
+      clearPendingVolume();
+      renderControls();
+    }).catch(error => volumeFailed(queued, error));
+    return;
+  }
+  clearTimeout(volumeTimer);
+  volumeTimer = setTimeout(flushVolume, VOLUME_COOLDOWN_MS);
 }
-$('#volume-range').addEventListener('change', () => setVolume(Number($('#volume-range').value)));
+function volumeFailed(queued, error) {
+  if (pendingVolume !== queued) return;
+  clearPendingVolume();
+  message(error.message, true);
+  renderControls();
+}
+async function flushVolume() {
+  volumeTimer = null;
+  const queued = pendingVolume;
+  if (!queued || queued.route === 'luma' || volumeFlight) return;
+  if (volumeContext()?.key !== queued.key) { clearPendingVolume(); return; }
+  volumeFlight = true;
+  try {
+    const result = await rpc(queued.route === 'matter' ? 'matter.volume' : 'msx.volume', queued.params);
+    if (pendingVolume === queued && volumeContext()?.key === queued.key) {
+      if (queued.route === 'matter') matterState(result); else msxState(result);
+      clearPendingVolume();
+    }
+  } catch (error) { volumeFailed(queued, error); }
+  finally {
+    volumeFlight = false;
+    renderControls();
+    if (pendingVolume && pendingVolume !== queued && pendingVolume.route !== 'luma') {
+      clearTimeout(volumeTimer);
+      volumeTimer = setTimeout(flushVolume, Math.max(0, pendingVolume.due - performance.now()));
+    }
+  }
+}
+$('#volume-range').addEventListener('input', () => setVolume(Number($('#volume-range').value)));
+$('#volume-range').addEventListener('change', () => { if (Number($('#volume-range').value) !== remoteVolume()?.current) setVolume(Number($('#volume-range').value)); });
 $('#volume-down').addEventListener('click', () => { const value = remoteVolume(); if (value) setVolume(value.current - 1); });
 $('#volume-up').addEventListener('click', () => { const value = remoteVolume(); if (value) setVolume(value.current + 1); });
 function key(name) {
@@ -1302,6 +1366,7 @@ $('#check-updates').addEventListener('click', () => command('app.checkUpdates', 
 $('#cancel-power').addEventListener('click', closeSheet);
 $('#power-backdrop').addEventListener('click', closeSheet);
 $('#confirm-power').addEventListener('click', async () => {
+  clearPendingVolume();
   if (state.target === 'philips') {
     if (state.sheet !== 'power' || !state.matter.connected || !state.matter.capabilities.power || state.busy || state.handoff) return;
     if (await command('matter.powerOff', { confirmed: true }, 'TV power command sent.', matterState)) closeSheet();

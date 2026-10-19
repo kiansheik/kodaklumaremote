@@ -20,6 +20,9 @@ const OTHER = 'https://media.example/other.m3u8';
 const commands = [], mutations = [], sockets = new Set();
 let connections = 0, currentSource = '', playing = true, stops = 0, authRejections = 0, holdProperties = false, volume = 6;
 let failStatus = false, failStatusOnce = 0, failAfterPause = 0, failedStatusReads = 0;
+let holdAfterVolumeSet = false, heldVolumeReads = [], volumeSets = 0, volumeGets = 0;
+let holdVolumeSetThreshold = Infinity;
+let holdNextVolumeRead = false;
 const heldResponses = new Set();
 const tcp = net.createServer(socket => {
   connections++; sockets.add(socket); socket.on('error', () => {}); socket.on('close', () => sockets.delete(socket));
@@ -32,8 +35,13 @@ const tcp = net.createServer(socket => {
       const method = command.split('\r\n')[0];
       if (method === 'getFeatures') socket.write('server_features:sn=0xbf m=Smart Projector ap=LUMA fixture');
       if (method === 'GETPASSWORDCONFIG') socket.write('configed none\r\n\r\n');
-      if (command === 'MediaControl\r\ngetVolume\r\n\r\n') socket.write(`${volume} 15\r\n\r\n`);
-      if (command === 'MediaControl\r\nsetVolume 14\r\n\r\n') volume = 7;
+      if (command === 'MediaControl\r\ngetVolume\r\n\r\n') {
+        volumeGets++;
+        if (holdNextVolumeRead || holdAfterVolumeSet && volumeSets >= holdVolumeSetThreshold) { heldVolumeReads.push({ socket, value: volume }); holdNextVolumeRead = false; }
+        else socket.write(`${volume} 15\r\n\r\n`);
+      }
+      const setVolume = /^MediaControl\r\nsetVolume (\d+)\r\n\r\n$/u.exec(command);
+      if (setVolume) { volumeSets++; volume = Math.round(Number(setVolume[1]) / 2); }
       if (command === 'KEYEVENT\r\n25\r\n\r\n') volume = Math.max(0, volume - 1);
       if (command === 'KEYEVENT\r\n24\r\n\r\n') volume = Math.min(15, volume + 1);
     }
@@ -48,6 +56,13 @@ const kodi = http.createServer(async (request, response) => {
       if (address.searchParams.has('failStatus')) failStatus = address.searchParams.get('failStatus') === '1';
       if (address.searchParams.has('failStatusOnce')) failStatusOnce = Number(address.searchParams.get('failStatusOnce'));
       if (address.searchParams.has('failAfterPause')) failAfterPause = Number(address.searchParams.get('failAfterPause'));
+      if (address.searchParams.has('holdAfterVolumeSet')) { holdAfterVolumeSet = address.searchParams.get('holdAfterVolumeSet') === '1'; holdVolumeSetThreshold = volumeSets + 1; }
+      if (address.searchParams.get('holdNextVolumeRead') === '1') holdNextVolumeRead = true;
+      if (address.searchParams.get('releaseVolume') === '1') {
+        holdAfterVolumeSet = false;
+        for (const held of heldVolumeReads) if (!held.socket.destroyed) held.socket.write(`${held.value} 15\r\n\r\n`);
+        heldVolumeReads = [];
+      }
       if (address.searchParams.get('dropTcp') === '1') for (const socket of sockets) socket.destroy();
       if (address.searchParams.get('hold') === '1') holdProperties = true;
       if (address.searchParams.get('hold') === '0') {
@@ -59,6 +74,7 @@ const kodi = http.createServer(async (request, response) => {
       }
       response.writeHead(200, { 'Content-Type': 'application/json' });
       response.end(JSON.stringify({ source: currentSource, playing, stops, volume, mutations: mutations.length, connections, held: heldResponses.size, failedStatusReads,
+        volumeSets, volumeGets, volumeReadHeld: heldVolumeReads.length,
         volumeKeys: commands.filter(command => /^KEYEVENT\r\n(?:24|25)\r\n\r\n$/u.test(command)).length,
         powerCommands: commands.filter(command => command === 'KEYEVENT\r\n26\r\n\r\n').length })); return;
     }
@@ -101,12 +117,13 @@ try {
   }
   const { stdout: sdk } = await run(adb, ['-s', serial, 'shell', 'getprop', 'ro.build.version.sdk'], { timeout: 10000 });
   if (Number(sdk.trim()) >= 33) await run(adb, ['-s', serial, 'shell', 'pm', 'grant', appPackage, 'android.permission.POST_NOTIFICATIONS'], { timeout: 10000 });
-  const { stdout, stderr } = await run(adb, ['-s', serial, 'shell', 'am', 'instrument', '-w', '-e', 'mode', 'service', '-e', 'targetHost', '10.0.2.2', '-e', 'kodiPort', String(kodi.address().port), `${appPackage}.test/dev.framextv.lumaremote.BackendInstrumentation`], { timeout: 90000, maxBuffer: 128 * 1024 });
+  const { stdout, stderr } = await run(adb, ['-s', serial, 'shell', 'am', 'instrument', '-w', '-e', 'mode', 'service', '-e', 'targetHost', '10.0.2.2', '-e', 'kodiPort', String(kodi.address().port), `${appPackage}.test/dev.framextv.lumaremote.BackendInstrumentation`], { timeout: 150000, maxBuffer: 128 * 1024 });
   process.stdout.write(stdout); if (stderr) process.stderr.write(stderr);
-  assert.match(stdout, /INSTRUMENTATION_RESULT: failures=0/u); assert.match(stdout, /INSTRUMENTATION_RESULT: passed=10/u); assert.match(stdout, /INSTRUMENTATION_CODE: -1/u);
+  assert.match(stdout, /INSTRUMENTATION_RESULT: failures=0/u); assert.match(stdout, /INSTRUMENTATION_RESULT: passed=14/u); assert.match(stdout, /INSTRUMENTATION_CODE: -1/u);
   assert.equal(connections, 3);
   assert.ok(authRejections >= 2);
-  assert.deepEqual(commands.filter(command => command.includes('setVolume')), ['MediaControl\r\nsetVolume 14\r\n\r\n']);
+  assert.deepEqual(commands.filter(command => command.includes('setVolume')), [14, 14, 12, 14, 12, 14, 16, 18, 20, 16]
+    .map(level => `MediaControl\r\nsetVolume ${level}\r\n\r\n`));
   assert.equal(volume, 8);
   assert.equal(stops, 1);
   assert.equal(currentSource, FIRST); assert.equal(playing, true);
@@ -114,12 +131,10 @@ try {
   assert.deepEqual(mutations.filter(message => message.method === 'Player.PlayPause').map(message => message.params.play), [false, true, false, true, false, true]);
   assert.equal(mutations[6].params.item.file, FIRST);
   assert.deepEqual(commands.filter(command => command.startsWith('KEYEVENT\r\n')), [
-    'KEYEVENT\r\n25\r\n\r\n', 'KEYEVENT\r\n24\r\n\r\n',
-    'KEYEVENT\r\n25\r\n\r\n', 'KEYEVENT\r\n24\r\n\r\n', 'KEYEVENT\r\n24\r\n\r\n',
     'KEYEVENT\r\n26\r\n\r\n',
   ]);
   assert.ok(commands.every(command => !/^(?:auth|CHECKPASSWORD|STARTAPPEVNET)/u.test(command)));
-  console.log('Android connection service: 10 lifecycle, locked-screen, transient-error, pending-catalog, independent-transport, disconnect, power and Matter checks passed against emulator-only fixtures.');
+  console.log('Android connection service: 14 lifecycle, locked-screen, coalesced-volume, transient-error, pending-catalog, independent-transport, disconnect, power and Matter checks passed against emulator-only fixtures.');
 } catch (error) {
   console.error(JSON.stringify({ fixture: { connections, stops, playing, mutations: mutations.map(({ method, params }) => ({ method, ...(typeof params.play === 'boolean' ? { play: params.play } : {}) })) } }));
   throw error;

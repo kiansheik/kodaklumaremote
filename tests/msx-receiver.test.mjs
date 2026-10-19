@@ -74,6 +74,33 @@ test('missing Portuguese falls back to English and unrelated languages stay disa
   assert.equal(core.preferredIndex([{language: 'pt', label: 'Português'}, {language: 'en', label: 'English'}], 'pt-BR'), 1);
 });
 
+for (const [name, catalog, selected] of [['all languages', tracks, 1], ['missing Portuguese', [tracks[0], tracks[2]], 0]]) {
+  test(`manual subtitles start video without caption requests for ${name}, then load only the chosen track`, async () => {
+    const {player, video, fetched, captions} = fixture();
+    await player.command('open', {...open, subtitles: catalog, autoSubtitles: false});
+    assert.equal(player.state().active, true); assert.equal(video.src, open.source);
+    assert.deepEqual(fetched, []); assert.equal(player.state().tracks.length, catalog.length);
+    assert.equal(player.state().selectedIndex, -1); assert.equal(player.state().subtitlesEnabled, false);
+    video.currentTime = 2; video.fire('timeupdate'); assert.equal(captions.at(-1), '');
+    await player.command('subtitle', {index: selected, enabled: true, expectedSourceUrl: open.source});
+    assert.deepEqual(fetched, [catalog[selected].url]); assert.equal(player.state().selectedIndex, selected);
+    assert.equal(player.state().subtitlesEnabled, true); assert.equal(captions.at(-1), 'Olá & oi');
+    assert.equal(video.playCount, 1);
+  });
+}
+
+test('explicit automatic subtitles preserve preferred loading and malformed policy cannot replace playback', async () => {
+  const {player, video, fetched} = fixture();
+  await player.command('open', {...open, autoSubtitles: true});
+  assert.deepEqual(fetched, [tracks[1].url]); assert.equal(player.state().selectedIndex, 1);
+  const previousLoads = video.loadCount;
+  for (const autoSubtitles of ['false', 0, null, {}]) {
+    await assert.rejects(player.command('open', {...open, source: 'https://media.example/replacement.mp4', autoSubtitles}), /INVALID_SUBTITLES/);
+  }
+  assert.equal(video.src, open.source); assert.equal(video.loadCount, previousLoads);
+  assert.deepEqual(fetched, [tracks[1].url]);
+});
+
 test('Open rejects a failed autoplay without claiming playback success', async () => {
   const {player, video} = fixture(); video.rejected = true;
   await assert.rejects(player.command('open', {...open, subtitles: []}), /PLAYBACK_REJECTED/);

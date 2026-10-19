@@ -28,7 +28,7 @@ Dual receiver: [Philips MSX and LUMA selection](msx-receiver.md),
 [implementation handoff](session-handoffs/2026-10-18-dual-receiver-msx.md).
 Native phone implementation: [Matter pairing and hardware remote](session-handoffs/2026-10-18-native-matter-phone.md).
 Current published release: [0.4.2 Kodi and locked-screen recovery](session-handoffs/2026-10-18-motorola-kodi-recovery.md).
-Current repair: [Motorola/Kodi startup, subtitles and locked-screen controls](session-handoffs/2026-10-18-motorola-kodi-recovery.md).
+Current repair: [video-first startup, manual subtitles and coalesced volume](session-handoffs/2026-10-19-video-first-volume.md).
 Mac evidence and isolated UI checks: [controller/browser handoff](session-handoffs/2026-10-18-matter-controller-browser.md).
 Current playback experiment: [Philips local browser API](philips-jointspace.md),
 [paired API, unverified browser launch and Mac receiver proof](session-handoffs/2026-10-18-philips-browser-setup.md).

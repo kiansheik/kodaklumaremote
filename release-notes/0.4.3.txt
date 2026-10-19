@@ -1,0 +1,7 @@
+Video starts before subtitle setup. Open Subtitles after playback starts and choose any language supplied by the website; missing Portuguese no longer triggers a fallback or holds up casting.
+
+Kodi launch, video opening and subtitle changes are spaced by at least a second. Existing checks still prevent duplicate video starts when a response is uncertain.
+
+Volume taps and slider changes update the remote immediately. Repeated changes combine after a two-second cooldown into one final volume command. LUMA notification and lock-screen volume buttons share the same background queue.
+
+The first-start Kodi crash still needs a physical-device retest; this update reduces startup command bursts without claiming a confirmed crash diagnosis.

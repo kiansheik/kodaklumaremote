@@ -137,6 +137,7 @@
       var nextSource, nextTracks;
       try {
         nextSource = httpUrl(params.source);
+        if (params.autoSubtitles !== undefined && typeof params.autoSubtitles !== 'boolean') throw failure('INVALID_SUBTITLES');
         if (!Array.isArray(params.subtitles || []) || (params.subtitles || []).length > 100) throw failure('INVALID_SUBTITLES');
         nextTracks = (params.subtitles || []).map(function (track) {
           return {url: httpUrl(track.url), language: String(track.language || '').slice(0, 40), label: String(track.label || track.language || 'Subtitle').slice(0, 120)};
@@ -155,7 +156,8 @@
         hls.loadSource(source); hls.attachMedia(video);
       } else { video.src = source; video.load(); }
       changed();
-      var chosen = preferredIndex(tracks, params.preferredLanguage), subtitles = chosen >= 0 ? selectSubtitle(chosen, true, expected) : Promise.resolve();
+      var chosen = params.autoSubtitles === false ? -1 : preferredIndex(tracks, params.preferredLanguage);
+      var subtitles = chosen >= 0 ? selectSubtitle(chosen, true, expected) : Promise.resolve();
       // Both settle before ACK. A subtitle rejection leaves independently running video intact.
       function outcome(promise) { return promise.then(function () { return null; }, function (error) { return error; }); }
       return Promise.all([outcome(playStarted(expected)), outcome(subtitles)]).then(function (errors) {

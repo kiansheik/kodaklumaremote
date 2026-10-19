@@ -68,10 +68,11 @@
   boundaries and actual browser flows. `docs/agent/luma-remote.md` records REA
   provenance, physical acceptance and remaining startup/phone work.
 - `src/handoff/coordinator.mjs`: bounded receiver launch/readiness/media/subtitle
-  orchestration, preferred-first/on-demand subtitle catalog, observed-index
+  orchestration, video-first startup and manual subtitle catalog, observed-index
   bindings, cancellation and a guarded cold-start Open retry. Exact-source
-  observation reconciles unresolved Opens; subtitle-only failure preserves the
-  playing remote/catalog without another video Open.
+  observation reconciles unresolved Opens. Startup makes no subtitle requests;
+  launch and subsequent mutations have one-second settling. Manual language
+  selection preserves the playing remote/catalog without another video Open.
 - `src/mobile/{index.html,app.js,capture.js}`: no-scroll combined phone remote,
   native RPC adapters, same-origin declared source/track capture and matched pause.
 - `android/`: phone APK shell and native networking; browser WebView has no
@@ -82,6 +83,9 @@
   Kodi calls share a five-second multi-RPC budget and subtitle-player readiness;
   system media actions use bounded wake locks, fresh source guards and Kodi HTTP
   independently of the projector's TCP connection. The
+  service also owns a two-second coalesced absolute-volume queue shared by the
+  main remote and system media buttons, preserving its projected value while
+  polling and cancelling unsent writes on receiver/source changes. The
   [Motorola recovery handoff](session-handoffs/2026-10-18-motorola-kodi-recovery.md)
   distinguishes fixture evidence from pending physical acceptance.
 - `src/msx/`, `MsxServer.java`: TV-owned MSX player/subtitle renderer and

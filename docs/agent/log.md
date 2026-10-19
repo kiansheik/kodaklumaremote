@@ -383,3 +383,16 @@
   Chrome's0.4.2 install link verified. APK9,632,212bytes, SHA-256
   `886e1711953a88257f8dbd0fdbc5c2dd85d859cc11c2cf469ee8eb7609a9032f`.
   No physical phone installation or household playback test was possible.
+- 2026-10-19 video-first follow-up: after continued first-start Kodi crashes and
+  absent subtitles, implemented the requested manual subtitle flow, one-second
+  launch/mutation spacing and two-second coalesced absolute volume. LUMA UI and
+  system volume share a native queue; Philips UI timers cancel on explicit
+  receiver actions. Node181 passed; browser/native checks and signed0.4.3/code12
+  publication are in progress. Physical cause remains unproven.
+  [Handoff](session-handoffs/2026-10-19-video-first-volume.md).
+- 2026-10-19 final validation: Node181/coordinator46/MSX20, mobile57 and native40
+  passed. Final debug/test/lintDebug build and service14/UI5 rerun include the
+  deterministic delayed-volume delivery regression. Locked-screen actions,
+  two-second single-write bursts, newer in-flight input and source/target
+  cancellation passed on the isolated emulator; original lock setting restored.
+  Production signing/publication follows; no physical device success claimed.

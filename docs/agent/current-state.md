@@ -563,3 +563,28 @@ physical phone/projector/TV actions were sent during this repair. Motorola
 locked-screen controls, the exact Bly Manor episode and visible subtitles still
 need physical acceptance. See the
 [recovery handoff](session-handoffs/2026-10-18-motorola-kodi-recovery.md).
+
+2026-10-19 follow-up: the user still reports first-start Kodi crashes, hangs and
+missing subtitles. They requested video-first playback with manual language
+selection, one-second command spacing and coalesced volume.0.4.3/code12 now
+removes all startup subtitle reads/adds/selections; the full captured catalog
+remains available after exact-source playback opens Remote. Launch settles for
+one second before readiness, and subsequent playback/subtitle mutations are
+paced with cancellation and fresh source checks. MSX also receives an explicit
+manual-subtitle startup policy; older clients retain their existing default.
+
+The main volume slider and ± buttons show the requested value immediately.
+LUMA's service shares one two-second trailing cooldown with notification and
+lock-screen ±, then sends a single absolute volume change. Projected state
+survives old reads; receiver/source changes revoke unsent writes. Philips UI
+volume is independently debounced and explicit switch/disconnect/cast/reset/
+power actions cancel its unsent timer. Node181 checks pass (coordinator46 and
+MSX20 included), as do all57 mobile browser checks and the isolated debug/test
+build plus lintDebug. Native40 checks pass (service14/backend12/UI5/settings5/
+dual receiver4). Final service14 and packaged UI5 were rebuilt/retested after
+the callback-delivery projection fix; the deterministic delayed-reply regression
+passed. The Activity was closed and emulator screen/keyguard locked for system
+actions, including mixed UI/system volume bursts, in-flight new input and target
+cancellation. Signing/publication follows in the
+[video-first handoff](session-handoffs/2026-10-19-video-first-volume.md).
+No physical crash diagnosis or new household-device success is established.

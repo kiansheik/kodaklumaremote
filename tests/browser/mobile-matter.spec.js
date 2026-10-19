@@ -177,6 +177,7 @@ test('composite Philips remote routes hardware to Matter and video to MSX while 
   await openApp(page, { paired: true, connected: true, msx: true });
   await page.getByRole('button', { name: 'Home', exact: true }).click();
   await page.locator('#volume-up').click();
+  await expect.poll(() => page.evaluate(() => window.__calls.filter(call => call.method === 'matter.volume').length)).toBe(1);
   await page.locator('#play-toggle').click();
   await expect(page.locator('#play-toggle')).toHaveText('Resume');
   await page.locator('#target-luma').click();

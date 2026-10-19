@@ -23,8 +23,10 @@
 4. Which enabled disable-devtool detector causes automated blanking? Manual
    DevTools-open and Anti Anti Debug fingerprinting reports not reproduced.
 5. Portuguese rendering and dialogue timing are user-confirmed from the Samsung
-   sender. The phone now loads the preferred track first and keeps the full
-   website catalog for on-demand selection. Other languages are not render-tested.
+   sender. The phone keeps the full website catalog for on-demand selection.
+   0.4.3 now starts video without any
+   subtitle requests and lets the user choose afterward, as requested after
+   continued crashes/hangs in0.4.2. Other languages are not render-tested.
    Does lazy selection and Activity restoration pass on the actual phone?
    S1E3 subsequently crashed Kodi on first attempt and played without subtitles
    after Retry. The phone now distinguishes verified rejection from an unknown

@@ -6,15 +6,18 @@ installed on the Samsung phone running Android 16. The user confirmed live
 phone casting with picture, sound and Portuguese subtitles. Background/system
 controls on the notification shade and lock screen were user-confirmed on0.2.2.
 Cold-start/subtitle regressions and phone-off acceptance remain open.
-The latest [Motorola recovery](session-handoffs/2026-10-18-motorola-kodi-recovery.md)
-implements source-verified startup/subtitle and locked-screen fixes; physical
-Motorola/Bly Manor acceptance is pending.
+The user still reports first-start crashes/hangs and missing subtitles after
+0.4.2. The [video-first follow-up](session-handoffs/2026-10-19-video-first-volume.md)
+removes automatic subtitle work, spaces startup writes and coalesces volume.
+The physical crash cause and Motorola/Bly Manor acceptance remain unresolved.
 
 ## Runtime path
 
 Phone browser → exposed media/track descriptors → native LUMA launch → bounded
-Kodi readiness polling → Kodi `Player.Open` → preferred subtitle registration
-with observed index binding → Portuguese (Brazil), then English → Remote.
+Kodi readiness polling → Kodi `Player.Open` → exact-source playback → Remote.
+Only after playback starts does the user choose a language under Subtitles.
+The full captured catalog stays available, with Brazilian Portuguese and English
+listed first. Startup performs no subtitle reads, adds or selections.
 The receiver fetches source URLs directly. No Mac, media proxy, cookie export or
 phone-hosted server participates in this path.
 
@@ -30,8 +33,11 @@ open in the app. Capture is user-triggered; no anti-debugging or DRM bypass.
 
 The no-scroll phone Remote prioritizes playback, projector volume, a central
 five-button D-pad, Subtitles and More. Home is at the upper left and Back at the
-upper right. The volume slider sends one committed value, then reads the
-observed current/max back; ± controls use that same observed range. A small
+upper right. The volume slider and ± controls show the pending value immediately.
+LUMA's background service combines them with notification/lock-screen taps after
+a two-second trailing cooldown, sending one absolute final volume and reading
+it back. Old polls do not overwrite the pending value; receiver changes cancel
+unsent changes. Philips UI volume uses a separate two-second debounce. A small
 red/green indicator shows connection state. Browse is a separate bottom tab.
 After valid setup, configuration moves behind Settings instead of remaining a
 primary Devices tab.
@@ -58,9 +64,8 @@ cannot be undone. Manual controls remain bound to the active receiver source,
 so browsing a new page after a successful cast leaves the video controllable.
 
 The coordinator waits for actual Kodi state instead of treating command
-acknowledgement as playback/subtitle selection. It loads Brazilian Portuguese
-first, falling back to English, and retains the full website subtitle catalog
-in memory on the phone. Selecting another language loads it on demand and maps
+acknowledgement as playback/subtitle selection. It retains the full website
+subtitle catalog in memory on the phone. Selecting a language loads it on demand and maps
 its observed receiver index. Unknown existing external tracks are never assigned
 guessed language labels. One subtitle displays at a time. Catalog URLs and
 loaded aliases survive Activity recreation through service memory, not storage.
@@ -70,8 +75,11 @@ ready. One bounded retry is allowed only after that request settles and fresh
 observations confirm Kodi is idle; a native prewrite guard rejects the retry if
 another video has started. Unknown command outcomes are not blindly repeated.
 Exact-source playback is also observed while Open's response remains unresolved
-or fails, allowing the same attempt to continue into subtitles without replay.
+or fails, allowing the same attempt to open the remote without replay.
 Observation releases the Open wait without aborting its native cast job.
+Launch completion settles for one second before the first readiness request.
+Subsequent startup and manual subtitle writes also leave at least one second
+after the preceding mutation, rechecking source identity after that wait.
 
 Subtitle readiness/registration reads have bounded30-second windows, sized for
 native operations that can contain multiple HTTP requests. Each native Kodi
@@ -85,10 +93,9 @@ now clears the uncertain-write receipt and permits an explicit later Retry.
 Malformed, mismatched-ID, internal/unknown errors and transport failures keep
 their uncertain outcome and cannot authorize duplicate writes. Native diagnostics
 include only fixed methods/categories and numeric HTTP/RPC codes.
-Initial subtitle-only failure opens the remote only after fresh exact-source
-playback confirmation, retaining every captured language for subtitle-only retry.
-An English Add follows rejected PT-BR only with explicit non-application proof;
-uncertain Add outcomes never authorize another Add. Captured metadata is prepared
+Startup does not wait on subtitle APIs, including when Portuguese is absent.
+Manual subtitle failures leave playback and the catalog usable; uncertain Add
+outcomes never authorize another Add. Captured metadata is prepared
 in service memory before opening, so it survives an interrupted completion step.
 Per-operation bridge abort does not revoke the entire cast job; user Cancel and
 source changes still do.
@@ -212,8 +219,8 @@ The updated APK is installed on Samsung Android 16. Test first setup with a wron
 then correct login and persistence; reopen without re-entering it. Verify the
 cached-projector route, rescan and selective reset. Test cold start with Wi-Fi
 unavailable, discovery/manual connect, source capture from the live episode,
-Kodi closed → launch/readiness → picture/sound → preferred subtitle registration →
-visible matching Brazilian Portuguese → combined remote. Switch to another app
+Kodi closed → launch/readiness → picture/sound → combined remote → explicit subtitle
+selection → visible matching Brazilian Portuguese (or another available language). Switch to another app
 and return without reconnecting; recreate the Activity and verify the existing
 video and language names return. Lock the screen and test notification/media
 Play/Pause, Stop and reopening Remote. Confirm Disconnect leaves the video

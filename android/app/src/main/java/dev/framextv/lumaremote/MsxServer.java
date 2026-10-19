@@ -407,6 +407,10 @@ public final class MsxServer implements AutoCloseable {
         if ("open".equals(method) || "load".equals(method)) {
             put(safe, "source", publicUrl(params.opt("source"))); put(safe, "title", label(params.optString("title", "Video"), 256));
             String mime = params.optString("mimeType", ""); if (mime.length() > 100 || !mime.matches("[A-Za-z0-9.+/-]*")) throw new MsxException("INVALID_INPUT"); put(safe, "mimeType", mime);
+            if (params.has("autoSubtitles")) {
+                if (!(params.opt("autoSubtitles") instanceof Boolean)) throw new MsxException("INVALID_INPUT");
+                put(safe, "autoSubtitles", params.opt("autoSubtitles"));
+            }
             JSONArray tracks = params.optJSONArray("subtitles"); if (tracks == null) tracks = new JSONArray(); if (tracks.length() > 128) throw new MsxException("INVALID_INPUT");
             JSONArray subtitles = new JSONArray();
             for (int i = 0; i < tracks.length(); i++) {

@@ -254,7 +254,7 @@ public final class ServiceInstrumentation {
         require(!context.getSystemService(PowerManager.class).isInteractive() && context.getSystemService(KeyguardManager.class).isKeyguardLocked(), "Emulator did not enter the locked, screen-off state");
     }
     private void waitVolume(int expected) throws Exception {
-        long end = SystemClock.elapsedRealtime() + 4000;
+        long end = SystemClock.elapsedRealtime() + 6000;
         while (SystemClock.elapsedRealtime() < end) {
             if (fixture("").getInt("volume") == expected) {
                 JSONObject observed = call("luma.status").getJSONObject("volume");
@@ -264,6 +264,15 @@ public final class ServiceInstrumentation {
             Thread.sleep(40);
         }
         throw new AssertionError("Projector volume action was not observed");
+    }
+    private void projectedVolume(int expected, boolean pending) throws Exception {
+        long end = SystemClock.elapsedRealtime() + (pending ? 2000 : 6000);
+        while (SystemClock.elapsedRealtime() < end) {
+            JSONObject state = service.snapshot(), volume = state.optJSONObject("volume");
+            if (volume != null && volume.optInt("current", -1) == expected && state.optBoolean("volumePending") == pending) return;
+            Thread.sleep(20);
+        }
+        throw new AssertionError("Projected volume or pending state was lost");
     }
     private void execute() {
         Bundle result = new Bundle();
@@ -305,10 +314,14 @@ public final class ServiceInstrumentation {
             JSONObject pendingRemote = service.snapshot().getJSONObject("remote");
             require(pendingRemote.getJSONArray("catalog").length() == 1 && pendingRemote.getJSONArray("tracks").length() == 0
                     && pendingRemote.getJSONArray("catalog").getJSONObject(0).isNull("index"), "The in-progress handoff lost its declared subtitle catalog");
-            service.revokeToken("prepared-handoff-fixture");
             passed("an authorized Open retains the complete pending subtitle catalog before handoff completion without adding subtitles");
             JSONObject observedVolume = call("luma.setVolume", "value", 7, "expectedSourceUrl", FIRST).getJSONObject("volume");
             require(observedVolume.getInt("current") == 7 && observedVolume.getInt("max") == 15, "Absolute volume did not return the receiver readback");
+            call("luma.queueVolume", "value", 8); remember(); runner.waitForIdleSync(); projectedVolume(8, true);
+            call("luma.queueVolume", "value", 7); projectedVolume(7, true); projectedVolume(7, false);
+            require(fixture("").getInt("volumeSets") == 2, "Completing prepared metadata discarded the pending volume burst");
+            service.revokeToken("prepared-handoff-fixture");
+            passed("prepared handoff completion preserves a user's pending volume while replacing caption metadata");
             Notification firstNotification = currentCard(41, "pause");
             ordinaryCard(firstNotification);
             volumeLayout(firstNotification, "Pause");
@@ -341,6 +354,7 @@ public final class ServiceInstrumentation {
             int beforeRestore = fixture("").getInt("mutations");
             MediaController oldController = new MediaController(context, token);
             PlaybackState.CustomAction initialDisconnect = customAction(oldController, "disconnect");
+            require(call("luma.queueVolume", "value", 8).getBoolean("volumePending"), "Disconnect fixture did not queue volume");
             oldController.getTransportControls().sendCustomAction(initialDisconnect.getAction(), initialDisconnect.getExtras()); waitNotification(false); waitCard(42, false);
             require(!service.snapshot().getJSONObject("connection").getBoolean("connected"), "Notification disconnect retained the connection");
             unbind(); runner.waitForIdleSync();
@@ -356,6 +370,7 @@ public final class ServiceInstrumentation {
             require(service.snapshot().getJSONObject("connection").getBoolean("configured"), "Cached connection did not restore encrypted Kodi configuration");
             call("kodi.connect");
             require(fixture("").getInt("connections") == 2 && fixture("").getInt("mutations") == beforeRestore, "Restoring saved setup replayed media or opened extra sockets");
+            require(fixture("").getInt("volumeSets") == 2 && fixture("").getInt("volume") == 7, "A destroyed/disconnected service sent its old queued volume");
             require(call("kodi.status").getBoolean("active") && !service.snapshot().has("remote"), "An active handoff job was replaced by playback adoption");
             ordinaryCard(waitNotification(true)); waitCard(42, false);
             service.revokeToken("active-handoff-fixture");
@@ -423,10 +438,71 @@ public final class ServiceInstrumentation {
             call("kodi.open", "media", object("url", FIRST, "contentType", "application/vnd.apple.mpegurl"), "expectedSourceUrl", FIRST);
             call("kodi.status"); remember(); runner.waitForIdleSync(); currentCard(41, "pause"); currentCard(42, "pause");
             phase = "remote_volume";
-            controller.adjustVolume(AudioManager.ADJUST_RAISE, 0);
-            long volumeBy = SystemClock.elapsedRealtime() + 3000;
-            while (fixture("").getInt("volumeKeys") < 5 && SystemClock.elapsedRealtime() < volumeBy) Thread.sleep(40);
-            require(fixture("").getInt("volumeKeys") == 5, "Framework remote volume did not send one projector control"); waitVolume(8);
+            JSONObject beforeBurst = fixture(""); int setsBeforeBurst = beforeBurst.getInt("volumeSets");
+            for (Object invalid : new Object[] {-1, 16, 1.5, "8", true}) {
+                PendingCall rejectedVolume = submit("luma.queueVolume", "value", invalid);
+                require(rejectedVolume.ready.await(1, TimeUnit.SECONDS) && "INVALID_INPUT".equals(rejectedVolume.failure.get()), "Queued volume accepted a value outside its observed integer range");
+            }
+            require(call("luma.queueVolume", "value", 15).getJSONObject("volume").getInt("current") == 15, "UI queue did not return its local projection");
+            controller.adjustVolume(AudioManager.ADJUST_RAISE, 0); controller.adjustVolume(AudioManager.ADJUST_RAISE, 0); runner.waitForIdleSync(); projectedVolume(15, true);
+            call("luma.queueVolume", "value", 0);
+            controller.adjustVolume(AudioManager.ADJUST_LOWER, 0); controller.adjustVolume(AudioManager.ADJUST_LOWER, 0); runner.waitForIdleSync(); projectedVolume(0, true);
+            call("luma.queueVolume", "value", 10);
+            currentAction("volume −").send(); runner.waitForIdleSync(); projectedVolume(9, true);
+            PlaybackState.CustomAction burstUp = customAction(controller, "volume +");
+            controller.getTransportControls().sendCustomAction(burstUp.getAction(), burstUp.getExtras()); runner.waitForIdleSync(); projectedVolume(10, true);
+            controller.adjustVolume(AudioManager.ADJUST_LOWER, 0); runner.waitForIdleSync(); projectedVolume(9, true);
+            call("luma.queueVolume", "value", 8); long finalTapAt = SystemClock.elapsedRealtime(); projectedVolume(8, true);
+            JSONObject oldRead = call("luma.status");
+            require(oldRead.getBoolean("volumePending") && oldRead.getJSONObject("volume").getInt("current") == 8, "An older receiver read overwrote the pending UI volume");
+            Thread.sleep(1000);
+            require(fixture("").getInt("volumeSets") == setsBeforeBurst && fixture("").getInt("volumeKeys") == 0 && fixture("").getInt("volume") == 7, "Volume taps sent network writes before the trailing cooldown");
+            waitVolume(8); projectedVolume(8, false);
+            require(SystemClock.elapsedRealtime() - finalTapAt >= 1900 && fixture("").getInt("volumeSets") == setsBeforeBurst + 1, "A mixed UI/system burst did not produce one delayed absolute volume write");
+            passed("UI, notification and locked-screen volume taps share a bounded local projection and one trailing absolute write");
+
+            phase = "new_volume_during_readback";
+            fixture("?holdAfterVolumeSet=1"); call("luma.queueVolume", "value", 9);
+            long volumeHeldBy = SystemClock.elapsedRealtime() + 5000;
+            while (fixture("").getInt("volumeReadHeld") == 0 && SystemClock.elapsedRealtime() < volumeHeldBy) Thread.sleep(30);
+            require(fixture("").getInt("volumeReadHeld") == 1, "Fixture did not hold the first volume write's readback");
+            long newestTap = SystemClock.elapsedRealtime(); JSONObject newProjection = call("luma.queueVolume", "value", 10);
+            require(SystemClock.elapsedRealtime() - newestTap < 750 && newProjection.getJSONObject("volume").getInt("current") == 10, "New volume input waited for an older network readback");
+            fixture("?releaseVolume=1"); projectedVolume(10, true); Thread.sleep(200); projectedVolume(10, true);
+            waitVolume(10); projectedVolume(10, false);
+            call("luma.queueVolume", "value", 8); waitVolume(8); projectedVolume(8, false);
+            passed("new input during an in-flight volume write remains projected and survives the older readback");
+
+            phase = "cancel_volume_target";
+            int beforeTargetCancel = fixture("").getInt("volumeSets");
+            fixture("?holdNextVolumeRead=1"); PendingCall oldDelivery = submit("luma.status");
+            long statusHeldBy = SystemClock.elapsedRealtime() + 2000;
+            while (fixture("").getInt("volumeReadHeld") == 0 && SystemClock.elapsedRealtime() < statusHeldBy) Thread.sleep(20);
+            require(fixture("").getInt("volumeReadHeld") == 1, "Fixture did not hold the old volume observation");
+            java.lang.reflect.Field networkField = ConnectionService.class.getDeclaredField("network"); networkField.setAccessible(true);
+            java.util.concurrent.ThreadPoolExecutor executor = (java.util.concurrent.ThreadPoolExecutor) networkField.get(service);
+            long completedBeforeDelivery = executor.getCompletedTaskCount();
+            java.lang.reflect.Field mainField = ConnectionService.class.getDeclaredField("main"); mainField.setAccessible(true);
+            android.os.Handler serviceMain = (android.os.Handler) mainField.get(service);
+            CountDownLatch mainEntered = new CountDownLatch(1), releaseMain = new CountDownLatch(1);
+            PendingCall newestProjection;
+            serviceMain.post(() -> { mainEntered.countDown(); try { releaseMain.await(3, TimeUnit.SECONDS); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); } });
+            try {
+                require(mainEntered.await(1, TimeUnit.SECONDS), "Fixture did not pause main-thread delivery");
+                newestProjection = submit("luma.queueVolume", "value", 10);
+                fixture("?releaseVolume=1");
+                long preparedBy = SystemClock.elapsedRealtime() + 1500;
+                while (executor.getCompletedTaskCount() == completedBeforeDelivery && SystemClock.elapsedRealtime() < preparedBy) Thread.sleep(15);
+                require(executor.getCompletedTaskCount() > completedBeforeDelivery, "The old network result was not prepared before the queued local input");
+            } finally { releaseMain.countDown(); }
+            require(newestProjection.ready.await(1, TimeUnit.SECONDS) && newestProjection.failure.get() == null, "Local volume input did not complete before the old delivery");
+            require(oldDelivery.ready.await(1, TimeUnit.SECONDS) && oldDelivery.failure.get() == null
+                    && oldDelivery.result.get().getJSONObject("volume").getInt("current") == 10 && oldDelivery.result.get().getBoolean("volumePending"), "A delayed RPC callback delivered an obsolete volume after newer local input");
+            projectedVolume(10, true);
+            call("app.selectTarget", "target", "philips"); require(!service.snapshot().optBoolean("volumePending"), "Target switch retained an old volume projection");
+            Thread.sleep(2200); require(fixture("").getInt("volumeSets") == beforeTargetCancel && fixture("").getInt("volume") == 8, "A target switch sent volume to the previous receiver");
+            call("app.selectTarget", "target", "luma"); currentCard(41, "pause"); currentCard(42, "pause");
+            passed("late RPC delivery uses the newest local projection and target switches cancel it before any device write");
             PendingIntent stalePause = currentAction("pause");
             PendingIntent staleVolumeDown = currentAction("volume −"), staleVolumeUp = currentAction("volume +");
             PlaybackState.CustomAction staleStop = customAction(controller, "stop");
@@ -448,9 +524,9 @@ public final class ServiceInstrumentation {
             staleVolumeDown.send(); staleVolumeUp.send();
             controller.getTransportControls().sendCustomAction(staleVolumeDownCustom.getAction(), staleVolumeDownCustom.getExtras());
             controller.getTransportControls().sendCustomAction(staleVolumeUpCustom.getAction(), staleVolumeUpCustom.getExtras());
-            controller.getTransportControls().sendCustomAction(staleStop.getAction(), staleStop.getExtras()); Thread.sleep(350); call("kodi.status");
+            controller.getTransportControls().sendCustomAction(staleStop.getAction(), staleStop.getExtras()); Thread.sleep(2700); call("kodi.status");
             JSONObject untouched = fixture("");
-            require(untouched.getInt("mutations") == before && untouched.getInt("volumeKeys") == 5 && untouched.getInt("volume") == 8 && untouched.getBoolean("playing") && OTHER.equals(untouched.getString("source")), "A stale media control changed another source");
+            require(untouched.getInt("mutations") == before && untouched.getInt("volumeKeys") == 0 && untouched.getInt("volume") == 8 && untouched.getBoolean("playing") && OTHER.equals(untouched.getString("source")), "A stale media control changed another source");
             phase = "stale_same_source";
             fixture("?source=first"); call("kodi.status"); remember(); runner.waitForIdleSync();
             int renewed = fixture("").getInt("mutations");
@@ -458,7 +534,7 @@ public final class ServiceInstrumentation {
             controller.getTransportControls().sendCustomAction(staleVolumeDownCustom.getAction(), staleVolumeDownCustom.getExtras());
             controller.getTransportControls().sendCustomAction(staleVolumeUpCustom.getAction(), staleVolumeUpCustom.getExtras());
             stalePause.send(); controller.getTransportControls().sendCustomAction(staleStop.getAction(), staleStop.getExtras()); Thread.sleep(250); call("kodi.status");
-            require(fixture("").getInt("mutations") == renewed && fixture("").getInt("volumeKeys") == 5 && fixture("").getInt("volume") == 8, "A stale notification retargeted a renewed handoff of the same source");
+            require(fixture("").getInt("mutations") == renewed && fixture("").getInt("volumeKeys") == 0 && fixture("").getInt("volume") == 8, "A stale notification retargeted a renewed handoff of the same source");
             passed("MediaSession controls work in background and stale notification/session controls cannot alter another source");
 
             phase = "independent_kodi_http";
