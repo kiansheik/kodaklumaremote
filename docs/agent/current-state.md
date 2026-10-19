@@ -585,6 +585,15 @@ dual receiver4). Final service14 and packaged UI5 were rebuilt/retested after
 the callback-delivery projection fix; the deterministic delayed-reply regression
 passed. The Activity was closed and emulator screen/keyguard locked for system
 actions, including mixed UI/system volume bursts, in-flight new input and target
-cancellation. Signing/publication follows in the
+cancellation. Release evidence is in the
 [video-first handoff](session-handoffs/2026-10-19-video-first-volume.md).
 No physical crash diagnosis or new household-device success is established.
+
+Release0.4.3/code12 is public from source
+`b5604ba05f95bd83dc33229b9f4fdc3097db8417`. Committed-source production signing,
+lintVital and16KB ZIP alignment passed. APK9,648,884bytes, SHA-256
+`f3703b75ceae7678a6908ea4aa096c177b7e9f651920dd07c4ebfa3afda6b7a8`.
+Pages commit`6a7346ab1e0eb023d32bb732b796116762312943` is built/no error.
+Anonymous update feed/APK GET200; exact metadata, downloaded bytes and production
+signer match the prepared release. Chrome shows0.4.3 and the exact APK link.
+No physical phone installation or projector/TV commands were part of this work.

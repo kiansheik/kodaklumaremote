@@ -52,7 +52,19 @@ instrumentation/runners, version config and private local signing loader.
   lock setting was restored.
 -103 local documentation links and whitespace/syntax checks passed.
 - Other isolated native suites passed: backend12, settings5 and dual receiver4
-  (40 unique native checks total). Signed release checks/publication follow.
+  (40 unique native checks total).
+- `npm run release:android -- --notes-file release-notes/0.4.3.txt` through the
+  ignored local signing loader: committed-source signed build and lintVital
+  passed; configured production certificate and16KB ZIP alignment verified.
+  Source/tag target`b5604ba05f95bd83dc33229b9f4fdc3097db8417`.
+- `git push origin main`; `npm run publish:android -- --directory
+  .local/releases/v0.4.3`: publicv0.4.3/code12 and matching install/update page.
+  Pages commit`6a7346ab1e0eb023d32bb732b796116762312943` is built/no error.
+- Anonymous HTTPS update feed/APK GET200. Served metadata equals prepared;
+  downloaded APK9,648,884bytes, SHA-256
+  `f3703b75ceae7678a6908ea4aa096c177b7e9f651920dd07c4ebfa3afda6b7a8`,
+  and production signer match. Chrome rendered0.4.3 and the exact APK link.
+  No physical phone installation or projector/TV commands were sent.
 
 ## What worked
 

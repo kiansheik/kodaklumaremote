@@ -396,3 +396,9 @@
   two-second single-write bursts, newer in-flight input and source/target
   cancellation passed on the isolated emulator; original lock setting restored.
   Production signing/publication follows; no physical device success claimed.
+- 2026-10-19 deployed0.4.3/code12 from sourceb5604ba. Signed committed-source
+  build/lintVital/16KB alignment passed. Pages6a7346a built/no error; public
+  feed/APK GET200, exact metadata/hash/production signer verified. APK9,648,884
+  bytes, SHA-256`f3703b75ceae7678a6908ea4aa096c177b7e9f651920dd07c4ebfa3afda6b7a8`.
+  Chrome shows0.4.3 and its download link. No household device controls or real
+  phone installation; first-start crash and visible subtitles require retest.
