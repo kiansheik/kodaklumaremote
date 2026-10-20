@@ -45,7 +45,8 @@ Debug carryover: [physical TV controls and remote reload proven](session-handoff
 LAN implementation: [TV-reported playback, pause/resume and feedback fixes](session-handoffs/2026-10-20-lan-sample-playback.md).
 Latest acceptance: [user-confirmed TV picture and sound](session-handoffs/2026-10-20-tv-picture-sound-acceptance.md).
 Native phone implementation: [Matter pairing and hardware remote](session-handoffs/2026-10-18-native-matter-phone.md).
-Current published release: [0.4.5 phone normalization and SPA addresses](session-handoffs/2026-10-19-subtitle-normalization.md).
+Current published release: [0.4.6 Philips player and offline Library](session-handoffs/2026-10-20-release-0.4.6.md).
+Prior release: [0.4.5 phone normalization and SPA addresses](session-handoffs/2026-10-19-subtitle-normalization.md).
 Prior published release: [0.4.4 frameXTV capture domain fix](session-handoffs/2026-10-19-capture-domain.md).
 Current repair: [video-first startup, manual subtitles and coalesced volume](session-handoffs/2026-10-19-video-first-volume.md).
 Capture hotfix: [current frameXTV domain and native capture regression](session-handoffs/2026-10-19-capture-domain.md).

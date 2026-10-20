@@ -859,3 +859,11 @@
   media omitted. Native Library6 and catalog/history/resolver groups pass; final
   receiver regression/publication follow in [release handoff](session-handoffs/2026-10-20-release-0.4.6.md).
   No further Philips or current Kodak playback action after the user's stopping point.
+
+- 2026-10-20 release0.4.6/code16 published from2c177b2; public APK9757226bytes/
+  SHA90349bb0…afd790 and live update feed verified, Pagesbuilt. Finalnative45groups
+  pass. Initial upload review's unsupported nested-Gradle VCS metadata concern was
+  resolved through an independent clean-commit rebuild: all125APKpayloads/ZIPdata/
+  v2signature match; only encryptedSDKdependencyblock differs with identical
+  plaintext. Normal publisher retry accepted. No phone/TV update or Kodak playback
+  change. [Release/evidence](session-handoffs/2026-10-20-release-0.4.6.md).

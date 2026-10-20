@@ -93,3 +93,27 @@ phone can use a privately generated signing-lineage bootstrap, validated on an
 emulator without uninstalling or resetting app data. That bootstrap/test APK
 is not distributed. Fresh public installs and all ordinary future releases use
 only the production certificate.
+
+## Nested Gradle root and source verification
+
+AGP9.3.1's ExtractVersionControlInfoTask looks for .git beneath the Gradle root.
+This repository's real Git root is above android/, so its default embedded
+version-control-info.textproto honestly reports NO_SUPPORTED_VCS_FOUND. Do not
+forge that generated file, disable the metadata to hide the limitation, or assume
+an embedded revision was verified. The ordinary publisher still requires clean
+tracked source, exact remote-main commit, production certificate and APK hash/size.
+
+For0.4.6 an upload review required stronger proof. A separate clean checkout of
+release commit2c177b2 was built with the verified pinned Matter artifacts and the
+same production key. Every APK entry and ZIP property, the v2signature block and
+all bytes outside the signing block match the prepared release. Full APK hashes
+are not identical because AGP hybrid-encrypts SDK dependency metadata differently
+per build (block0x504b4453); both underlying dependency reports/protobufs were
+compared and match. Keep that distinction explicit. The private receipt is
+.local/tv-hello/android-player/release-clean-source-proof.json. The normal publisher
+was retried only after those checks resolved the source-mismatch concern.
+
+A future Gradle-root layout change could enable native VCS discovery, but requires
+its own build validation. Do not alter the checkout layout merely to bypass an
+approval rejection. If independent rebuild payloads differ, investigate before
+publishing; a similar version string is not adequate source proof.

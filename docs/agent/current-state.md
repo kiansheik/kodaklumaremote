@@ -1,6 +1,6 @@
 # Current state
 
-## Release preparation: Philips player and offline viewing library
+## Published0.4.6: Philips player and offline viewing library
 
 The user confirmed actual Avatar S1E1 HLS picture, sound and Portuguese captions,
 with smooth playback and 23 captured tracks. The normalized selected caption also
@@ -19,12 +19,13 @@ The user set Last source. Discrete Matter On was acknowledged while already on;
 standby wake and visible browser restoration remain unverified. No power-off
 acceptance test ran. Local DevView/native TV execution is not established.
 
-The user then explicitly authorized publication. Final prepared public0.4.6/code16
+The user then explicitly authorized publication. Published public0.4.6/code16
 APK SHA-256 is `90349bb058c110ebd5e8798a17681be1b105c4a19d13647289d4c131e7afd790`,
 size9757226 bytes, receiver revision `000c06d0d4`. The production signature,
 package/version/minimum API and hash/size are verified; the diagnostic media fixture
-is absent. Publication and live feed verification are the remaining release steps.
-This APK has not been installed on the phone; the last device build remains code15.
+is absent. GitHub release, both assets and the live update feed are verified. The public APK
+download matches this digest. Release source/tag target is2c177b2.
+This published APK has not been installed on the phone; the last device build remains code15.
 
 The new phone **Library** keeps durable SQLite movie/series metadata and every newly
 observed episode's progress, independently of the recent-history100-record limit.

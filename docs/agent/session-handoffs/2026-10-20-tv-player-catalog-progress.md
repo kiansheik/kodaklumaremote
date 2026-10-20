@@ -61,7 +61,7 @@ S1E2 record is historical, not today's current episode. Migrate only actual save
 phone progress; do not invent prior viewing history.
 
 Durable Library implementation and checks are complete; final signedcode16 is
-prepared. Source commit/push, publication and live feed verification are tracked
+published and verified. Source commit/push, publication and live feed verification are tracked
 in the [release handoff](2026-10-20-release-0.4.6.md). No final phone/TV install
 or physical acceptance is claimed.
 
