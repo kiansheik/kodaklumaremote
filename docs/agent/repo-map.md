@@ -41,12 +41,54 @@
   separate from Matter. Actual PIN grant succeeded; browser200 did not produce
   a visible launch or receiver traffic, and context labels were inconsistent.
   See [protocol and acceptance boundaries](philips-jointspace.md).
+- `src/tv-hello/`, `scripts/tv-hello-server.mjs`: standalone ES5 proof, private
+  TV-peer listener, bounded same-origin reports and separate loopback status/
+  fixed-reload control. `src/tv-bridge-probe/index.html` is selected by private
+  config `mode:bridge-probe`; it samples bridge descriptors and fixed browser/
+  media declarations. Current follow-up adds two fixed remote command handlers,
+  selected standard/vendor getter reads, constructor-registry names and a fixed
+  HbbTV object-presence test. One zero-argument CSManager construction failed
+  with TypeError; no opaque platform IPC or relay activation ran. Routine mode now disables native calls; MSX mode supplies
+  peer-pinned startup/home and exact-origin framed diagnostics. Media is not fetched.
+  Source hashes drive automatic reload on the next heartbeat; a persisted private
+  receiver token preserves the same URL across server restarts. Actual TV GET/
+  ready/heartbeat, explicit reload and source-edit refresh are verified.
+  `tests/tv-hello-server.test.mjs` has eighteen isolated protocol/privacy fixtures.
+  [Measured compatibility](philips-browser-compatibility.md) separates actual
+  Chrome112 token from the family's documented Chromium122, API exposure and
+  codec declarations from actual playback. [Development history](philips-development.md)
+  and [execution evidence](philips-app-execution.md) retain the DevView/native
+  investigation. That earlier TV-only research excluded Android; current
+  phone-hosted MSX work is authorized and documented below.
+- `docs/agent/philips-devview-protocol.md`: exact public-client PIN/check/session
+  flow, cached-state/native/backend boundaries and13 offline scenarios. Includes
+  the verified Homebrew Ghidra12.1.3/JDK21 stable paths and REA wrapper-discovery
+  mismatch; no installation/global setting change required. Raw excerpts,
+  fixtures, REA/doctor reports and cookie/code-free evidence stay ignored.
+- `docs/agent/philips-ghidra-reassessment.md`: actual REA/Ghidra native-control
+  acceptance, full UPG recognition/admission results, rejected filesystem hits,
+  full first-segment default-key/hash checks, pinned matching vendor upgrade
+  source and newly acquired official gateway launch/context analysis. Exact
+  Philips native implementation remains unavailable; private evidence is under
+  `.local/tv-hello/ghidra-revisit/`.
+- `docs/agent/philips-probe-control.md`: actual ping/label receipts and DOM
+  readback, two-second polling protocol, bounded TCP/policy/vendor registry and
+  HbbTV object results, actual MSX HTTPS plugin/control acceptance and measured
+  v/t JSON cache-query/CORS repair, plus REA archive/chunk follow-up. Raw source,
+  firmware, capability URLs and evidence remain ignored. Function/source
+  diagnostics use exact ready-only shapes with a16KiB aggregate report limit.
 - `scripts/msx-mac-proof.mjs`, `tests/msx-mac-proof.test.mjs`: isolated Mac
   direct-browser receiver proof reusing `src/msx/` assets. Explicit private
   interface/TV peer, secret asset/session path, separate authenticated loopback
   status/stdin commands and observed ACKs; no media proxy. Import starts no
   listener. Private connection details remain ignored; physical browser/media
   acceptance is tracked in the [setup handoff](session-handoffs/2026-10-18-philips-browser-setup.md).
+- `docs/agent/msx-local-address-source.md`: exact public MSX validator/bootstrap/
+  security/XHR byte trace, REA/fixture receipts, retained TLS/zero-byte evidence,
+  and explicit limits on the browser private-network-policy inference.
+  `src/tv-bridge-probe/index.html` now also has a fixed parent-framework query:
+  only version/secure shown onscreen, no external SDK, extended/system getters
+  or report-schema changes. Actual TV result remains pending.
 - `docs/agent/{luma-receiver-options,receiver-apps}.md`: manufacturer DLNA claims,
   existing Android receiver apps, Kodi/VLC control interfaces and proposed tests;
   Kodi public/actual HLS and Portuguese subtitle acceptance is in `tests/manual-kodi.md`.
@@ -102,13 +144,68 @@
   Public DNS addresses are checked per redirect, not pinned to the HTTP socket.
   JVM runners cover parser/transport; Android subtitle fixtures cover runtime
   XML/charsets and trusted-ticket versus captured-LAN boundaries.
-- `src/msx/`, `MsxServer.java`: TV-owned MSX player/subtitle renderer and
+- `src/msx/`, `MsxServer.java`: TV-owned standalone-browser/MSX player/subtitle renderer and
   capability/peer-pinned phone LAN control server. No media proxy. Independent
   service executor/heartbeat and selected-target system controls coexist with
-  LUMA/Kodi. See [receiver domain](msx-receiver.md).
+  LUMA/Kodi. Fixed `msx.sample` owns its public MP4/short-lived authorization;
+  healthy `error:null` reports are accepted. New pages bootstrap before hello;
+  retained current-capability pages can reclaim an unapproved peer in an open
+  setup window, still requiring phone approval. Reset revokes the old capability.
+  `/msx/connect.html` redirects locally into the receiver. Standalone pages skip
+  the MSX SDK; only embedded pages load its optional upstream bridge.
+  Channel state/status exceptions preserve poll/heartbeat retries and pending
+  receipts without replaying executed commands; Ready follows a successful state
+  POST. Shared player/channel timer defaults call browser-global delegates;
+  direct copied host methods previously threw TypeError after hello in Chromium.
+  Native accepted-stage counters/current-state age and sparse stage logs
+  distinguish approval from connection. A guarded capability-relative diagnostic
+  GET records only six fixed client error codes; it never establishes readiness.
+  Fixed ping/label/reload use the approved queue; remote reload waits for state
+  plus explicit ACK before page exit. Actual TV matching d66f118d4c revision,
+  ping0→1, label ACK and reload/fresh-state ping1→0 are verified. A native-only
+  opt-in same-byte LAN fixture is installed: fixed capability/peer range route,
+  no general media proxy/private-URL authorization. Actual TV GET206/successful
+  Open, stable Pause and resumed progress are confirmed. The user also confirmed
+  picture and sound after an uninterrupted replay of this fixed clip.
+  See [receiver domain](msx-receiver.md).
+- `PhilipsTextController.java`: separate phone-local JointSPACE PIN grant,
+  Keystore-encrypted credentials and per-TV certificate pin. Only the native
+  server origin supplies `browserSetupUrl`: exact HTTP/private IPv4/high-port
+  origin plus `/msx/connect.html`, empty while stopped. No public redirect service
+  is used. Empty-argument `msx.launchBrowser`
+  checks freshly advertised browser support before the pinned `activities/browser`
+  request; acceptance explicitly does not prove loading. Empty-argument browser
+  typing uses the same URL/90-second budget; legacy MSX typing retains bare
+  `IP:port`/65 seconds. Paced/cancellable input receipts include mode, total and
+  partial counts; no arbitrary UI URL/text, clearing, Enter or uncertain retry.
+  Matter supplies the paired TV's resolved private address. `ConnectionService`
+  cancels queued/active typing on target change, reset/disconnect or shutdown.
+- `src/mobile/{index.html,app.js}`: distinct TV-remote/video setup, default
+  **Open TV receiver** browser shortcut, saved-PIN permission, manual browser-link
+  fallback, explicit legacy MSX mode, sample action and Home/Back beside Up.
+  Installed debug APK retains real hello/poll/state and observed remote controls.
+  Collapsed Developer tools compare loaded/server revisions, uptime/pings and
+  reported capabilities. Phone-only fractional-uptime/later-hello notice fixes
+  pass29 browser cases, are installed and physically verified by uptime705→1s/
+  “TV page reconnected.” after idle app Reload. Public W3C sample14:26:41
+  failed MEDIA_FAILED code4/network3/ready0 before metadata; no codec/TLS cause
+  follows. Same bytes over LAN now report Playing0:03, Pause0:19 stable, resumed
+  Playing0:24; the subsequent replay has user-confirmed picture and sound.
+  Full-length completion and broader media compatibility remain unproved.
+- `scripts/build-mobile.mjs`, Android asset task: optional explicit
+  `LUMA_DIAGNOSTIC_SAMPLE` accepts only the verified4372373-byte/SHA-bound W3C
+  clip and removes the generated copy by default. No media is checked in. Root
+  verified omission/wrong-file rejection/exact opt-in bytes. Native8/multi4/
+  build/lint and signed installation pass; receiver revision stays d66.
 - `tests/msx-receiver.test.mjs`, `tests/browser/mobile-receivers.spec.js`,
   `MsxInstrumentation.java`: direct-fetch player/channel, dual-target phone UI
-  and explicitly isolated emulator HTTP/approval/control tests.
+  and isolated emulator HTTP/approval/control/recovery tests. Receiver Node38 and
+  `tests/browser/msx-receiver.spec.js` real-browser timer regression pass, covering
+  native timer binding, polling/heartbeat, playback timeout and clearing. Preceding
+  native MSX 8 passed diagnostic guards; retained ACK/getter failure tests also pass.
+  `PhilipsTextInstrumentation.java` covers Digest/HMAC, PIN/certificate/storage
+  scope, fixed text pacing, partial failures/cancellation and capability-gated
+  browser acceptance versus load proof with fake TV IO.
 - `MatterControllerAdapter.java`: service-owned native Matter controller,
   Keystore-encrypted fabric, per-phone pairing, capability-based hardware
   navigation/volume/inputs, confirmed Off and additional-phone windows.
@@ -147,3 +244,18 @@
   and bounded public review sample, specific complaints and implementation limits.
 - `artifacts/`, `.local/`: ignored local evidence; never commit credentials/media.
 - `README.md`: build/load instructions; `package-lock.json`: pinned npm tools.
+
+- `WatchHistory.java`: bounded app-private movie/episode progress keyed by canonical
+  content identity; source bindings stay in RAM. Native fixtures cover receiver
+  handoff ownership, resume guards and persistence. Service integration is active.
+- `CatalogClient.java`: typed metadata/source reads from the frontend’s fixed API
+  origins. Raw source resolution is not equivalent to the frontend fallback.
+  The full TV catalog and owned WebView resolver are under active integration.
+- [TV remote controls](tv-remote-controls.md): key/pointer delivery, native caption
+  preparation, startup and shared-progress validation boundaries.
+
+- Offline viewing Library: `LibraryStore.java` persists watched title metadata and
+  per-episode progress in private SQLite; `WatchHistory` supplies validated points,
+  and `ConnectionService` serves paginated offline reads/durable resume lookup.
+  Phone Library uses existing typed fresh-source handoff.
+  [Contract and boundaries](offline-library.md).

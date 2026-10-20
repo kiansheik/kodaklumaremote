@@ -9,9 +9,29 @@
 </head>
 <body>
   <video id="video" playsinline preload="auto"></video>
-  <div id="waiting"><div class="mark">▰</div><h1>LUMA Remote</h1><p id="status">Connecting to your phone…</p><p class="hint">Keep this receiver open. Choose a video on your phone.</p></div>
+  <div id="waiting"><div class="mark">▰</div><h1>LUMA Remote</h1><p id="status">Connecting to your phone…</p><button id="start-playback" type="button" hidden>Start playback</button><button id="tv-open-library" type="button" hidden>Browse movies and series</button><p class="hint">Keep LUMA Remote running on your phone.</p></div>
   <div id="caption" aria-live="off"></div>
   <div id="notice" hidden></div>
+  <section id="tv-controls" aria-label="TV playback controls" hidden>
+    <div class="tv-control-heading"><h2 id="tv-control-title">Playback</h2><span id="tv-control-time"></span></div>
+    <div id="tv-control-row">
+      <button id="tv-play-pause" type="button">Play</button>
+      <button id="tv-seek-back" type="button">−10 seconds</button>
+      <button id="tv-seek-forward" type="button">+10 seconds</button>
+      <button id="tv-subtitles" type="button">Subtitles</button>
+      <button id="tv-browse" type="button">Browse</button>
+      <button id="tv-fullscreen" type="button" hidden>Full screen</button>
+      <button id="tv-close-controls" type="button">Hide controls</button>
+    </div>
+    <div id="tv-subtitle-picker" hidden><h3>Choose subtitles</h3><div id="tv-subtitle-list" role="group" aria-label="Subtitle languages"></div></div>
+    <section id="tv-library" aria-label="Movies and series" hidden>
+      <nav id="tv-library-nav" aria-label="Library sections"><button id="tv-library-movies" type="button">Movies</button><button id="tv-library-series" type="button">Series</button><button id="tv-library-history" type="button">Continue Watching</button><button id="tv-library-search" type="button">Search</button><button id="tv-library-back" type="button">Back</button><button id="tv-library-close" type="button">Return to video</button></nav>
+      <form id="tv-library-search-form" hidden><label for="tv-library-query">Find a movie or series</label><input id="tv-library-query" type="search" maxlength="120" autocomplete="off"><button type="submit">Search titles</button></form>
+      <h3 id="tv-library-title">Movies</h3><p id="tv-library-status" role="status"></p><div id="tv-library-content"></div>
+      <div id="tv-library-pages" hidden><button id="tv-library-previous" type="button">Previous page</button><span id="tv-library-page"></span><button id="tv-library-next" type="button">Next page</button></div>
+    </section>
+    <p id="tv-control-feedback" role="status">Use the arrows and OK. Back closes controls.</p>
+  </section>
   <script src="hls.min.js"></script>
   <script src="receiver-core.js"></script>
   <script src="receiver.js"></script>

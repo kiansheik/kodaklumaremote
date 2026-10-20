@@ -96,10 +96,12 @@ public final class MultiReceiverInstrumentation {
         } finally { connection.disconnect(); }
     }
     private JSONObject fixture() throws Exception { return request("http://10.0.2.2:" + arguments.getString("kodiPort") + "/fixture", null); }
-    private void tvState() throws Exception {
-        request(base + "state", object("client", CLIENT, "sessionId", session, "playback", object("active", true, "source", tvSource,
+    private void tvState() throws Exception { tvState(true); }
+    private void tvState(boolean active) throws Exception {
+        request(base + "state", object("client", CLIENT, "sessionId", session, "playback", object("active", active, "source", tvSource,
                 "title", "TV fixture", "paused", tvPaused, "positionSeconds", 15, "durationSeconds", 120, "canSeek", true,
-                "volume", object("current", 40, "max", 100), "tracks", new JSONArray(), "selectedIndex", -1, "subtitlesEnabled", false)));
+                "volume", object("current", 40, "max", 100), "tracks", new JSONArray(), "selectedIndex", -1, "subtitlesEnabled", false,
+                "receiverDebug", object("revision", JSONObject.NULL, "uptimeSeconds", 2, "pingCount", 0, "remoteReload", true, "remoteCommands", true))));
     }
     private JSONArray poll() throws Exception { return request(base + "poll?client=" + CLIENT + "&sessionId=" + session + "&after=" + after, null).getJSONArray("commands"); }
     private JSONObject nextCommand() throws Exception {
@@ -184,16 +186,69 @@ public final class MultiReceiverInstrumentation {
             launchAndBind(); connectLuma();
             JSONObject started = call("msx.start"); String origin = started.getString("startupUrl");
             require(new URL(origin).getHost().startsWith("10.0.2."), "TV HTTP fixture escaped the emulator interface");
+            require((origin + "/msx/connect.html").equals(started.getString("browserSetupUrl")), "Browser setup URL was not the active native LAN origin and fixed path");
             String home = request(origin + "/msx/start.json", null).getString("parameter").substring("content:".length());
             base = home.substring(0, home.length() - "home.json".length());
             session = request(base + "hello?client=" + CLIENT, null).getString("sessionId");
             call("msx.confirm", "host", new URL(origin).getHost()); tvState();
             for (String target : new String[] {"philips", "luma", "philips"}) { call("app.selectTarget", "target", target); bothConnected(); }
+            for (String method : new String[] {"msx.textPairRequest", "msx.typeAddress", "msx.typeBrowserAddress", "msx.launchBrowser"}) {
+                for (String key : new String[] {"host", "url", "text"}) {
+                    PendingCall invalidText = submit(method, key, "https://elsewhere.test");
+                    require(invalidText.ready.await(3, TimeUnit.SECONDS) && "TEXT_INVALID_INPUT".equals(invalidText.error.get()), "Fixed text RPC accepted a caller target or text");
+                }
+            }
+            PendingCall invalidPin = submit("msx.textPairGrant", "pin", "123");
+            require(invalidPin.ready.await(3, TimeUnit.SECONDS) && "TEXT_INVALID_PIN".equals(invalidPin.error.get()), "Text RPC accepted an invalid PIN");
+            runner.runOnMainSync(() -> service.authorizeToken("multi-current", "philips"));
+            for (String debugMethod : new String[] {"msx.debugPing", "msx.debugLabel", "msx.reloadReceiver"}) {
+                PendingCall invalidDebug = submit(debugMethod, "label", "Caller text");
+                require(invalidDebug.ready.await(3, TimeUnit.SECONDS) && "INVALID_REQUEST".equals(invalidDebug.error.get()), "Debug RPC accepted caller parameters");
+            }
+            call("app.selectTarget", "target", "luma");
+            for (String debugMethod : new String[] {"msx.debugPing", "msx.debugLabel", "msx.reloadReceiver"}) {
+                PendingCall wrongTarget = submit(debugMethod);
+                require(wrongTarget.ready.await(3, TimeUnit.SECONDS) && "INVALID_REQUEST".equals(wrongTarget.error.get()), "Debug RPC crossed selected receiver targets");
+            }
+            call("app.selectTarget", "target", "philips");
+            for (String debugMethod : new String[] {"msx.debugPing", "msx.debugLabel"}) {
+                PendingCall debug = submit(debugMethod); JSONObject debugCommand = nextCommand();
+                require(("msx.debugPing".equals(debugMethod) ? "ping" : "set-label").equals(debugCommand.getString("method")), "Debug RPC used the wrong wire command");
+                require("msx.debugPing".equals(debugMethod) ? debugCommand.getJSONObject("params").length() == 0
+                        : debugCommand.getJSONObject("params").length() == 1 && "LUMA debug channel ready".equals(debugCommand.getJSONObject("params").getString("label")), "Debug RPC changed the fixed payload");
+                require(debug.ready.getCount() == 1, "Debug RPC completed before its receipt"); acknowledge(debugCommand);
+                require(await(debug, 4).getBoolean("accepted") && FIRST.equals(tvSource), "Debug control changed media or lost its receipt");
+            }
+            PendingCall activeReload = submit("msx.reloadReceiver");
+            require(activeReload.ready.await(3, TimeUnit.SECONDS) && "RELOAD_BLOCKED".equals(activeReload.error.get()) && poll().length() == 0, "Reload interrupted active media");
+            tvState(false); Thread.sleep(50);
+            PendingCall reload = submit("msx.reloadReceiver"); JSONObject reloadCommand = nextCommand();
+            require("reload".equals(reloadCommand.getString("method")) && reloadCommand.getJSONObject("params").length() == 0 && reload.ready.getCount() == 1, "Idle reload was not a fixed receipt-bound command");
+            after = reloadCommand.getLong("id"); request(base + "ack", object("client", CLIENT, "sessionId", session, "id", after, "ok", true));
+            require(await(reload, 4).getBoolean("accepted"), "Idle reload receipt failed"); tvState();
+            for (Object[] supplied : new Object[][] {{"source", FIRST}, {"sourceToken", "multi-current"}, {"title", "Replacement"}}) {
+                PendingCall rejected = submit("msx.sample", supplied);
+                require(rejected.ready.await(3, TimeUnit.SECONDS) && "INVALID_REQUEST".equals(rejected.error.get()), "Sample accepted caller-supplied parameters");
+            }
+            PendingCall sample = submit("msx.sample"); JSONObject sampleCommand = nextCommand();
+            String fixedSample = "lan-fixture".equals(call("msx.status").getJSONObject("diagnostics").getString("sampleTransport"))
+                    ? base + "diagnostic-sintel.mp4" : "https://media.w3.org/2010/05/sintel/trailer.mp4";
+            require("open".equals(sampleCommand.getString("method")) && fixedSample.equals(sampleCommand.getJSONObject("params").getString("source")), "Service sample did not use its fixed owned or public media");
+            require(sample.ready.getCount() == 1, "Service sample completed without a TV receipt");
+            tvSource = sampleCommand.getJSONObject("params").getString("source"); acknowledge(sampleCommand);
+            require(await(sample, 4).getBoolean("accepted"), "Service sample failed after its receipt");
+            // A normal open using the pre-existing token proves the sample did
+            // not replace capture authorization. No fresh authorizeToken call.
+            PendingCall retainedCapture = submit("msx.open", "source", FIRST, "mimeType", "application/vnd.apple.mpegurl", "title", "TV fixture", "subtitles", new JSONArray(), "sourceToken", "multi-current");
+            JSONObject captured = nextCommand(); require(FIRST.equals(captured.getJSONObject("params").getString("source")), "Sample replaced capture authorization");
+            tvSource = FIRST; acknowledge(captured); require(await(retainedCapture, 4).getBoolean("accepted"), "Captured source failed after sample");
             passed("both receiver transports survive selected-target changes with Kodi API ready");
 
             phase = "independent queues";
             PendingCall opening = open(SECOND); JSONObject delivered = nextCommand();
             require("open".equals(delivered.getString("method")), "TV Open was not delivered");
+            PendingCall pendingReload = submit("msx.reloadReceiver");
+            require(pendingReload.ready.await(3, TimeUnit.SECONDS) && "RELOAD_BLOCKED".equals(pendingReload.error.get()), "Reload waited behind or interrupted a pending command");
             long before = SystemClock.elapsedRealtime(); call("msx.status"); require(SystemClock.elapsedRealtime() - before < 1500, "MSX status blocked behind Open");
             before = SystemClock.elapsedRealtime(); call("luma.status"); call("luma.key", "key", "right");
             require(SystemClock.elapsedRealtime() - before < 2500, "LUMA controls blocked behind TV Open");
@@ -233,6 +288,7 @@ public final class MultiReceiverInstrumentation {
             call("app.selectTarget", "target", "philips"); PendingCall pending = open(FOURTH); JSONObject last = nextCommand();
             require("open".equals(last.getString("method")), "Final Open not delivered"); tvSource = FOURTH; tvState();
             before = SystemClock.elapsedRealtime(); call("msx.disconnect"); require(SystemClock.elapsedRealtime() - before < 1500, "TV disconnect blocked behind delivered Open");
+            require(call("msx.status").getString("browserSetupUrl").isEmpty(), "Stopped server retained a browser setup URL");
             require(pending.ready.await(3, TimeUnit.SECONDS) && pending.error.get() != null, "TV disconnect did not cancel pending caller");
             require(service.snapshot().getJSONObject("connection").getBoolean("connected") && call("kodi.status").getBoolean("active"), "TV disconnect closed or stopped LUMA");
             require(!received.contains("stop") && FOURTH.equals(tvSource) && fixture().getInt("stops") == 0, "Disconnect sent a playback Stop");

@@ -9,6 +9,7 @@ import android.graphics.BitmapFactory;
 import android.os.Bundle;
 import android.os.Looper;
 import android.util.Base64;
+import chip.devicecontroller.ChipClusters;
 import com.google.zxing.BinaryBitmap;
 import com.google.zxing.MultiFormatReader;
 import com.google.zxing.RGBLuminanceSource;
@@ -17,6 +18,9 @@ import org.json.JSONObject;
 import java.lang.reflect.Field;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -40,6 +44,91 @@ public final class MatterInstrumentation {
         require(complete.await(10, TimeUnit.SECONDS), "Adapter callback timed out");
         require(expectedError == null ? error.get() == null : expectedError.equals(error.get()), "Unexpected adapter outcome");
         return result.get();
+    }
+    private static final class PowerCluster implements MatterControllerAdapter.PowerOnCluster {
+        List<Long> commands = Arrays.asList(0L, 1L, 2L);
+        final List<String> calls = new ArrayList<>(); boolean failCapabilities;
+        ChipClusters.DefaultClusterCallback on;
+        ChipClusters.BooleanAttributeCallback readback;
+        public void readAcceptedCommands(ChipClusters.OnOffCluster.AcceptedCommandListAttributeCallback callback) {
+            calls.add("capabilities");
+            if (failCapabilities) callback.onError(new IllegalStateException("owned read failure")); else callback.onSuccess(commands);
+        }
+        public void on(ChipClusters.DefaultClusterCallback callback) { calls.add("on"); on = callback; }
+        public void readOnOff(ChipClusters.BooleanAttributeCallback callback) { calls.add("readback"); readback = callback; }
+    }
+    private static final class PowerReceipt implements MatterControllerAdapter.PowerOnResult {
+        boolean current = true; int accepted, acknowledgements; Boolean onOff; String error; List<Long> capabilities;
+        public boolean current() { return current; }
+        public void capabilities(List<Long> commands) { capabilities = new ArrayList<>(commands); }
+        public void acknowledged() { acknowledgements++; }
+        public void accepted(Boolean value) { accepted++; onOff = value; }
+        public void rejected(String code) { error = code; }
+    }
+    private static void powerOnProtocol() {
+        PowerCluster unsupported = new PowerCluster(); unsupported.commands = Arrays.asList(0L, 2L);
+        PowerReceipt denied = new PowerReceipt(); MatterControllerAdapter.requestPowerOn(unsupported, denied);
+        require(unsupported.calls.equals(Arrays.asList("capabilities")) && "MATTER_UNSUPPORTED".equals(denied.error)
+                && denied.accepted == 0 && !denied.capabilities.contains(1L), "On bypassed a fresh command list without discrete On support");
+        PowerCluster missing = new PowerCluster(); missing.failCapabilities = true;
+        PowerReceipt unavailable = new PowerReceipt(); MatterControllerAdapter.requestPowerOn(missing, unavailable);
+        require(missing.on == null && "MATTER_UNAVAILABLE".equals(unavailable.error) && unavailable.capabilities.isEmpty(), "Unreadable capabilities still invoked power On");
+        PowerCluster supported = new PowerCluster(); PowerReceipt observed = new PowerReceipt();
+        MatterControllerAdapter.requestPowerOn(supported, observed);
+        require(supported.calls.equals(Arrays.asList("capabilities", "on")) && observed.accepted == 0, "Discrete On claimed success before command ACK");
+        supported.on.onSuccess();
+        require(supported.calls.equals(Arrays.asList("capabilities", "on", "readback")) && observed.accepted == 0 && observed.acknowledgements == 1, "Power state was fabricated from command ACK or the known ACK was not retained");
+        supported.readback.onSuccess(true); supported.on.onSuccess(); supported.readback.onSuccess(false);
+        require(observed.accepted == 1 && Boolean.TRUE.equals(observed.onOff) && supported.calls.size() == 3 && observed.error == null, "Successful readback was lost or duplicate callbacks replayed On/readback");
+        PowerCluster noReadback = new PowerCluster(); PowerReceipt unknown = new PowerReceipt();
+        MatterControllerAdapter.requestPowerOn(noReadback, unknown); noReadback.on.onSuccess(); noReadback.readback.onError(new IllegalStateException("owned readback failure"));
+        require(unknown.accepted == 1 && unknown.onOff == null && unknown.error == null && noReadback.calls.size() == 3, "Readback failure discarded the real ACK or invented powered state");
+        PowerCluster stillOff = new PowerCluster(); PowerReceipt off = new PowerReceipt();
+        MatterControllerAdapter.requestPowerOn(stillOff, off); stillOff.on.onSuccess(); stillOff.readback.onSuccess(false);
+        require(off.accepted == 1 && Boolean.FALSE.equals(off.onOff), "Observed Off was coerced into powered On");
+        PowerCluster rejected = new PowerCluster(); PowerReceipt failure = new PowerReceipt();
+        MatterControllerAdapter.requestPowerOn(rejected, failure); rejected.on.onError(new IllegalStateException("owned command failure"));
+        require(failure.accepted == 0 && "MATTER_REJECTED".equals(failure.error) && rejected.calls.equals(Arrays.asList("capabilities", "on")), "Failed or unknown On automatically retried or reached readback");
+        PowerCluster cancelled = new PowerCluster(); PowerReceipt stale = new PowerReceipt();
+        MatterControllerAdapter.requestPowerOn(cancelled, stale); stale.current = false; cancelled.on.onSuccess();
+        require(stale.accepted == 0 && cancelled.readback == null && cancelled.calls.size() == 2, "Cancelled power operation started a later read or reported success");
+    }
+    private static void powerOnWatchdog(MatterControllerAdapter adapter) throws Exception {
+        // Exercise the real request watchdog with an owned silent-read fixture.
+        // No native pointer is acquired; nulling the controller prevents the fake
+        // pointer marker from ever reaching JNI when its late callback releases.
+        Field controller = MatterControllerAdapter.class.getDeclaredField("controller"); controller.setAccessible(true);
+        Object nativeController = controller.get(adapter); controller.set(adapter, null);
+        try {
+            Field generation = MatterControllerAdapter.class.getDeclaredField("generation"); generation.setAccessible(true);
+            Class<?> requestType = Class.forName("dev.framextv.lumaremote.MatterControllerAdapter$Request");
+            java.lang.reflect.Constructor<?> constructor = requestType.getDeclaredConstructor(MatterControllerAdapter.class, MatterControllerAdapter.Callback.class, long.class, long.class); constructor.setAccessible(true);
+            Field pointer = requestType.getDeclaredField("pointer"), acknowledged = requestType.getDeclaredField("powerOnAcknowledged"); pointer.setAccessible(true); acknowledged.setAccessible(true);
+            CountDownLatch completed = new CountDownLatch(1); AtomicReference<JSONObject> receipt = new AtomicReference<>(); AtomicReference<String> failure = new AtomicReference<>();
+            java.util.concurrent.atomic.AtomicInteger completions = new java.util.concurrent.atomic.AtomicInteger();
+            MatterControllerAdapter.Callback callback = new MatterControllerAdapter.Callback() {
+                public void success(JSONObject value) { require(Looper.myLooper() == Looper.getMainLooper(), "Watchdog receipt was not on main thread"); receipt.set(value); completions.incrementAndGet(); completed.countDown(); }
+                public void failure(String code, String message) { failure.set(code); completions.incrementAndGet(); completed.countDown(); }
+            };
+            Object request = constructor.newInstance(adapter, callback, generation.getLong(adapter), 200L);
+            pointer.setLong(request, 0x1234L); acknowledged.setBoolean(request, true);
+            require(completed.await(3, TimeUnit.SECONDS), "Known On ACK was stranded by a silent readback");
+            require(failure.get() == null && receipt.get() != null && receipt.get().getBoolean("accepted") && !receipt.get().getBoolean("powerStateVerified")
+                    && receipt.get().isNull("onOff"), "Known On ACK became an unknown timeout or invented power state");
+            require(pointer.getLong(request) == 0x1234L, "Watchdog released a pointer while its SDK read could still be outstanding");
+            java.lang.reflect.Method guard = MatterControllerAdapter.class.getDeclaredMethod("guard", requestType); guard.setAccessible(true);
+            require(Boolean.FALSE.equals(guard.invoke(adapter, request)) && pointer.getLong(request) == 0, "Late callback failed to release the completed request pointer");
+            java.lang.reflect.Method success = requestType.getDeclaredMethod("success", JSONObject.class); success.setAccessible(true); success.invoke(request, new JSONObject());
+            require(completions.get() == 1, "Late callback completed the acknowledged power request twice");
+            CountDownLatch cancelled = new CountDownLatch(1); AtomicReference<String> cancellation = new AtomicReference<>();
+            MatterControllerAdapter.Callback cancelledCallback = new MatterControllerAdapter.Callback() {
+                public void success(JSONObject value) { cancellation.set("UNEXPECTED_SUCCESS"); cancelled.countDown(); }
+                public void failure(String code, String message) { cancellation.set(code); cancelled.countDown(); }
+            };
+            Object stale = constructor.newInstance(adapter, cancelledCallback, generation.getLong(adapter) - 1, 200L);
+            acknowledged.setBoolean(stale, true);
+            require(cancelled.await(3, TimeUnit.SECONDS) && "CANCELLED".equals(cancellation.get()), "Cancellation was replaced by a stale acknowledged-On success");
+        } finally { controller.set(adapter, nativeController); }
     }
     public static void run(Instrumentation runner) {
         int checks = 0; boolean stagedNode = false; Bundle result = new Bundle(); MatterControllerAdapter adapter = null;
@@ -81,15 +170,24 @@ public final class MatterInstrumentation {
             adapter = new MatterControllerAdapter(context, state -> { if (state.optBoolean("available")) initialized.countDown(); });
             require(initialized.await(20, TimeUnit.SECONDS), "Current JNI controller or production trust assets failed initialization");
             require(adapter.snapshot().getBoolean("available") && !adapter.snapshot().getBoolean("paired"), "Fresh controller state was incorrect");
+            require(!adapter.snapshot().getJSONObject("capabilities").getBoolean("powerOn"), "Fresh controller advertised unobserved power On");
             passed(runner, ++checks, "current JNI controller and production attestation roots initialize on Android");
 
             call(adapter, "matter.pair", new JSONObject().put("setupCode", "invalid fixture"), "INVALID_INPUT");
             call(adapter, "matter.powerOff", new JSONObject().put("confirmed", false), "INVALID_INPUT");
             call(adapter, "matter.powerOff", new JSONObject().put("confirmed", "true"), "INVALID_INPUT");
+            call(adapter, "matter.powerOn", new JSONObject().put("confirmed", true), "INVALID_INPUT");
+            call(adapter, "matter.powerOn", new JSONObject().put("on", true), "INVALID_INPUT");
+            call(adapter, "matter.powerOn", new JSONObject(), "MATTER_UNSUPPORTED");
+            field(adapter, "powerEndpoint", 1); field(adapter, "powerOnSupported", true);
+            call(adapter, "matter.powerOn", new JSONObject(), "MATTER_NOT_PAIRED");
+            field(adapter, "powerEndpoint", -1); field(adapter, "powerOnSupported", false);
+            powerOnProtocol();
+            powerOnWatchdog(adapter);
             call(adapter, "matter.forget", new JSONObject().put("confirmed", "true"), "INVALID_INPUT");
             call(adapter, "matter.key", new JSONObject().put("key", "unsupported"), "INVALID_INPUT");
             require(!adapter.snapshot().getBoolean("pairing"), "Invalid input started commissioning");
-            passed(runner, ++checks, "invalid pairing and unconfirmed hardware requests never start commissioning");
+            passed(runner, ++checks, "invalid hardware requests stay inert; discrete On requires fresh support, ACK and truthful optional readback");
 
             field(adapter, "pairing", true); field(adapter, "pairingNode", 0x7fff1234L);
             call(adapter, "matter.disconnect", new JSONObject(), null);
@@ -111,6 +209,7 @@ public final class MatterInstrumentation {
             stagedNode = true;
             field(adapter, "nodeId", 0x7fff1234L); field(adapter, "available", false);
             field(adapter, "currentVolume", 42); field(adapter, "currentInput", 3);
+            field(adapter, "powerOnSupported", true);
             call(adapter, "matter.forget", new JSONObject().put("confirmed", true), "MATTER_UNAVAILABLE");
             require(saved.contains("node"), "Failed TV removal erased the saved node");
             call(adapter, "matter.forget", new JSONObject().put("confirmed", true).put("localOnly", "true"), "INVALID_INPUT");
@@ -118,6 +217,7 @@ public final class MatterInstrumentation {
             JSONObject forgotten = call(adapter, "matter.forget", new JSONObject().put("confirmed", true).put("localOnly", true), null);
             require(!forgotten.getBoolean("paired") && "LOCAL_ONLY".equals(forgotten.getString("resetReason")) && !forgotten.getBoolean("tvFabricRemoved"), "Local recovery falsely claimed TV fabric removal");
             require(forgotten.has("volume") && forgotten.isNull("volume") && forgotten.has("currentInput") && forgotten.isNull("currentInput"), "Local recovery retained stale volume or input state");
+            require(!forgotten.getJSONObject("capabilities").getBoolean("powerOn"), "Forgotten TV retained stale power On support");
             require(!saved.contains("node") && SECRET.equals(storage.get(KEY)), "Local recovery changed controller identity or retained the node");
             require(lumaBefore.equals(context.getSharedPreferences("luma_settings", Context.MODE_PRIVATE).getAll()), "Local TV recovery changed LUMA or Kodi setup");
             field(adapter, "available", true);

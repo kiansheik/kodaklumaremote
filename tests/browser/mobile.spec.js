@@ -87,7 +87,7 @@ async function openApp(page, initialSnapshot = null) {
         case 'kodi.open': receiver.active = true; receiver.playing = true; receiver.sourceUrl = params.media.url; receiver.tracks = []; receiver.enabled = false; receiver.currentIndex = null; return { accepted: true };
         case 'kodi.pause': receiver.playing = false; return { accepted: true };
         case 'kodi.resume': receiver.playing = true; return { accepted: true };
-        case 'kodi.status': return { active: receiver.active, playing: receiver.playing, sourceUrl: receiver.sourceUrl, positionSeconds: receiver.position, durationSeconds: 600, canSeek: true };
+        case 'kodi.status': return { active: receiver.active, playing: receiver.playing, sourceUrl: receiver.sourceUrl, positionSeconds: receiver.position, durationSeconds: 600, canSeek: true, ...(receiver.stale ? {stale:true} : {}) };
         case 'kodi.getSubtitles':
           if (receiver.pendingTrack && --receiver.subtitleDelayReads <= 0) { receiver.tracks.push(receiver.pendingTrack); receiver.pendingTrack = null; }
           return { tracks: receiver.tracks.map((track, index) => ({ index, name: 'External' })), enabled: receiver.enabled, currentIndex: receiver.currentIndex };
@@ -95,7 +95,7 @@ async function openApp(page, initialSnapshot = null) {
         case 'kodi.subtitleDelivery': return { downloaded: !receiver.holdDelivery };
         case 'kodi.addSubtitle': if (receiver.subtitleDelayReads > 0) receiver.pendingTrack = params.track; else receiver.tracks.push(params.track); return { accepted: true };
         case 'kodi.setSubtitle': receiver.enabled = params.index !== 'off'; receiver.currentIndex = receiver.enabled ? params.index : null; return { accepted: true };
-        case 'kodi.seek': receiver.position = params.position; return { accepted: true };
+        case 'kodi.seek': if(!receiver.seekNoEffect) receiver.position = params.position; if(receiver.staleAfterSeek) receiver.stale=true; return { accepted: true };
         case 'kodi.stop': receiver.active = false; return { active: false };
         default: throw new Error('Unexpected fixture method');
       }
@@ -224,6 +224,42 @@ test('Remote, Devices and secondary panels fit small screens without document sc
   await page.getByRole('button', { name: '2 · Kodi', exact: true }).click();
   await expect(page.getByLabel('Password', { exact: true })).toHaveValue('');
   await expect(page.getByLabel('Username', { exact: true })).toHaveValue('');
+});
+
+test('native saved content resumes Kodi after playback proof and persists metadata before history binding', async ({page}) => {
+  await openApp(page); await setup(page);
+  const content={key:'framextv:movie:42',kind:'movie',contentId:'42',season:null,episode:null,watchUrl:'https://framextv.cc/watch/42',title:'Household movie'};
+  await page.evaluate(({media,content})=>window.LumaApp.onCapturedMedia({...media,content,resumeSeconds:125}),{media,content});
+  await expect(page.locator('#message')).toHaveText('Video is playing. Choose a language in Subtitles.');
+  await expect(page.locator('#playback-status')).toContainText('2:05');
+  const calls=await page.evaluate(()=>window.__calls);
+  expect(calls.filter(call=>call.method==='kodi.open')).toHaveLength(1);
+  expect(calls.filter(call=>call.method==='kodi.seek').map(call=>call.params)).toEqual([{position:125,expectedSourceUrl:media.url}]);
+  const ready=calls.find(call=>call.method==='app.handoffReady');
+  expect(ready.params.resumeApplied).toBe(true);
+  expect(ready.params.remote.media).toMatchObject({content,resumeSeconds:125});
+  expect(calls.findIndex(call=>call.method==='kodi.seek')).toBeLessThan(calls.indexOf(ready));
+});
+
+test('unverified Kodi resume remains playing without Open replay or history binding', async ({page}) => {
+  await page.clock.install(); await openApp(page); await setup(page);
+  await page.evaluate(media=>{window.__receiver.seekNoEffect=true;window.LumaApp.onCapturedMedia({...media,resumeSeconds:125});},media);
+  await expect.poll(()=>page.evaluate(()=>window.__calls.some(call=>call.method==='kodi.seek'))).toBe(true);
+  await page.clock.runFor(1100);
+  await expect(page.locator('#message')).toContainText('saved position could not be restored');
+  expect(await page.evaluate(()=>window.__calls.filter(call=>call.method==='kodi.open').length)).toBe(1);
+  expect(await page.evaluate(()=>window.__calls.find(call=>call.method==='app.handoffReady').params.resumeApplied)).toBe(false);
+  expect(await page.evaluate(()=>window.__receiver.active)).toBe(true);
+});
+
+test('stale Kodi state near the requested position cannot confirm resume', async ({page}) => {
+  await page.clock.install(); await openApp(page); await setup(page);
+  await page.evaluate(media=>{window.__receiver.staleAfterSeek=true;window.LumaApp.onCapturedMedia({...media,resumeSeconds:125});},media);
+  await expect.poll(()=>page.evaluate(()=>window.__calls.some(call=>call.method==='kodi.seek'))).toBe(true);
+  await page.clock.runFor(1100);
+  await expect(page.locator('#message')).toContainText('saved position could not be restored');
+  expect(await page.evaluate(()=>window.__receiver.position)).toBe(125);
+  expect(await page.evaluate(()=>window.__calls.find(call=>call.method==='app.handoffReady').params.resumeApplied)).toBe(false);
 });
 
 test('captured video starts without subtitle commands and keeps every language for manual selection without exposing sources', async ({ page }) => {
@@ -594,13 +630,20 @@ test('saved setup opens the remote while native reconnects and keeps configurati
   await page.evaluate(() => window.LumaApp.onConnectionState({ connection: { connected: true, configured: true, name: 'Saved LUMA' }, volume: { current: 6, max: 30 } }));
   await expect(page.locator('#device-badge')).toHaveAttribute('data-connected', 'true');
   await expect(page.getByRole('button', { name: 'Home', exact: true })).toBeEnabled();
-  const corners = await page.evaluate(() => {
+  const navigation = await page.evaluate(() => {
     const home = document.querySelector('[data-key="home"]').getBoundingClientRect();
+    const up = document.querySelector('[data-key="up"]').getBoundingClientRect();
     const back = document.querySelector('[data-key="back"]').getBoundingClientRect();
     const pad = document.querySelector('.dpad').getBoundingClientRect();
-    return { homeLeft: home.left < back.left, sameRow: home.top === back.top, abovePad: home.bottom < pad.top, keys: document.querySelectorAll('.dpad button').length };
+    return {
+      flanksUp: home.right <= up.left && up.right <= back.left,
+      sameRow: home.top === up.top && up.top === back.top,
+      insidePad: home.left >= pad.left && back.right <= pad.right && home.top >= pad.top && back.bottom <= pad.bottom,
+      keys: document.querySelectorAll('.dpad button').length,
+      headerKeys: document.querySelectorAll('.topline [data-key]').length
+    };
   });
-  expect(corners).toEqual({ homeLeft: true, sameRow: true, abovePad: true, keys: 5 });
+  expect(navigation).toEqual({ flanksUp: true, sameRow: true, insidePad: true, keys: 7, headerKeys: 0 });
   await layout(page);
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await layout(page);

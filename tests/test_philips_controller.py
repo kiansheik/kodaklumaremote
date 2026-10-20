@@ -186,17 +186,146 @@ class PhilipsTests(unittest.TestCase):
     def test_unicode_typing_preserves_spaces_and_uses_authenticated_key_payload(self):
         self.paired()
         text = "  Português: ação 🎬  "
-        result = self.client.type_text(text)
-        self.assertEqual(result, {"accepted": True, "textAppliedVerified": False})
-        self.assertEqual(self.server.events[-1], ("POST", "/6/input/key", {"unicode": text}))
+        with mock.patch.object(philips.time, "sleep"):
+            result = self.client.type_text(text)
+        self.assertEqual(result, {"accepted": True, "textAppliedVerified": False, "acknowledgedChars": len(text)})
+        inputs = [body for method, path, body in self.server.events if path == "/6/input/key"]
+        # Every codepoint has its own initial challenge/authenticated replay.
+        self.assertEqual(inputs, [{"unicode": character} for character in text for _ in range(2)])
+        self.assertTrue(all(len(body["unicode"]) == 1 for body in inputs))
         self.assertNotIn(text, json.dumps(result))
         self.assertNotIn(text, (self.store.directory / "credentials.json").read_text())
         self.server.deny = True
         with self.assertRaises(philips.PhilipsError) as caught: self.client.type_text("fixture")
         self.assertEqual(caught.exception.code, "TV_REJECTED")
+        self.assertEqual(caught.exception.acknowledged_chars, 0)
+        self.assertFalse(caught.exception.partial_input)
+
+    def test_typing_stops_at_first_known_or_unknown_failure_without_replaying_input(self):
+        self.paired()
+        text = " ação PRIVATE-TEXT"
+        for uncertain in (False, True):
+            for acknowledged in (0, 2):
+                failure = philips.PhilipsError("REQUEST_TIMEOUT" if uncertain else "TV_REJECTED", uncertain)
+                with self.subTest(uncertain=uncertain, acknowledged=acknowledged), \
+                        mock.patch.object(philips.time, "sleep"), \
+                        mock.patch.object(self.client.transport, "request", side_effect=[{}] * acknowledged + [failure]) as request:
+                    with self.assertRaises(philips.PhilipsError) as caught:
+                        self.client.type_text(text)
+                    error = caught.exception
+                    self.assertEqual(error.acknowledged_chars, acknowledged)
+                    self.assertEqual(error.uncertain, uncertain)
+                    self.assertEqual(error.partial_input, bool(acknowledged) or uncertain)
+                    self.assertEqual([call.args[1] for call in request.call_args_list],
+                                     [{"unicode": character} for character in text[:acknowledged + 1]])
+                    self.assertNotIn(text, str(error))
+
+    def test_typing_network_and_spacing_share_one_deadline_without_real_sleep(self):
+        self.paired()
+        clock = [100.0]
+        timeouts = []
+        pauses = []
+
+        def pause(seconds):
+            pauses.append(seconds)
+            clock[0] += seconds
+
+        def request(path, payload, credentials, json_required=True, timeout=8):
+            timeouts.append(timeout)
+            if timeout < 7.9:
+                clock[0] += timeout
+                raise philips.PhilipsError("REQUEST_TIMEOUT", True)
+            clock[0] += 7.9
+            return {}
+
+        with mock.patch.object(philips.time, "monotonic", side_effect=lambda: clock[0]), \
+                mock.patch.object(philips.time, "sleep", side_effect=pause), \
+                mock.patch.object(self.client.transport, "request", side_effect=request) as transport:
+            with self.assertRaises(philips.PhilipsError) as caught:
+                self.client.type_text("a" * 30)
+        self.assertEqual(caught.exception.acknowledged_chars, 8)
+        self.assertTrue(caught.exception.uncertain)
+        self.assertTrue(caught.exception.partial_input)
+        self.assertEqual(transport.call_count, 9)
+        self.assertAlmostEqual(clock[0], 165.0)
+        self.assertTrue(all(seconds == 0.15 for seconds in pauses))
+        self.assertTrue(0 < timeouts[-1] < 1)
+        self.assertTrue(all(timeout <= 8 for timeout in timeouts))
+
+    def test_typing_deadline_between_keys_does_not_send_another_key(self):
+        self.paired()
+        clock = [100.0]
+
+        def request(*args, **kwargs):
+            clock[0] = 165.0
+            return {}
+
+        with mock.patch.object(philips.time, "monotonic", side_effect=lambda: clock[0]), \
+                mock.patch.object(philips.time, "sleep") as pause, \
+                mock.patch.object(self.client.transport, "request", side_effect=request) as transport:
+            with self.assertRaises(philips.PhilipsError) as caught:
+                self.client.type_text("abc")
+        self.assertEqual(caught.exception.code, "TYPING_DEADLINE")
+        self.assertEqual(caught.exception.acknowledged_chars, 1)
+        self.assertFalse(caught.exception.uncertain)
+        self.assertTrue(caught.exception.partial_input)
+        self.assertEqual(transport.call_count, 1)
+        pause.assert_not_called()
+
+    def test_typing_wall_deadline_interrupts_inflight_request_and_restores_alarm(self):
+        self.paired()
+        installed = []
+        previous = philips.signal.getsignal(philips.signal.SIGALRM)
+
+        def install(signum, handler):
+            installed.append(handler)
+
+        def blocked_request(*args, **kwargs):
+            installed[0](philips.signal.SIGALRM, None)
+
+        with mock.patch.object(philips.signal, "getitimer", return_value=(0, 0)), \
+                mock.patch.object(philips.signal, "signal", side_effect=install), \
+                mock.patch.object(philips.signal, "setitimer") as timer, \
+                mock.patch.object(self.client.transport, "request", side_effect=blocked_request) as request:
+            with self.assertRaises(philips.PhilipsError) as caught:
+                self.client.type_text("abc")
+        self.assertEqual(caught.exception.code, "TYPING_DEADLINE")
+        self.assertTrue(caught.exception.uncertain)
+        self.assertEqual(caught.exception.acknowledged_chars, 0)
+        self.assertTrue(caught.exception.partial_input)
+        self.assertEqual(request.call_count, 1)
+        self.assertEqual(installed[-1], previous)
+        self.assertEqual(timer.call_args.args, (philips.signal.ITIMER_REAL, 0))
+
+    def test_typing_refuses_competing_alarm_before_sending_input(self):
+        self.paired()
+        with mock.patch.object(philips.signal, "getitimer", return_value=(10, 0)), \
+                mock.patch.object(self.client.transport, "request") as request:
+            with self.assertRaises(philips.PhilipsError) as caught:
+                self.client.type_text("abc")
+        self.assertEqual(caught.exception.code, "TYPING_DEADLINE_UNAVAILABLE")
+        self.assertEqual(caught.exception.acknowledged_chars, 0)
+        self.assertFalse(caught.exception.partial_input)
+        request.assert_not_called()
+
+    def test_cli_partial_typing_error_reports_counts_without_private_text(self):
+        hints = self.directory / "fixture-hints.json"
+        hints.write_text(json.dumps([{"ip": ADDRESS}]))
+        stdout, stderr = io.StringIO(), io.StringIO()
+        error = philips.PhilipsError("REQUEST_TIMEOUT", True, acknowledged_chars=2, partial_input=True)
+        arguments = [philips.__file__, "--state-dir", str(self.store.directory), "--address-hints", str(hints), "type"]
+        with mock.patch.object(philips.sys, "argv", arguments), \
+                mock.patch.object(philips, "read_private_text", return_value="PRIVATE-TEXT"), \
+                mock.patch.object(philips.PhilipsController, "type_text", side_effect=error), \
+                contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            self.assertEqual(philips.main(), 1)
+        self.assertEqual(json.loads(stderr.getvalue()), {"error": "REQUEST_TIMEOUT", "outcome": "unknown",
+                         "acknowledgedChars": 2, "partialInput": True, "textAppliedVerified": False})
+        self.assertNotIn("PRIVATE-TEXT", stdout.getvalue() + stderr.getvalue())
+        self.assertNotIn(ADDRESS, stdout.getvalue() + stderr.getvalue())
 
     def test_invalid_typing_never_sends_a_request(self):
-        for value in ("", "line\nbreak", "\x00", "tab\there", "\x7f", "\u0085", "\ud800", "x" * 2049, None):
+        for value in ("", "line\nbreak", "\x00", "tab\there", "\x7f", "safe prefix\u0085", "\ud800", "x" * 2049, None):
             with self.subTest(text="redacted"), self.assertRaises(philips.PhilipsError) as caught:
                 self.client.type_text(value)
             self.assertEqual(caught.exception.code, "INVALID_TEXT")

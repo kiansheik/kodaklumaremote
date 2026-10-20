@@ -1,5 +1,420 @@
 # Current state
 
+## Release preparation: Philips player and offline viewing library
+
+The user confirmed actual Avatar S1E1 HLS picture, sound and Portuguese captions,
+with smooth playback and 23 captured tracks. The normalized selected caption also
+returned LAN GET200 with a successful receipt while video continued. These are
+specific device acceptance results, not a promise for every stream or language.
+
+The last installed phone APK is the pointer candidate SHA-256
+`9d2d4a7df94f3e0e3678220671461f2c4de97af90ff63b0d82668844896fc797`,
+loaded/server receiver revision `48c1b14a42`, version0.4.6/code15. Remote JavaScript
+reload works. The physical remote produces pointer input: Down then OK opens the
+panel, but arrows/selection on that installed candidate failed. The newer unlocked
+pointer/focused-OK adapter and full catalog are source-tested, not TV-accepted.
+The user stopped Philips device work for the day; do not resume it implicitly.
+
+The user set Last source. Discrete Matter On was acknowledged while already on;
+standby wake and visible browser restoration remain unverified. No power-off
+acceptance test ran. Local DevView/native TV execution is not established.
+
+The user then explicitly authorized publication. Final prepared public0.4.6/code16
+APK SHA-256 is `90349bb058c110ebd5e8798a17681be1b105c4a19d13647289d4c131e7afd790`,
+size9757226 bytes, receiver revision `000c06d0d4`. The production signature,
+package/version/minimum API and hash/size are verified; the diagnostic media fixture
+is absent. Publication and live feed verification are the remaining release steps.
+This APK has not been installed on the phone; the last device build remains code15.
+
+The new phone **Library** keeps durable SQLite movie/series metadata and every newly
+observed episode's progress, independently of the recent-history100-record limit.
+It migrates genuine retained history, serves offline search/details, shows watched
+state/last device, and offers explicit Resume/Start over/known next episode on the
+selected Philips or Kodak/LUMA/Kodi target. Reads perform no network or playback.
+Fresh source resolution is separate; URLs/tokens/media are not saved. Artwork bytes
+are not cached. Earlier untracked or already-evicted viewing cannot be recovered.
+
+Checks: Node243, Python controller21, mobile browser41+39, receiver browser11;
+native catalog5/history6/offline Library6/TV catalog5/resolver4/MSX8/multi4/Matter7
+pass (45groups). A separate fixed-title
+live emulator capture resolved HLS with three declared tracks; its plain stream API
+had returned no source. Final signed Android build/lint pass. Library, cross-device
+resume and the latest remote adapter remain without real-device acceptance.
+[Library contract](offline-library.md), [TV implementation](tv-remote-controls.md),
+[release handoff](session-handoffs/2026-10-20-release-0.4.6.md),
+[device-work checkpoint](session-handoffs/2026-10-20-tv-player-catalog-progress.md).
+
+## Latest: user confirms LAN sample picture and sound
+
+After a requested uninterrupted replay, the user confirmed **“yeah video and
+sounds, it looked great actually.”** Picture and sound for the fixed phone-hosted
+Sintel clip are now physically verified. Pause/resume and remote reload have
+separate TV-report evidence below. Full-length completion, general streams,
+subtitles, phone-off use and native TV execution remain unverified.
+[Acceptance handoff](session-handoffs/2026-10-20-tv-picture-sound-acceptance.md).
+
+The combined local0.4.6/code15 APK is installed with Success and saved data
+preserved. Installed SHA-256:
+`e0ddaf939cc648e2ad5e7c3b6f54e06a5469ceeeaa53ebc01808ddc4fc9410a4`.
+Build/lint and native MSX8/multi-receiver4 groups pass;38 receiver Node,
+29 mobile browser and one real Chromium check remain passing. The unchanged
+loaded/server receiver revision is `d66f118d4c`; the existing TV page reconnected
+without another user refresh, BOOTSTRAP/HELLO14:33:56 and POLL/STATE14:33:57.
+
+At14:34:18 the TV requested the fixed LAN sample with GET206. Its valid Open
+receipt produced **“Sample is playing”** and receiver state **Playing0:03/0:52**.
+Pause acknowledged at **0:19**, a later report remained **Paused0:19**, then
+Resume acknowledged and advanced to **Playing0:24**. This is actual TV-reported
+playback/control proof. The subsequent replay has user-confirmed picture and
+sound; full-length completion was not captured. Private evidence is
+`.local/tv-hello/android-player/lan-sample-physical-proof.json` and the four
+`lan-sample-{playing,paused,paused-stable,resumed}-ui.xml` files.
+
+The public W3C delivery failed at14:26:41 with MEDIA_FAILED, media code4/
+networkState3/readyState0 before metadata. The exact same bytes work over LAN,
+isolating a delivery-path difference without identifying TLS or another exact
+cause. This clip's codecs are not a general blocker. The fixed phone-hosted
+fixture uses the approved-peer/capability route with ranges; it is not an
+arbitrary media proxy or private-URL admission. Explicit `LUMA_DIAGNOSTIC_SAMPLE`
+packaging verifies4372373 bytes/SHA-256
+`b670602fa00934ca27c4351bb0efe7ea7a07fae57284e44226025eeed7c51254`;
+default builds omit it, wrong input fails, and no media is checked into Git.
+
+Both phone feedback repairs are now installed and physically checked. Uptime
+shows numeric seconds; after playback was idle, an app Reload acknowledgement
+was followed by **“TV page reconnected.”**, uptime705→1s and matching d66 revision.
+Evidence: `debug-final-reconnected-ui.xml`. The later requested replay was
+started from the app and left uninterrupted for the user's picture/sound check.
+No further manual TV refresh is requested. Real streams, subtitles and phone-off
+operation remain open.
+Local DevView routing is loopback-tested only; no native permission or native
+process Hello World is established.
+[Latest LAN sample handoff](session-handoffs/2026-10-20-lan-sample-playback.md).
+
+## Earlier debug channel checkpoint
+
+The user asked to carry the earlier probe's debug controls into the actual TV
+receiver. Fixed ping, **LUMA debug channel ready** label and receipt-ordered
+reload are implemented in the existing approved channel and collapsed phone
+Developer tools. Empty native RPCs require Philips selected; reload is blocked
+during active playback or pending work. Ping/label preserve media. The receiver
+reports bounded uptime/ping count/capabilities and its injected revision; native
+diagnostics report the packaged revision. Missing legacy fields remain compatible.
+
+The final signed debug APK is installed with Success and saved data preserved.
+Its checks pass: 38 receiver Node, 29 mobile receiver browser, one real Chromium,
+8 native MSX and 4 multi-receiver groups. Tools stay hidden during PIN entry or
+disconnection without reported debug state; fixture visibility/summary bounds
+also account for hidden closed-details children. Packaged bytes/revision are
+verified. The ignored Android-player installation receipt records
+`remoteReceiverDebugControls`; use it to distinguish same-version candidates.
+
+The user confirmed the TV page was already reloaded; one Down returned focus
+from the URL bar. Actual phone Developer tools now show matching Loaded/Server
+`d66f118d4c`, reported capabilities and enabled controls. A real app Ping was
+acknowledged and incremented its counter0→1; the fixed label was acknowledged.
+One remote Reload was acknowledged, followed by fresh receiver state with the
+same revision, ping count1→0 and controls enabled again. Remote JavaScript
+reload completed on the actual TV. A label ACK is not visible-text confirmation.
+Private evidence includes `debug-reload-reconnected-ui.xml` under Android-player.
+
+Two phone-only feedback repairs follow: fractional uptime was valid but its UI
+formatter required an integer. It now accepts finite seconds0..315360000 and
+floors the display, keeping ping counts strictly integral. Reload waiting now
+clears only after a later connected snapshot has a valid loaded revision and
+hello count greater than the valid receipt's baseline. An unchanged heartbeat
+or revision alone is insufficient; an observed counter reset invalidates that
+proof. Focused3/3 and full29/29 browser checks pass. This earlier checkpoint
+preceded their combined installation and physical verification above; the
+61fb673f…ccde005 debug APK has been superseded. Receiver JavaScript stays d66.
+
+The actual W3C sample at14:26:41 failed `MEDIA_FAILED`, with media error code4,
+networkState3 and readyState0, before metadata. This numeric tuple does not
+identify a codec, TLS, policy or network cause. The later successful LAN
+comparison is recorded above. At this checkpoint a native-only candidate was
+being implemented: explicit
+`LUMA_DIAGNOSTIC_SAMPLE` packaging accepts only the4372373-byte file with SHA-256
+`b670602fa00934ca27c4351bb0efe7ea7a07fae57284e44226025eeed7c51254`.
+Root verified default builds omit it, a wrong file fails, and opt-in output
+matches those bytes. The fixed capability/approved-peer route is neither a
+media proxy nor arbitrary private-URL authorization; no media is added to Git.
+The later candidate native fixtures/build/install and TV-reported playback now
+pass as above. Use the private receipt to distinguish installed artifacts.
+
+Local DevView routing
+is prepared/tested only on loopback; no DNS/native grant or native Hello World
+is established.
+[Debug-channel handoff](session-handoffs/2026-10-20-receiver-debug-channel.md).
+
+## Installed numeric diagnostics before debug carryover
+
+The user explicitly resumed: **“don't stop. I want to get something working”**,
+and asked about local DevView. Continue in the existing Android app; the earlier
+navigation deferral no longer freezes the task. TV browser remains the default,
+with the exact native LAN origin plus `/msx/connect.html`, saved PIN/certificate
+permission and no public redirect dependency. MSX remains secondary.
+
+Before debug carryover, the signed local0.4.6/code15 numeric-media diagnostic build was installed on the Samsung
+with `adb install -r` Success and saved data preserved. Debug/test/release builds
+and lint pass;33 receiver Node checks and one real Chromium receiver
+regression pass. Native MSX8/8 and multi-receiver4/4 groups pass;
+earlier26/26 mobile receiver browser checks also pass.
+Current artifact identity
+and installation fields are in ignored
+`.local/tv-hello/android-player/browser-shortcut-build-receipt.json`; use the
+receipt rather than an older same-version APK hash. Its `browserHostTimerFix`
+and `exceptionSafeReceiver` fields are true; `mediaDiagnostics` and
+`persistentPlaybackError` are also true.
+
+After the latest installation, the existing TV page automatically reconnected:
+current-process BOOTSTRAP_READY/HELLO_READY14:08:03 and POLL_READY/STATE_READY
+14:08:04 all200. The actual phone-to-TV handshake is established and survives
+the native upgrade without another address-entry step. These requests used the
+already loaded page; they do not prove that the new diagnostic JavaScript ran.
+
+After an earlier helper stopped at the native website overlay without sending
+the sample, a grounded ADB tap reached **Play sample** and visibly showed Starting.
+This actual sample RPC returned a generic rejection. The user reported no TV
+error, only no playback. The installed Google-hosted sample returned403 during
+a source check; the generic receipt does not independently identify the TV-side
+failure. W3C Sintel was then installed and tried through a grounded raw sample
+tap. It failed with `ACK_FAILED open MEDIA_FAILED` at14:04:35. Real Mac Chromium
+video/core playback of that W3C source succeeds with duration52.208s; this is not
+a TV decode/playback result. Picture, sound, progressing time and successful TV
+playback remain unverified.
+
+At this earlier checkpoint, bounded nullable media diagnostics/error persistence
+were installed and one TV refresh was pending. That bootstrap gap is now closed
+by the matching reported debug revision and actual ping/reload proof above.
+The subsequent sample supplied the numeric failure tuple; no specific cause or
+successful playback follows from it.
+
+The preceding TV refresh reached hello but no poll/state/client-error report.
+Real Chromium reproduced the source fault: copying native timer functions onto
+an object and invoking them as methods throws TypeError. Both player and channel
+defaults now delegate through ordinary global calls, with guarded scheduling.
+The real browser regression covers this host behavior; independent Chromium
+execution produced hello/poll/state with no page errors. The actual TV then
+recovered its handshake after the same fix; no speculative video-getter cause
+is claimed.
+
+The installed changes keep tick/loop/heartbeat retries alive after synchronous
+player/request/status-callback failures and preserve a pending command receipt
+without replaying its action. A first-failure report uses one of six fixed codes
+independently of `player.state()`. Its capability/peer/origin-bound GET diagnostic
+route and first HELLO/POLL/STATE logs never confer connection. The TV now shows
+Ready only after a successful state POST.
+
+Before this fix, the first direct LAN browser-launch request was accepted but produced no observed
+new session; visible navigation caused by it was not separately confirmed. The
+user confirmed they were already on the LUMA page showing **“Approve this TV in
+LUMA Remote on your phone.”** At the agent's request they refreshed that current
+page once. The phone then showed **“TV allowed. Waiting for receiver status.”**:
+`sessionApproved:true`, `lastStateMsAgo:-1`. A fresh page contacted the phone and
+saved approval was recognized, but no valid playback state has been received for
+this session. New bootstrap200 and no400 were observed. The precise stall after
+hello/poll remained unknown; sample playback was **not attempted**. One later
+Confirm-key acknowledgement still left it waiting for state; it did not prove
+field focus or a required gesture.
+
+Read-only checks of the two documented inspector ports9222/7001 at `/json/list`
+were unreachable (`URLError`). Exact TV identity was verified; a read GET of
+`activities/browser` was rejected, so no current browser URL was obtained. A
+bounded34.9-second Mac loopback observation left its counters unchanged; it does
+not diagnose the phone receiver's missing state report.
+
+Fresh local DevView research found no supported accountless backend mode, and the
+installed catalog URL/native grants remain unknown; an owned presence-only test
+and loopback-tested local routing harness are prepared, with no real DNS/router/
+account change or native-process Hello World established.
+[DevView findings](philips-sideload-followup.md#resumed-local-devview-review).
+[Current resume handoff](session-handoffs/2026-10-20-receiver-handshake-resume.md),
+[earlier browser entry history](session-handoffs/2026-10-20-browser-receiver-shortcut.md)
+and [receiver contract](msx-receiver.md).
+
+## Earlier installed candidate and discovery history
+
+Current user authorization: **Android is now in scope** (explicitly revoked the
+earlier exclusion). Continue in the existing phone app, not a separate phone
+browser remote. An older local0.4.6/code15 candidate was built, signed and installed on the actual
+phone with saved pairing preserved. It includes fixed sample playback, healthy
+`error:null` validation, retained-page approval recovery, revised MSX instructions,
+native PIN-paired **Enter TV address**, and Home/Back flanking Up. Build/lint,
+25 receiver/14 Mac-proof Node fixtures and native8+4+4 groups pass. The full mobile
+browser run passed54/55; its sole failure expected the deliberately replaced
+corner layout. That assertion now checks Home–Up–Back inside the D-pad and passes
+on a focused rerun; no UI change was needed for the failure.
+
+Earlier PIN diagnosis: user saw the TV PIN, entered it on the phone and reported
+an unclear return to the same setup screen. Live app inspection shows address
+entry enabled and a successful typing acknowledgement. Source conditions imply
+the PIN grant and credential save succeeded. The user confirms the TV remained
+on the **LUMA Remote waiting screen**, where no MSX address field was selected;
+keys being acknowledged did not establish visible insertion. No PIN re-pair or
+automatic typing retry was initiated. User was asked to open/clear the MSX setup
+field. Persistent pairing confirmation, contextual errors/expiry and setup-window
+restart visibility are now fixed, built/linted and installed on the phone without
+clearing its data. Seven focused browser cases and four native text groups pass;
+independent review found no blocker. Post-install physical UI confirmation was
+not obtained (app was no longer foreground); no own-package crash appeared in
+the checked buffer. Actual video playback remains unverified.
+Current DHCP addresses differ from older Mac hints; never treat a stale address
+as TV identity. Private captures/addresses remain ignored.
+[Receiver details](msx-receiver.md).
+
+The user rejected another blind LAN retry and requested exact MSX/REA tracing.
+Official0.1.167 source confirms bare `IP:port` was already valid; HTTP/HTTPS URL
+prefixes and paths are invalid in the startup field. Padlock/pageHTTPS/secure2or4
+select HTTPS.29 exact-declaration fixtures and focused REA parsing pass; platform
+defaults are secure0, not proof of installed settings. Earlier two TLS-to-HTTP
+connections are explained; two zero-byte connections remain unidentified.
+Chromium112 public-insecure-to-private blocking is a source-backed inference,
+not a measured TV net error. A fixed parent framework/secure query is prepared
+in the probe, onscreen only, with source/origin/correlation checks;19 helper,
+10 exact-contract and one framed-browser fixture pass. Actual TV result pending;
+user says the earlier diagnostic tile/address is not saved. Do not ask for it
+as though it were available. [MSX source report](msx-local-address-source.md).
+
+Earlier redirect lead: public `https://httpbin.org/redirect-to?url=...` was verified
+to return302 to fictional private-IP targets, with no follow. Public httpbingo
+restricts destinations and rejected that test. This is a potential page-navigation
+bootstrap; an MSX JSON XHR redirect still ends at the LAN target and does not
+remove browser policy. It also does not supply `/msx/start.json`. No new tunnel,
+short link, public deployment or actual TV navigation was performed.
+
+Native TV/DNS work remains separate: local zero-network context probe prepared,
+but DNS routing/native enableDevtools grants are unproved and unapplied. Public
+DevView HTTP delivery means TLS alone cannot rule out content routing; catalog
+scheme and firmware grants remain unknown. No native-process Hello World,
+partner account/backend change, DNS change or publication occurred.
+[Sideload follow-up](philips-sideload-followup.md).
+
+Latest Ghidra reassessment: actual REA/Ghidra import+disassembly+decompile now
+passes on an owned ELF control. Proper REA admission and independent actual
+Ghidra loader/filesystem probes recognize the official ZIP but not its full
+UPG; no native Philips component is extracted. Both old filesystem-magic hits
+fail structural checks. Full first5MiB default-key tests on both releases fail
+script detection and the reference plaintext SHA384 record comparison.
+New pinned vendor U-Boot source matches the upgrade structure and explains
+decrypted-segment hashes/CBC handling, with an explicit different-product/SoC
+boundary. Newly acquired official TITAN gateway JS traces catalog lookup,
+URL resolution and loadApp forwarding; it does not supply an absent native
+binding. Gateway initialization has native listener/getter side effects and
+was not loaded on TV.15 isolated gateway checks pass with fake APIs/network0.
+Focused REA gateway/SDK excerpts parse5736ASTnodes/0failures; semantic coverage
+unknown, no vendor-code execution.
+Existing MSX loopback status responds with matching revisions, rejected0 and
+no pending command/reload. Android/MSX/tunnel/global settings preserved.
+[Reassessment](philips-ghidra-reassessment.md).
+
+Latest DevView review: live public bundle re-fetched/hash matched. The client
+POSTs devices/link for a server PIN, checks devices/check roughly every3s, and
+on successful JSON schedules /apps after2s, then POSTs session metadata. Client
+UI/cache and backend authorization are distinct;90s is a UI timer, backend TTL
+and portal redeem/cookie internals are unknown.13 offline stub scenarios pass;
+REA parsed2093 AST nodes from exact excerpts with semantic coverage unknown.
+No pairing/account/native bridge/TV state changed. [Protocol report](philips-devview-protocol.md).
+
+Ghidra is installed: Homebrew12.1.3 at /opt/homebrew/opt/ghidra/libexec. REA's
+PATH discovery mistakes its bin/ghidraRun wrapper for an installation root.
+Use GHIDRA_INSTALL_DIR=/opt/homebrew/opt/ghidra/libexec and
+JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home for REA.
+Approved doctor verifies configured:true/available:true and JDK/native arm64
+checks; no reinstall/global edits. Initial Java EPERM was sandbox-only. Do not
+infer missing installation from an unconfigured provider. Firmware container
+decoding is still outstanding. Actual headless control/probes are now verified
+in the reassessment above. [Setup handoff](session-handoffs/2026-10-20-devview-acknowledgement.md).
+
+Latest MSX result: user successfully opened the diagnostic through temporary
+trusted HTTPS. Fresh TV pageGET/ready/heartbeat and subsequent exact ping/label
+receipts verified embedded passive execution, DOM text readback and1920×1080.
+Only viewport height differs from the measured Internet compatibility profile;
+TCP socket APIs/public HbbTV factory remain absent, OMI registry matches.
+Bootstrap Origin is HTTP MSX; HTTPS plugin still secureContext:false, consistent
+with Chromium's insecure-ancestor rule. No native calls in this MSX sample.
+The current startup uses this Mac/temporary tunnel; fully LAN MSX remains
+unverified.18 server+1 private adapter fixtures and desktop MSX/framed checks pass.
+Android and installed firmware unchanged.
+
+Earlier steering: compare installed Media Station X with Internet. User opened
+MSX and retried its existing Mac startup parameter; exact status0 reproduced.
+Separate peer-pinned MSX bootstrap/home/framed-probe routes and passive sampling
+are prepared. Local framed Chrome command test passes; actual TV made two
+connections but no HTTP/bootstrap/plugin request, no ready report. Initial
+clientErrors2/TLS-prefix0 did not identify the cause. A later controlled retry
+with both padlock settings had4 expected-TV connections:2 TLS,2 empty idle
+timeouts,1034bytes and0 HTTP. HTTPS reached the HTTP-only listener; no CORS
+request was received. Temporary trusted-HTTPS delivery now passes real desktop MSX menu/plugin and
+label ACK. Its measured v/t JSON query parameters exposed a strict-route/CORS
+bug, now fixed with a bounded validator. Separate public adapter exposes no
+controls/firmware; TV attempt used a fresh capability after desktop reset and passed. Routine
+native constructor/object experiments are now disabled by default.
+
+Latest 2026-10-20 request: continue REA firmware probing in parallel with
+privileged TCP/vendor API investigation toward a custom remote. **Android stays
+excluded.** Actual TV fixed `ping` and `set-label` commands now have matching
+handler receipts; final label acknowledged only after DOM text readback. No
+browser GUI navigation was needed. This uses the existing Mac listener and
+TV-originated2s polling, not a newly established TV TCP listener. See
+[live control and privileged-interface follow-up](philips-probe-control.md) and
+[handoff](session-handoffs/2026-10-20-probe-control-round2.md).
+
+Current Internet-page TCPServerSocket remains absent; direct-sockets policy
+query unsupported. Standard external getter read returned normal search-provider
+methods. Newly observed opera_omi exposes messaging/event methods plus a
+constructors registry. One fixed registry getter read and standard Map iteration
+revealed OIPF/HbbTV classes including CSManager, RemoteManagement and
+NetworkInterface; no opaque message was sent. One final zero-argument CSManager
+construction attempt failed with TypeError and no instance. Its source was only a
+38-character native marker; sampled prototype had no relay methods. The documented
+HbbTV typed-object route was also tested: DOM object created, factory unavailable,
+local/remote relay methods absent after1.5s. No relay activation or TCP bind ran.
+These are bounded context observations, not absence across all vendor app modes.
+
+REA6.7.0 independently inventoried the complete matching current-version ZIP and
+UPG hashes, with complete container-entry coverage but unknown inner format/
+architecture. Current/older footer lengths equal48bytes per117/111 segments;
+raw-segment/payload MD5/SHA1/SHA256/SHA384 checks matched none of the footer.
+No filesystem/native executable recovered; Linux firmware engines remain
+unavailable. Ghidra has since been found/configured as recorded above; the
+earlier default provider report did not establish installation absence. Source captures, raw firmware and evidence stay
+ignored. [Main implementation report](philips-firmware-implementation.md),
+[browser source appendix](philips-browser-internals.md) and
+[media function contract](philips-media-internals.md) preserve the upstream versus
+actual-vendor boundary. Eighteen protocol fixtures and final isolated Chrome
+checks pass. Original pairings, releases, Android and installed firmware unchanged.
+
+The user visibly loaded our probe in Internet. Fixed server-triggered reload and
+automatic source-edit refresh both subsequently produced new GET/ready reports
+on the actual TV without further clicks. The same private receiver URL survives
+our listener restarts. The compatibility probe then auto-deployed successfully:
+reported **Chrome112.0.4147.62 / OMI4.24 / TitanOS3.0**,1920×945 viewport on a
+1920×1080 screen. This differs from TITAN's TPM256L family table (Chromium122);
+Vewd defines OMI as its Core version; exact vendor engine/build provenance is
+unresolved. Do not infer CPU ABI from
+navigator.platform or Safari/WebKit from compatibility tokens.
+
+Actual probe exposes fetch/Promise, WebAssembly, WebSocket, MediaSource and
+WebGL/WebGL2 constructors. All ten fixed codec MIME checks declare probably/MSE
+support; HLS and DASH declare maybe via canPlayType. These are declarations,
+not decoding/playback proof. This LAN HTTP page is not a secure context; absent
+EME/VideoDecoder/service-worker/subtle-crypto exposure does not settle HTTPS or
+catalog-app support. Only SmartTvA_API is present among the four bridge samples;
+its bounded surface contains exit and hasCapability. The initial compatibility sample invoked no vendor method/getter; the later
+fixed getter/object diagnostics are recorded above. See [browser compatibility](philips-browser-compatibility.md).
+
+The exact TV is43PFG6910/78 on **TPM256L_V251.003.105.021**, TITAN/Linux.
+The user created a Partner Portal account and awaits developer verification;
+DevView enrollment/debug and a Home-launcher app remain unverified. Earlier REA
+DevView inspection found enrolled app/debug bridge consumers, not their native
+implementation. Focused public SDK analysis now informs browser classification
+and media checks, with partial/unknown semantic coverage. Native-process Hello
+World has not been established. Original pairings/Android/releases/firmware and
+unrelated headers.txt are preserved. Private session evidence stays ignored.
+See [latest handoff](session-handoffs/2026-10-20-browser-compatibility.md),
+[execution history](philips-app-execution.md) and
+[typing/remote-update evidence](session-handoffs/2026-10-20-tv-probe-live-control.md).
+
 2026-10-18: New repository; original empty `headers.txt` preserved. Public frontend
 inspection and two clean automated browser baselines are complete. The site is a
 React SPA with same-origin `/embed/` HTML5/hls.js playback and **existing native

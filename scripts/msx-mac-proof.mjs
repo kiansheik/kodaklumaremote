@@ -239,7 +239,15 @@ export function createProofServer({host, tvHost, port = 4179, controlPort = 0,
   }
   async function receiver(req, res) {
     if (req.socket.remoteAddress !== tvHost) fail('REQUEST_REJECTED', 403);
-    const {relative, query} = requestInfo(req, receiverOrigin, `/${token}/`);
+    const {relative: pathname, query} = requestInfo(req, receiverOrigin, '/');
+    // The shared receiver checks its loaded capability before each fresh hello.
+    // This marker does not claim or renew a session and is TV-peer restricted.
+    if (req.method === 'GET' && pathname === 'msx/start.json' && !query.size) {
+      send(res, 200, {parameter: `content:${receiverOrigin}/${token}/home.json`}); return;
+    }
+    const prefix = `${token}/`;
+    if (!pathname.startsWith(prefix)) fail('REQUEST_REJECTED', 404);
+    const relative = pathname.slice(prefix.length);
     if (req.method === 'GET' && ASSETS.has(relative) && !query.size) {
       counters.assets++; const [bytes, type] = assets.get(relative); send(res, 200, bytes, type); return;
     }

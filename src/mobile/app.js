@@ -2,13 +2,42 @@ import { createHandoffCoordinator } from '../handoff/coordinator.mjs';
 
 const $ = selector => document.querySelector(selector);
 const DEFAULT_SITE = 'https://framextv.cc/watch/284833/1/1';
+const TV_TEXT_ACK = 'TV acknowledged the keys. Check the address in MSX Setup before selecting Go / OK.';
+const TV_BROWSER_ACK = 'TV acknowledged the keys. Check the Internet browser address before selecting Go / OK.';
+const TV_BROWSER_WAIT = 'Launch requested. Waiting for the TV to connect…';
+const TV_BROWSER_BOOKMARK = 'Open Internet on the TV, then choose your saved LUMA bookmark. The receiver is not connected yet.';
 const MSX_SETUP_HINTS = Object.freeze({
   HTTPS_REQUEST: 'The TV is trying a secure connection. In Media Station X setup, leave the padlock open.',
   ORIGIN_REJECTED: 'The TV reached this phone, but its app connection was rejected. Share the error shown on the TV.',
   PAIRING_EXPIRED: 'Tap Restart TV setup, then try the setup again on the TV.',
   BOOTSTRAP_READY: 'The TV loaded the setup. Open “Connect this TV” on the TV next.',
+  HELLO_READY: 'The TV receiver reached this phone.',
+  POLL_READY: 'The TV receiver checked its connection.',
+  STATE_READY: 'The TV returned receiver status.',
+  ACK_READY: 'The TV returned a command receipt.',
+});
+const TV_TEXT_ERRORS = Object.freeze({
+  TEXT_PAIRING_REQUIRED: 'Enable address entry once with the TV’s PIN.',
+  TEXT_PAIRING_PENDING: 'Enter the four-digit PIN shown on the TV.',
+  TEXT_PAIRING_EXPIRED: 'The TV PIN expired. Request a new PIN.',
+  TEXT_ALREADY_PAIRED: 'Address entry is already enabled on this phone.',
+  TEXT_INVALID_PIN: 'Enter the four-digit PIN shown on the TV.',
+  TEXT_ADDRESS_UNAVAILABLE: 'Reconnect your paired TV remote, then try address entry again.',
+  TEXT_UNSUPPORTED: 'This TV is not offering address entry. Enter the shown address manually.',
+  TEXT_AUTH_REQUIRED: 'Enable address entry again with the TV’s PIN.',
+  TEXT_CERTIFICATE_CHANGED: 'The TV connection changed. Pair address entry again.',
+  TEXT_REJECTED: 'The TV did not accept address entry. Select and clear its address field before retrying.',
+  TEXT_TIMEOUT: 'Entry may be incomplete. Clear the TV’s address field before trying again.',
+  TEXT_UNREACHABLE: 'Cannot reach the TV. Check its power and Wi-Fi.',
+  TEXT_STORAGE: 'Permission could not be saved on this phone. Try again.',
+  TEXT_INVALID_INPUT: 'Check the TV PIN and try again.',
+  TEXT_BUSY: 'Wait for address entry to finish.',
+  TEXT_PARTIAL: 'Entry may be incomplete. Clear the TV’s address field before trying again.',
+  TEXT_CANCELLED: 'Address entry stopped. Clear the TV’s address field before trying again.',
+  TEXT_BROWSER_UNSUPPORTED: 'Automatic browser launch is unavailable. Use Enter link manually with the TV browser address bar selected.',
 });
 const errors = {
+  ...TV_TEXT_ERRORS,
   NATIVE_UNAVAILABLE: 'Open this page in the LUMA app to use the remote.',
   TIMEOUT: 'The projector did not reply. Check its connection and try again.',
   CONNECTION_FAILED: 'Could not connect to the projector. Check its power and Wi-Fi.',
@@ -34,6 +63,7 @@ const errors = {
   SUBTITLE_INVALID: 'This subtitle file has no valid timed captions. Choose another subtitle.',
   SUBTITLE_TOO_LARGE: 'This subtitle file is too large. Choose another subtitle.',
   SUBTITLE_EXPIRED: 'The prepared subtitle is no longer available. Choose it again.',
+  SUBTITLE_FAILED: 'The subtitle could not load. Video playback is unchanged; choose another language or try again.',
   SUBTITLE_DELIVERY: 'Kodi could not retrieve the prepared subtitles. Check that the phone and projector share the same Wi-Fi.',
   CANNOT_SEEK: 'Kodi reports that this video cannot seek.',
   BUSY: 'The remote is busy. Wait a moment and try again.',
@@ -43,13 +73,13 @@ const errors = {
   SOURCE_CHANGED: 'The selected video changed. Choose it again in Browse.',
   STORAGE_UNAVAILABLE: 'Settings could not be saved on this phone. Try setup again.',
   SETUP_TIMEOUT: 'Kodi did not become ready. Check its HTTP control setting and try again.',
-  MSX_NOT_CONNECTED: 'Open Media Station X on the Philips TV and connect it in TV setup.',
+  MSX_NOT_CONNECTED: 'Open your TV receiver from TV connection setup.',
   MSX_TIMEOUT: 'The TV did not finish this request. Refresh its connection and check the TV screen.',
   MSX_PLAYBACK: 'The TV could not play this video. Check the TV screen and try another source.',
   MSX_SUBTITLE: 'The TV could not load the selected subtitles. Choose another language and try again.',
   MSX_NETWORK: 'Could not start the TV connection. Check this phone’s Wi-Fi and try TV setup again.',
   MSX_PAIRING: 'Allow your TV in TV connection setup before using its remote.',
-  MSX_UNAVAILABLE: 'Media Station X is not connected. Open it on the TV and refresh the connection.',
+  MSX_UNAVAILABLE: 'The TV receiver is not connected. Open it from TV connection setup and refresh.',
   MSX_REJECTED: 'The TV could not finish this request. Check playback or try another subtitle language.',
   MATTER_UNAVAILABLE: 'TV pairing is unavailable on this device.',
   MATTER_PAIRING: 'Pairing did not finish. Check that the TV is ready to add a controller and try again.',
@@ -73,7 +103,7 @@ const state = {
   jobToken: null, flowController: null, setupFlow: false, volume: null, skipNextLaunch: false, subtitleFlow: false, subtitleError: null,
   settings: { hasReceiver: false, hasKodi: false, autoConnect: true },
   target: 'luma', pendingTarget: 'luma',
-  tvSetup: 'remote', matterShareTimer: null,
+  tvSetup: 'remote', tvEntry: 'browser', tvBrowserManual: false, matterShareTimer: null,
   matter: { available: false, paired: false, connected: false, pairing: false, capabilities: {}, volume: null, inputs: [] },
   philips: { connected: false, host: '', name: 'Philips TV', startupUrl: '', awaitingApproval: false, pendingHost: '', playback: null, activeMedia: null, tracks: [], catalog: [], selectedIndex: null, subtitlesEnabled: false, volume: null, subtitlePage: 0 },
 };
@@ -89,7 +119,44 @@ let changingTarget = false;
 let pendingVolume = null;
 let volumeTimer = null;
 let volumeFlight = false;
+let historySelection = 0;
+let historyController = null;
+let libraryItems = [], libraryDetail = null, librarySelected = null, libraryNext = null;
+let libraryLoading = false, libraryOffset = 0, libraryLimit = 50, libraryHasMore = false, libraryQuery = '';
 const VOLUME_COOLDOWN_MS = 2000;
+
+function contentDescriptor(value) {
+  if (!value || !['movie', 'tv'].includes(value.kind) || typeof value.contentId !== 'string' || !/^[1-9][0-9]{0,9}$/.test(value.contentId)) return null;
+  const tv = value.kind === 'tv';
+  if (tv && (!Number.isInteger(value.season) || value.season < 0 || value.season > 9999 || !Number.isInteger(value.episode) || value.episode < 1 || value.episode > 9999)) return null;
+  const suffix = tv ? `/${value.season}/${value.episode}` : '';
+  const key = `framextv:${value.kind}:${value.contentId}${tv ? `:${value.season}:${value.episode}` : ''}`;
+  if (value.key !== key || value.watchUrl !== `https://framextv.cc/watch/${value.contentId}${suffix}`) return null;
+  return { key, kind: value.kind, contentId: value.contentId, season: tv ? value.season : null, episode: tv ? value.episode : null, watchUrl: value.watchUrl, title: title(value.title) };
+}
+function mediaMetadata(media) {
+  const content = contentDescriptor(media?.content);
+  const resumeSeconds = Number.isFinite(media?.resumeSeconds) && media.resumeSeconds >= 0 && media.resumeSeconds <= 17280000 ? media.resumeSeconds : 0;
+  return { ...(content ? { content } : {}), ...(resumeSeconds > 0 ? { resumeSeconds } : {}) };
+}
+async function resumeMedia(media, target, signal) {
+  const seconds = mediaMetadata(media).resumeSeconds || 0;
+  if (seconds < 1) return true;
+  try {
+    if (signal?.aborted) return false;
+    await rpc(target === 'philips' ? 'msx.seek' : 'kodi.seek', { [target === 'philips' ? 'seconds' : 'position']: seconds, expectedSourceUrl: media.url }, { signal, timeoutMs: 15000 });
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (signal?.aborted) return false;
+      const result = await rpc(target === 'philips' ? 'msx.status' : 'kodi.status', target === 'philips' ? {} : { expectedSourceUrl: media.url }, { signal, timeoutMs: 5000 });
+      if (target === 'philips') msxState(result); else playback(result);
+      const snapshot = target === 'philips' ? result?.playback : result;
+      const source = snapshot?.sourceUrl || snapshot?.source;
+      if (snapshot?.active === true && snapshot.stale !== true && (target !== 'philips' || result.connected === true) && source === media.url && Number.isFinite(snapshot.positionSeconds) && snapshot.positionSeconds >= seconds - 5 && snapshot.positionSeconds <= seconds + 20) return true;
+      if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 500));
+    }
+  } catch { /* Playback has started. A failed seek must never reopen it. */ }
+  return false;
+}
 
 function receiver(target = state.target) { return target === 'philips' ? state.philips : state; }
 function tvConnected() { return state.philips.connected || state.matter.connected; }
@@ -119,7 +186,7 @@ function matterState(value) {
   if (value.capabilities && typeof value.capabilities === 'object') {
     const capabilities = value.capabilities;
     remote.capabilities = {};
-    for (const key of ['navigation', 'power', 'volume', 'inputs', 'openWindow']) remote.capabilities[key] = capabilities[key] === true;
+    for (const key of ['navigation', 'power', 'powerOn', 'volume', 'inputs', 'openWindow']) remote.capabilities[key] = capabilities[key] === true;
   }
   if (value.volume === null) remote.volume = null;
   else if (Number.isInteger(value.volume?.current) && Number.isInteger(value.volume?.max) && value.volume.max > 0 && value.volume.current >= (value.volume.min || 0) && value.volume.current <= value.volume.max) {
@@ -151,28 +218,68 @@ function renderRemote() {
   $('#volume-range').value = String(value?.current || 0);
   $('#volume-range').setAttribute('aria-valuetext', value ? `${value.current} of ${value.max}` : 'Unavailable');
 }
+function receiverRevision(value) { return typeof value === 'string' && /^[a-f0-9]{64}$/i.test(value) ? value.toLowerCase() : null; }
+function receiverDebug(value) {
+  if (!value || typeof value !== 'object') return null;
+  return { revision: receiverRevision(value.revision), remoteReload: value.remoteReload === true, remoteCommands: value.remoteCommands === true,
+    uptimeSeconds: Number.isFinite(value.uptimeSeconds) && value.uptimeSeconds >= 0 && value.uptimeSeconds <= 315360000 ? Math.floor(value.uptimeSeconds) : null,
+    pingCount: Number.isSafeInteger(value.pingCount) && value.pingCount >= 0 ? value.pingCount : null,
+    inputCount: Number.isSafeInteger(value.inputCount) && value.inputCount >= 0 && value.inputCount <= 1000000000 ? value.inputCount : null,
+    lastInput: ['none', 'key-enter', 'key-arrow', 'key-back', 'key-media', 'pointer-background', 'pointer-arrow'].includes(value.lastInput) ? value.lastInput : null,
+    pointerLockSupported: typeof value.pointerLockSupported === 'boolean' ? value.pointerLockSupported : null,
+    pointerLocked: typeof value.pointerLocked === 'boolean' ? value.pointerLocked : null,
+    pointerMoveCount: Number.isSafeInteger(value.pointerMoveCount) && value.pointerMoveCount >= 0 && value.pointerMoveCount <= 1000000000 ? value.pointerMoveCount : null,
+    pointerLockError: ['none','not-allowed','unsupported','event-error','other'].includes(value.pointerLockError) ? value.pointerLockError : null };
+}
 function msxState(value) {
   if (!value || typeof value !== 'object') return;
   const remote = state.philips;
   if (value.matter) matterState(value.matter);
   const wasConnected = remote.connected;
+  let reloadReconnected = false;
+  const wasTextPairing = remote.textPairing;
+  remote.typingAvailable = value.typingAvailable === true;
+  remote.textPermissionSaved = value.textPermissionSaved === true || remote.typingAvailable;
+  remote.typingBusy = value.typingBusy === true;
+  remote.textPairing = value.textPairing === true;
+  remote.textPairingExpiresInSeconds = Number.isFinite(value.textPairingExpiresInSeconds) && value.textPairingExpiresInSeconds > 0 ? Math.min(600, value.textPairingExpiresInSeconds) : 0;
+  remote.textError = Object.hasOwn(TV_TEXT_ERRORS, value.textError) ? value.textError : null;
+  if (wasTextPairing && !remote.textPairing) {
+    $('#msx-text-pin').value = '';
+    remote.typingNotice = !remote.textPermissionSaved && !remote.typingBusy ? TV_TEXT_ERRORS[remote.textError] || TV_TEXT_ERRORS.TEXT_PAIRING_EXPIRED : '';
+    remote.typingNoticeError = !!remote.typingNotice;
+  }
   if (value.diagnostics && typeof value.diagnostics === 'object') {
     // Native diagnostics are reduced to fixed reasons and counts. Never copy
     // request origins, URLs, capability tokens or server messages into the UI.
     remote.diagnostics = {};
-    for (const key of ['connections', 'tlsRequests', 'bootstrapRequests', 'bootstrapAccepted', 'lastStatus', 'lastRequestMsAgo']) {
+    remote.diagnostics.assetRevision = receiverRevision(value.diagnostics.assetRevision);
+    for (const key of ['connections', 'tlsRequests', 'bootstrapRequests', 'bootstrapAccepted', 'helloAccepted', 'pollAccepted', 'stateAccepted', 'lastStatus', 'lastRequestMsAgo']) {
       const count = value.diagnostics[key];
       if (Number.isSafeInteger(count) && count >= 0) remote.diagnostics[key] = count;
     }
+    for (const key of ['lastHelloMsAgo', 'lastPollMsAgo', 'lastStateMsAgo']) {
+      const age = value.diagnostics[key];
+      if (Number.isSafeInteger(age) && age >= -1) remote.diagnostics[key] = age;
+    }
+    for (const key of ['sessionPresent', 'sessionApproved']) if (typeof value.diagnostics[key] === 'boolean') remote.diagnostics[key] = value.diagnostics[key];
     const reason = value.diagnostics.lastReason;
     if (Object.hasOwn(MSX_SETUP_HINTS, reason)) remote.diagnostics.lastReason = reason;
   }
   if (typeof value.connected === 'boolean') remote.connected = value.connected;
+  for (const key of ['configured', 'pairingOpen']) if (typeof value[key] === 'boolean') remote[key] = value[key];
   if (typeof value.host === 'string' && privateHost(value.host)) remote.host = value.host;
   if (typeof value.name === 'string') remote.name = safeText(value.name) || 'Philips TV';
   if (typeof value.awaitingApproval === 'boolean') remote.awaitingApproval = value.awaitingApproval;
+  if ((remote.connected || remote.awaitingApproval) && remote.typingNotice === TV_BROWSER_WAIT) remote.typingNotice = '';
   remote.pendingCommand = value.pendingCommand || null;
   if (remote.openUncertain && !remote.pendingCommand && (value.lastCommand || Object.hasOwn(value, 'pendingCommand'))) remote.openUncertain = false;
+  if (Number.isSafeInteger(value.lastCommand?.id)) remote.lastReceiptId = value.lastCommand.id;
+  if (remote.sampleBridgeUncertain) {
+    const settledSample = value.lastCommand?.method === 'open' && Number.isSafeInteger(value.lastCommand.id) && value.lastCommand.id > remote.sampleAfterReceipt;
+    if (!remote.pendingCommand && settledSample) remote.sampleBridgeUncertain = false;
+    else remote.openUncertain = true;
+  }
   remote.pendingHost = privateHost(value.pendingHost || '') ? value.pendingHost : '';
   if (typeof value.startupUrl === 'string') {
     if (!value.startupUrl) remote.startupUrl = '';
@@ -181,13 +288,14 @@ function msxState(value) {
       if (url.protocol === 'http:' && privateHost(url.hostname) && !url.username && !url.password) remote.startupUrl = url.origin;
     } catch { /* Only show the native listener's local address. */ }
   }
+  remote.browserSetupUrl = remote.startupUrl && value.browserSetupUrl === remote.startupUrl + '/msx/connect.html' ? value.browserSetupUrl : '';
   const snapshot = value.playback;
   if (snapshot && typeof snapshot.active === 'boolean') {
     const sourceUrl = snapshot.sourceUrl || snapshot.source;
     if (remote.activeMedia && snapshot.active && sourceUrl && sourceUrl !== remote.activeMedia.url) {
       remote.activeMedia = null; remote.catalog = []; remote.tracks = [];
     }
-    remote.playback = { ...snapshot, sourceUrl, playing: typeof snapshot.playing === 'boolean' ? snapshot.playing : snapshot.paused !== true };
+    remote.playback = { ...snapshot, receiverDebug: receiverDebug(snapshot.receiverDebug), sourceUrl, playing: typeof snapshot.playing === 'boolean' ? snapshot.playing : snapshot.paused !== true };
     if (snapshot.active && !remote.activeMedia && typeof sourceUrl === 'string') remote.activeMedia = { url: sourceUrl, title: title(snapshot.title) };
     if (Array.isArray(snapshot.tracks)) {
       remote.tracks = snapshot.tracks.slice(0, 128).filter(track => Number.isInteger(track?.index)).map(track => ({ index: track.index, language: safeText(track.language, 64), label: safeText(track.label, 200) }));
@@ -197,12 +305,23 @@ function msxState(value) {
     if (snapshot.selectedIndex === null || Number.isInteger(snapshot.selectedIndex)) remote.selectedIndex = snapshot.selectedIndex;
     volume(snapshot, 'philips');
   }
+  const reloadHello = value.diagnostics?.helloAccepted;
+  if (Number.isSafeInteger(remote.debugReloadHelloBaseline) && Number.isSafeInteger(reloadHello) && reloadHello >= 0) {
+    if (reloadHello < remote.debugReloadHelloBaseline) remote.debugReloadHelloBaseline = null;
+    else if (reloadHello > remote.debugReloadHelloBaseline && value.connected === true && receiverRevision(snapshot?.receiverDebug?.revision)) {
+      remote.debugReloadHelloBaseline = null;
+      remote.debugNotice = 'TV page reconnected.';
+      remote.debugNoticeError = false;
+      reloadReconnected = true;
+      if ($('#message').textContent === 'Reload acknowledged. Waiting for the TV to reconnect…') message(remote.debugNotice);
+    }
+  }
   volume(value, 'philips');
   if (state.target === 'philips') renderTracks();
   renderControls();
   if (!wasConnected && remote.connected && state.target === 'philips' && $('#page-devices').hidden === false) {
     page('remote');
-    message('Philips TV connected. Your remote is ready.');
+    message(reloadReconnected ? 'TV page reconnected.' : 'Philips TV connected. Your remote is ready.');
     if (state.pendingMedia && state.pendingTarget === 'philips') {
       state.autoStart = true;
       if (!state.busy && !state.handoff) queueMicrotask(() => void startCasting());
@@ -371,6 +490,10 @@ function deviceStep(name) {
   if (name === 'kodi') $('#kodi-step').setAttribute('aria-current', 'step');
 }
 function closeSheet() {
+  if (state.sheet === 'history') {
+    historySelection++;
+    if (historyController) { historyController.abort(); historyController = null; void rpc('app.cancelCatalog', {}, { timeoutMs: 2000 }).catch(() => {}); state.busy = false; renderControls(); }
+  }
   if (state.sheet === 'matter-share') {
     clearTimeout(state.matterShareTimer);
     $('#matter-qr').removeAttribute('src');
@@ -393,6 +516,7 @@ function sheet(name) {
   $('#sheet').hidden = false;
   for (const panel of document.querySelectorAll('.sheet-panel')) panel.hidden = panel.id !== `panel-${name}`;
   $('#sheet-title').textContent = { settings: 'Configuration', reset: 'Forget saved setup', power: state.target === 'philips' ? 'Turn off the TV?' : 'Turn off the projector?', more: 'More controls', typing: 'Type on the projector', apps: 'Your apps', subtitles: 'Subtitles', seek: 'Go to time', inputs: 'TV inputs', 'matter-share': 'Add another phone', handoff: state.setupFlow ? 'Set up Kodi' : 'Start casting' }[name];
+  if (name === 'history') $('#sheet-title').textContent = 'Library';
   $('#close-sheet').focus();
   if (name === 'power') $('#cancel-power').focus();
   if (name === 'typing') $('#remote-text').focus();
@@ -408,6 +532,7 @@ function renderControls() {
   const free = state.native && !state.busy && !state.handoff;
   const tv = state.target === 'philips';
   const remote = receiver();
+  const browserEntry = state.tvEntry === 'browser';
   const matter = state.matter;
   const tvRemote = free && tv && matter.connected;
   const navigation = navigationReady();
@@ -424,7 +549,7 @@ function renderControls() {
   $('#tab-devices').hidden = saved;
   $('#show-settings').hidden = !saved;
   $('#show-settings').disabled = !free;
-  $('#device-badge').textContent = tv ? (matter.connected ? 'TV remote connected' : remote.connected ? 'Media Station X connected' : 'TV not connected') : state.connected ? (state.name || 'Projector connected') : 'No projector connected';
+  $('#device-badge').textContent = tv ? (matter.connected ? 'TV remote connected' : remote.connected ? 'TV receiver connected' : 'TV not connected') : state.connected ? (state.name || 'Projector connected') : 'No projector connected';
   $('#device-badge').dataset.connected = String(tv ? tvConnected() : state.connected);
   $('#tv-setup-tabs').hidden = !tv || !matter.available;
   $('#tv-setup-remote').setAttribute('aria-selected', String(state.tvSetup === 'remote'));
@@ -441,23 +566,84 @@ function renderControls() {
   $('#receiver-panel').hidden ||= tv;
   $('#kodi-panel').hidden ||= tv;
   if (!tv && $('#receiver-panel').hidden && $('#kodi-panel').hidden) deviceStep('receiver');
-  $('#msx-startup').hidden = !remote.startupUrl;
+  $('#msx-startup').hidden = !remote.startupUrl || browserEntry;
   $('#msx-startup').textContent = remote.startupUrl ? new URL(remote.startupUrl).host : '';
-  $('#msx-pairing').textContent = remote.awaitingApproval && remote.pendingHost ? `Allow the TV at ${remote.pendingHost} if it is yours.` : remote.connected ? 'TV connected. You can choose a video in Browse.' : remote.startupUrl ? 'Enter this address on the TV, then allow the connection here.' : 'Use the same Wi-Fi network on both devices.';
-  const setupHint = !remote.connected && !remote.awaitingApproval ? MSX_SETUP_HINTS[remote.diagnostics?.lastReason] : '';
+  $('#msx-title').textContent = remote.textOperation === 'msx.textPairGrant' ? 'Checking the TV PIN…' : remote.textOperation === 'msx.textPairRequest' ? 'Requesting the TV PIN…' : remote.textOperation === 'msx.launchBrowser' ? 'Requesting the TV browser…' : ['msx.typeAddress', 'msx.typeBrowserAddress'].includes(remote.textOperation) ? browserEntry ? 'Entering the browser link…' : 'Entering the MSX address…' : remote.textPairing ? 'Enter the TV PIN' : remote.connected ? 'TV connected' : remote.awaitingApproval ? 'Allow your TV' : remote.textPermissionSaved ? browserEntry ? 'TV browser permission saved' : 'Address entry enabled' : 'Connect your Philips TV';
+  $('#tv-entry-methods').hidden = remote.textPairing === true;
+  for (const method of ['browser', 'msx']) {
+    $(`#tv-entry-${method}`).setAttribute('aria-pressed', String(state.tvEntry === method));
+    $(`#tv-entry-${method}`).disabled = !free;
+  }
+  $('#msx-pairing').textContent = remote.awaitingApproval && remote.pendingHost ? `Allow the TV at ${remote.pendingHost} if it is yours.` : remote.connected ? 'TV connected. You can choose a video in Browse.' : 'Use the same Wi-Fi network on both devices.';
+  $('#msx-pairing').hidden = remote.textPairing || !!remote.startupUrl && !remote.awaitingApproval && !remote.connected;
+  const setupWindowClosed = remote.configured === false && remote.pairingOpen === false;
+  const diagnostic = remote.diagnostics;
+  let receiverStage = '';
+  if (diagnostic?.sessionPresent === true) {
+    if (diagnostic.sessionApproved === false) receiverStage = 'TV reached this phone. Approval needed.';
+    else if (diagnostic.sessionApproved === true) {
+      if (remote.connected && diagnostic.lastStateMsAgo >= 0) receiverStage = 'Receiver status received. TV connection ready.';
+      else if (diagnostic.lastStateMsAgo >= 0) receiverStage = 'TV status is no longer current. Waiting for the receiver.';
+      else receiverStage = 'TV allowed. Waiting for receiver status.';
+    }
+  } else if (diagnostic?.sessionPresent === false && (diagnostic.bootstrapAccepted > 0 || diagnostic.helloAccepted > 0)) receiverStage = 'TV reached this phone. Waiting for receiver connection.';
+  const setupHint = !remote.connected && !remote.awaitingApproval && setupWindowClosed ? browserEntry && !state.tvBrowserManual ? 'TV setup window closed. Tap Open TV receiver to reopen it.' : 'TV setup window closed. Tap Restart TV setup before connecting the TV.' : receiverStage || (!remote.connected && !remote.awaitingApproval ? MSX_SETUP_HINTS[diagnostic?.lastReason] : '');
   $('#msx-diagnostic').textContent = setupHint || '';
   $('#msx-diagnostic').hidden = !setupHint;
   $('#msx-panel').dataset.diagnostic = String(Boolean(setupHint));
+  $('#msx-panel').dataset.textPairing = String(remote.textPairing === true);
   $('#msx-start').disabled = !free;
+  $('#msx-start').hidden = browserEntry && !state.tvBrowserManual || remote.textPairing || !!remote.startupUrl && !setupWindowClosed && remote.diagnostics?.lastReason !== 'PAIRING_EXPIRED';
   $('#msx-start').textContent = remote.startupUrl ? 'Restart TV setup' : 'Set up TV';
-  $('#msx-refresh').hidden = !remote.startupUrl;
+  $('#msx-refresh').hidden = !remote.startupUrl || remote.textPairing;
   $('#msx-refresh').disabled = !free;
   $('#msx-confirm').hidden = !remote.awaitingApproval || !remote.pendingHost;
   $('#msx-confirm').disabled = !free;
+  $('#browser-launch').hidden = !browserEntry || remote.textPairing;
+  $('#browser-launch').disabled = !free || remote.typingBusy === true;
+  $('#browser-manual').hidden = !browserEntry || remote.textPairing || state.tvBrowserManual;
+  $('#browser-manual').disabled = !free;
+  $('#msx-type-address').hidden = remote.textPairing || browserEntry && !state.tvBrowserManual;
+  $('#msx-type-address').textContent = browserEntry ? 'Type browser link' : 'Enter TV address';
+  $('#msx-type-address').disabled = !free || !remote.startupUrl || !remote.typingAvailable || remote.typingBusy === true || setupWindowClosed || browserEntry && !remote.browserSetupUrl;
+  $('#msx-text-pair').hidden = !remote.startupUrl || remote.textPermissionSaved === true || remote.textPairing === true;
+  $('#msx-text-pair').textContent = browserEntry ? 'Enable TV browser control' : 'Enable address entry';
+  $('#msx-text-pair').disabled = !free || remote.typingBusy === true;
+  $('#msx-text-form').hidden = remote.textPairing !== true;
+  for (const control of $('#msx-text-form').querySelectorAll('button,input')) control.disabled = !free;
+  $('#msx-startup').hidden ||= remote.textPairing === true;
+  const hideEntrySteps = !!remote.startupUrl && !remote.textPermissionSaved;
+  $('#msx-steps').hidden = browserEntry || hideEntrySteps;
+  $('#browser-steps').hidden = !browserEntry || !state.tvBrowserManual || hideEntrySteps;
+  const textProgress = { 'msx.textPairRequest': 'Waiting for the TV to show its PIN…', 'msx.textPairGrant': 'Checking the PIN and saving permission. Please wait…', 'msx.typeAddress': 'Keep the empty MSX address field selected on the TV. Waiting for its reply…', 'msx.typeBrowserAddress': 'Keep the empty Internet browser address bar selected on the TV. Waiting for its reply…', 'msx.launchBrowser': 'Preparing the phone receiver and requesting its TV page…' }[remote.textOperation];
+  const fieldHint = browserEntry ? state.tvBrowserManual ? 'Permission saved. Open the TV Internet browser and select and clear its address bar.' : 'Permission saved. Tap Open TV receiver, then allow the TV when it connects.' : 'Permission saved. Open MSX Setup and select and clear its address field before tapping Enter TV address.';
+  $('#msx-type-status').textContent = textProgress || remote.typingNotice || TV_TEXT_ERRORS[remote.textError] || (remote.textPairing ? 'Enter the four-digit PIN shown on the TV.' : remote.typingAvailable ? fieldHint : remote.textPermissionSaved ? browserEntry ? 'Permission saved. Reconnect your TV remote to open the receiver.' : 'Permission saved. Reconnect your TV remote to enable address entry.' : remote.startupUrl ? browserEntry ? 'Enable TV browser control once with the TV’s PIN.' : 'Enable address entry once with the TV’s PIN.' : browserEntry ? 'Tap Open TV receiver. First time only, enable TV browser control with its PIN.' : 'Tap Set up TV to prepare this phone’s address.');
+  $('#msx-type-status').dataset.error = String(!textProgress && (remote.typingNotice ? remote.typingNoticeError === true : !!remote.textError));
+  $('#msx-text-grant').textContent = remote.textOperation === 'msx.textPairGrant' ? 'Checking PIN…' : 'Save permission';
+  $('#msx-sample').hidden = !tv;
+  $('#msx-sample').disabled = !free || !remote.connected || !!remote.pendingCommand || remote.openUncertain === true;
+  const developer = $('#msx-developer'), debug = remote.playback?.receiverDebug;
+  developer.hidden = remote.textPairing === true || (!remote.connected && !debug);
+  $('#msx-setup-fields').hidden = !developer.hidden && developer.open;
+  const loaded = debug?.revision, serverRevision = remote.diagnostics?.assetRevision;
+  $('#msx-debug-revisions').textContent = `Loaded: ${loaded ? loaded.slice(0, 10) : 'not reported'} · Server: ${serverRevision ? serverRevision.slice(0, 10) : 'not reported'}${loaded && serverRevision && loaded !== serverRevision ? ' · Revision mismatch.' : ''}`;
+  $('#msx-debug-runtime').textContent = `Uptime: ${debug?.uptimeSeconds == null ? 'not reported' : debug.uptimeSeconds + 's'} · Ping count: ${debug?.pingCount == null ? 'not reported' : debug.pingCount}`;
+  $('#msx-debug-support').textContent = debug?.remoteReload ? 'Remote reload: reported by this page.' : 'Remote reload: not reported by this page.';
+  if (debug?.inputCount != null && debug.lastInput != null) $('#msx-debug-support').textContent += ` Inputs: ${debug.inputCount} · Last: ${debug.lastInput}.`;
+  if (debug?.pointerLockSupported != null && debug.pointerLocked != null) $('#msx-debug-support').textContent += ` Pointer lock: ${debug.pointerLockSupported ? debug.pointerLocked ? 'active' : 'API present' : 'unavailable'}.`;
+  if (debug?.pointerMoveCount != null) $('#msx-debug-support').textContent += ` Pointer moves: ${debug.pointerMoveCount}.`;
+  if (debug?.pointerLockError != null && debug.pointerLockError !== 'none') $('#msx-debug-support').textContent += ` Pointer capture: ${debug.pointerLockError}.`;
+  const debugFree = free && remote.connected && !remote.pendingCommand;
+  $('#msx-debug-ping').disabled = !debugFree || debug?.remoteCommands !== true;
+  $('#msx-debug-label').disabled = !debugFree || debug?.remoteCommands !== true;
+  $('#msx-debug-reload').disabled = !debugFree || debug?.remoteReload !== true || remote.playback?.active !== false;
+  $('#msx-debug-result').textContent = remote.debugNotice || '';
+  $('#msx-debug-result').hidden = !remote.debugNotice;
+  $('#msx-debug-result').dataset.error = String(remote.debugNoticeError === true);
   $('.dpad').hidden = tv && !matter.capabilities.navigation;
   $('.dpad').setAttribute('aria-label', tv ? 'TV navigation' : 'Projector navigation');
   $('#tv-remote').hidden = !tv || matter.capabilities.navigation === true;
-  $('#tv-remote-hint').textContent = remote.connected ? 'Media Station X is ready. Playback controls apply to this TV.' : 'Open Media Station X on the TV and complete TV setup.';
+  $('#tv-remote-hint').textContent = remote.connected ? 'TV receiver is ready. Playback controls apply to this TV.' : 'Open the TV receiver from TV connection setup.';
   $('#show-tv-setup').disabled = !free;
   $('#browse-hint').textContent = `Find a video, then tap Cast in the browser toolbar. ${tv ? 'Philips TV' : 'Your projector'} plays it.`;
   const hardwareVolume = tv && matter.connected && matter.volume;
@@ -508,6 +694,10 @@ function renderControls() {
   $('#show-tv-inputs').disabled = !tvRemote;
   $('#show-matter-setup').hidden = !tv || !matter.available;
   $('#open-kodi').disabled = !luma;
+  $('#open-tv-receiver').hidden = !tv;
+  $('#open-tv-receiver').disabled = !free;
+  $('#turn-on-tv').hidden = !tv || !matter.paired || matter.capabilities.powerOn !== true;
+  $('#turn-on-tv').disabled = !free;
   $('#stop-video').disabled = !active;
   $('#seek-video').disabled = !active || !remote.playback?.durationSeconds || remote.playback?.canSeek === false;
   $('#seek-range').disabled = $('#seek-video').disabled;
@@ -521,7 +711,11 @@ function renderControls() {
   $('#open-kodi').hidden = tv;
   $('#menu-key').hidden = tv;
   $('#capture-video').disabled = !free;
-  $('#choose-video').disabled = !state.native;
+  $('#show-history').disabled = !free;
+  $('#open-library').disabled = !free;
+  renderLibraryControls();
+  $('#choose-video').textContent = tv && !remote.connected ? 'Open TV receiver' : 'Choose video';
+  $('#choose-video').disabled = tv && !remote.connected ? !free : !state.native;
   $('#cast-selected').hidden = !state.pendingMedia;
   $('#cast-selected').disabled = !free || state.pendingTarget !== state.target || (tv && remote.openUncertain === true);
   $('#cancel-handoff').hidden = !state.handoff;
@@ -586,7 +780,7 @@ function restoredRemote(value, observedPlayback) {
   return {
     // A service-restored remote is not a newly captured source. Never restore
     // its capture/job tokens or feed it to the handoff coordinator.
-    media: { url: url.href, contentType: safeText(value.media.contentType, 100), title: title(value.media.title) },
+    media: { url: url.href, contentType: safeText(value.media.contentType, 100), title: title(value.media.title), ...mediaMetadata(value.media) },
     tracks,
     catalog,
     selectedIndex: Number.isInteger(value.selectedIndex) && indices.has(value.selectedIndex) ? value.selectedIndex : null,
@@ -710,7 +904,8 @@ const coordinator = createHandoffCoordinator({
     subtitleDelivery: (preparedId, track, options) => handoffRpc('kodi.subtitleDelivery', handoffParams(options, { preparedId, track }), options),
     setSubtitle: (index, options) => handoffRpc('kodi.setSubtitle', handoffParams(options, { index }), options),
   },
-  remote: { async ready(result) {
+  remote: { async ready(result, options) {
+    const selected = state.pendingMedia, token = state.jobToken;
     state.activeMedia = state.pendingMedia;
     state.tracks = result.tracks;
     state.catalog = result.catalog || [];
@@ -722,7 +917,7 @@ const coordinator = createHandoffCoordinator({
     page('remote');
     closeSheet();
     const remote = {
-      media: { url: state.activeMedia.url, contentType: state.activeMedia.contentType, title: state.activeMedia.title },
+      media: { url: state.activeMedia.url, contentType: state.activeMedia.contentType, title: state.activeMedia.title, ...mediaMetadata(state.activeMedia) },
       tracks: result.tracks.map(track => ({ index: track.index, language: track.language, label: track.label })),
       catalog: state.catalog.map(track => ({ url: track.url, language: track.language, label: track.label, index: track.index, ...(track.preparedId ? { preparedId: track.preparedId } : {}) })),
       selectedIndex: result.selectedIndex,
@@ -730,7 +925,10 @@ const coordinator = createHandoffCoordinator({
     };
     // Give the service a bounded chance to remember aliases before reporting
     // completion. Receiver playback remains successful if local pausing fails.
-    await rpc('app.handoffReady', { sourceToken: state.jobToken, remote }, { timeoutMs: 2000 }).catch(() => {});
+    const resumeApplied = await resumeMedia(selected, 'luma', options.signal);
+    if (options.signal.aborted || state.pendingMedia !== selected) throw fixedError('SOURCE_CHANGED');
+    state.resumeNotice = resumeApplied ? '' : 'Video is playing, but the saved position could not be restored. Use Go to time to continue.';
+    await rpc('app.handoffReady', { sourceToken: token, remote, resumeApplied }, { timeoutMs: 2000 }).catch(() => {});
   } },
   onStatus({ step, message: text }) {
     reportStatus(step);
@@ -762,6 +960,7 @@ async function startCasting() {
   const id = ++flowId;
   state.sourceChanged = false;
   state.setupError = null;
+  state.resumeNotice = '';
   state.handoff = true;
   const controller = new AbortController();
   state.flowController = controller;
@@ -778,7 +977,7 @@ async function startCasting() {
     const result = await coordinator.start(selected, { signal: controller.signal, isCurrentSource: () => state.sourceGeneration === generation && state.pendingMedia === selected });
     if (id === flowId) {
       state.pendingMedia = null;
-      message('Video is playing. Choose a language in Subtitles.');
+      message(state.resumeNotice || 'Video is playing. Choose a language in Subtitles.', !!state.resumeNotice);
     }
   } catch (error) {
     cancelNative(jobToken);
@@ -798,7 +997,7 @@ async function startCasting() {
 async function startMsxCasting() {
   if (state.target !== 'philips') { message('Select Philips to continue casting this video.', true); return; }
   if (state.philips.openUncertain) { message('Refresh playback while the TV finishes the previous request.'); return; }
-  if (!state.philips.connected) { page('devices'); message('Connect Media Station X to start this video.'); return; }
+  if (!state.philips.connected) { page('devices'); message('Connect your TV receiver to start this video.'); return; }
   const selected = state.pendingMedia;
   const generation = state.sourceGeneration;
   const id = ++flowId;
@@ -824,13 +1023,15 @@ async function startMsxCasting() {
       autoSubtitles: false,
     }, { signal: controller.signal, timeoutMs: 60000 });
     if (id !== flowId) return;
-    state.philips.activeMedia = { url: selected.url, contentType: selected.contentType, title: title(selected.title) };
+    state.philips.activeMedia = { url: selected.url, contentType: selected.contentType, title: title(selected.title), ...mediaMetadata(selected) };
     state.philips.catalog = (selected.tracks || []).map((track, index) => ({ ...track, index }));
     msxState(result);
+    const resumeApplied = await resumeMedia(selected, 'philips', controller.signal);
+    if (id !== flowId || generation !== state.sourceGeneration) return;
     state.pendingMedia = null;
-    await rpc('app.handoffReady', { target: 'philips', sourceToken: jobToken }, { timeoutMs: 2000 }).catch(() => {});
+    await rpc('app.handoffReady', { target: 'philips', sourceToken: jobToken, resumeApplied }, { timeoutMs: 2000 }).catch(() => {});
     closeSheet(); page('remote');
-    message('Ready on Philips TV. You can use the remote.');
+    message(resumeApplied ? 'Ready on Philips TV. You can use the remote.' : 'Video is playing, but the saved position could not be restored. Use Go to time to continue.', !resumeApplied);
   } catch (error) {
     cancelNative(jobToken);
     if (id !== flowId) return;
@@ -841,12 +1042,16 @@ async function startMsxCasting() {
     if (result) msxState(result);
     const snapshot = state.philips.playback;
     if (result && snapshot?.active && snapshot.sourceUrl === selected.url && !result.pendingCommand) {
-      state.philips.activeMedia = { url: selected.url, contentType: selected.contentType, title: title(selected.title) };
+      state.philips.activeMedia = { url: selected.url, contentType: selected.contentType, title: title(selected.title), ...mediaMetadata(selected) };
       state.philips.catalog = (selected.tracks || []).map((track, index) => ({ ...track, index }));
       state.pendingMedia = null;
-      await rpc('app.handoffReady', { target: 'philips', sourceToken: jobToken }, { timeoutMs: 2000 }).catch(() => {});
+      // A reconciled Open must not silently discard saved progress. Seek once,
+      // then keep playing even if position cannot be verified.
+      const resumeApplied = await resumeMedia(selected, 'philips', controller.signal);
+      if (id !== flowId || generation !== state.sourceGeneration) return;
+      await rpc('app.handoffReady', { target: 'philips', sourceToken: jobToken, resumeApplied }, { timeoutMs: 2000 }).catch(() => {});
       closeSheet(); page('remote');
-      message(state.philips.subtitlesEnabled ? 'Video is playing on Philips TV.' : 'Video is playing. Choose subtitles in the remote to retry them.');
+      message(!resumeApplied ? 'Video is playing, but the saved position could not be restored. Use Go to time to continue.' : state.philips.subtitlesEnabled ? 'Video is playing on Philips TV.' : 'Video is playing. Choose subtitles in the remote to retry them.', !resumeApplied);
     } else {
       // A delivered command may finish after the phone's timeout. Do not offer a
       // second Open while its result is unknown; refresh observes the first one.
@@ -871,7 +1076,7 @@ window.LumaApp = Object.freeze({
     reportStatus('captured');
     if (state.setupFlow) {
       state.sourceGeneration++;
-      state.pendingMedia = { ...media, captureToken: media.sourceToken, title: title(media.title) };
+      state.pendingMedia = { ...media, resumeSeconds: 0, ...mediaMetadata(media), captureToken: media.sourceToken, title: title(media.title) };
       state.pendingTarget = state.target;
       state.autoStart = true;
       return;
@@ -884,7 +1089,7 @@ window.LumaApp = Object.freeze({
     flowId++;
     state.handoff = false;
     state.sourceGeneration++;
-    state.pendingMedia = { ...media, captureToken: media.sourceToken, title: title(media.title) };
+    state.pendingMedia = { ...media, resumeSeconds: 0, ...mediaMetadata(media), captureToken: media.sourceToken, title: title(media.title) };
     state.pendingTarget = state.target;
     state.autoStart = true;
     void startCasting();
@@ -958,10 +1163,25 @@ function remoteDescriptor() {
     subtitlesEnabled: state.subtitlesEnabled,
   };
 }
+async function selectMsxSubtitle(index, enabled) {
+  const tv = state.philips;
+  if (state.target !== 'philips' || !tv.connected || !tv.playback?.active || state.busy || state.handoff) return;
+  const source = tv.activeMedia?.url || tv.playback.sourceUrl;
+  if (!source) return;
+  message(enabled ? 'Loading the selected language…' : 'Turning subtitles off…');
+  await command(async () => {
+    const result = await rpc('msx.subtitle', { index, enabled, expectedSourceUrl: source }, { timeoutMs: 60000 });
+    msxState(result);
+    if (result?.accepted !== true || !Number.isSafeInteger(result.id) || result.id <= 0 || result.lastCommand?.id !== result.id || result.lastCommand?.method !== 'subtitle' || result.lastCommand?.ok !== true) throw fixedError('MSX_REJECTED');
+    if (state.philips.playback?.sourceUrl !== source) throw fixedError('SOURCE_CHANGED');
+    if (state.philips.subtitlesEnabled !== enabled || enabled && state.philips.selectedIndex !== index) throw fixedError('MSX_SUBTITLE');
+    renderTracks();
+  }, {}, enabled ? 'Subtitle selected. Check the TV.' : 'Subtitles turned off.');
+}
 async function selectSubtitle(track) {
   if (state.busy || state.handoff) return;
   if (state.target === 'philips') {
-    await command('msx.subtitle', msxParams({ index: track.index, enabled: true }), 'Subtitle selected. Check the TV.', result => { state.philips.selectedIndex = track.index; state.philips.subtitlesEnabled = true; msxState(result); renderTracks(); });
+    await selectMsxSubtitle(track.index, true);
     return;
   }
   if (!track.url) {
@@ -1056,12 +1276,215 @@ $('#show-tv-inputs').addEventListener('click', () => {
   $('#tv-input-list').replaceChildren(...state.matter.inputs.map(input => listButton(input.name + (input.index === state.matter.currentInput ? ' · selected' : ''), () => command('matter.input', { index: input.index }, 'TV input selected.', matterState))));
   sheet('inputs');
 });
-$('#msx-start').addEventListener('click', () => command('msx.start', {}, 'Enter this phone’s address in Media Station X on the TV.', msxState));
+for (const entry of ['browser', 'msx']) $(`#tv-entry-${entry}`).addEventListener('click', () => {
+  if (state.busy || state.handoff) return;
+  state.tvEntry = entry;
+  state.philips.typingNotice = '';
+  state.philips.typingNoticeError = false;
+  renderControls();
+});
+$('#browser-manual').addEventListener('click', () => {
+  if (state.busy || state.handoff) return;
+  state.tvBrowserManual = true;
+  state.philips.typingNotice = '';
+  renderControls();
+});
+async function openTvReceiver() {
+  if (state.target !== 'philips' || state.busy || state.handoff) return;
+  state.tvEntry = 'browser';
+  state.tvSetup = 'video';
+  await tvTextCommand('msx.launchBrowser', {}, async result => {
+    if (result?.permissionRequired) {
+      closeSheet(); page('devices');
+      state.philips.typingNotice = 'Enable TV browser control with the TV’s PIN, then tap Open TV receiver again.';
+      message('Enable TV browser control once to continue.');
+      return;
+    }
+    if (result?.reused === true) {
+      closeSheet(); page('remote');
+      message('TV receiver is connected. If it is not visible, open its saved LUMA bookmark on the TV.');
+      return;
+    }
+    if (result?.accepted !== true || result.pageLoadVerified !== false) throw fixedError('TEXT_REJECTED');
+    msxState(result);
+    closeSheet(); page('devices');
+    state.philips.textOperation = null;
+    state.philips.typingNotice = TV_BROWSER_WAIT;
+    message(TV_BROWSER_WAIT); renderControls();
+    const deadline = performance.now() + 12000;
+    while (!state.philips.connected && !state.philips.awaitingApproval && performance.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 500));
+      const observed = await rpc('msx.status', {}, { timeoutMs: 3000 }).catch(() => null);
+      if (observed) msxState(observed);
+    }
+    state.philips.typingNotice = state.philips.connected || state.philips.awaitingApproval ? '' : TV_BROWSER_WAIT;
+    if (state.philips.connected) { closeSheet(); page('remote'); message('TV receiver connected. Your remote is ready.'); }
+    else if (state.philips.awaitingApproval) message('Your TV requested a connection. Allow it below.');
+    else {
+      state.philips.typingNotice = TV_BROWSER_BOOKMARK;
+      message(TV_BROWSER_BOOKMARK);
+    }
+  });
+}
+$('#browser-launch').addEventListener('click', () => { if (state.tvEntry === 'browser') void openTvReceiver(); });
+$('#open-tv-receiver').addEventListener('click', () => void openTvReceiver());
+$('#turn-on-tv').addEventListener('click', () => {
+  if (state.target !== 'philips' || state.busy || state.handoff || !state.matter.paired || state.matter.capabilities.powerOn !== true) return;
+  void command(async () => {
+    try {
+      if (state.matter.paused) matterState(await rpc('matter.status', { reconnect: true }, { timeoutMs: 15000 }));
+      if (!state.matter.paired || state.matter.capabilities.powerOn !== true) throw fixedError('MATTER_UNSUPPORTED');
+      const result = await rpc('matter.powerOn', {}, { timeoutMs: 20000 });
+      if (result?.accepted !== true) throw fixedError('MATTER_REJECTED');
+      return result;
+    } catch (error) {
+      if (['MATTER_NOT_CONNECTED', 'MATTER_TIMEOUT'].includes(error.code)) {
+        const failure = fixedError(error.code);
+        failure.message = 'TV could not be reached. Check that “Ligue com LAN” / network standby is enabled on the TV.';
+        throw failure;
+      }
+      throw error;
+    }
+  }, {}, 'TV accepted the turn-on request. Check its screen.', matterState);
+});
+$('#msx-start').addEventListener('click', () => command('msx.start', {}, state.tvEntry === 'browser' ? 'Prepare the TV Internet browser address bar, then tap Type browser link.' : 'Prepare the address field in Media Station X setup, then tap Enter TV address.', msxState));
 $('#msx-refresh').addEventListener('click', () => command('msx.status', {}, '', msxState));
+function tvTextCommand(method, params, consume) {
+  if (state.target !== 'philips' || state.busy || state.handoff) return Promise.resolve(false);
+  const remote = state.philips;
+  remote.textOperation = method;
+  remote.typingNotice = '';
+  remote.typingNoticeError = false;
+  return command(async () => {
+    try {
+      if (method === 'msx.launchBrowser') {
+        if (remote.connected) {
+          msxState(await rpc('msx.status', {}, { timeoutMs: 5000 }));
+          if (remote.connected) return { reused: true };
+        }
+        if (!remote.startupUrl || remote.configured === false && remote.pairingOpen === false) msxState(await rpc('msx.start', {}, { timeoutMs: 15000 }));
+        if (!remote.textPermissionSaved) return { permissionRequired: true };
+        if (!remote.typingAvailable) throw fixedError('TEXT_ADDRESS_UNAVAILABLE');
+      }
+      return await rpc(method, params, { timeoutMs: method === 'msx.typeBrowserAddress' ? 120000 : method === 'msx.typeAddress' ? 90000 : 60000 });
+    }
+    catch (error) {
+      const code = Object.hasOwn(TV_TEXT_ERRORS, error.code) ? error.code : error.code === 'TIMEOUT' ? 'TEXT_TIMEOUT' : 'TEXT_REJECTED';
+      const observed = await rpc('msx.status', {}, { timeoutMs: 5000 }).catch(() => null);
+      if (observed) msxState(observed);
+      const notice = method === 'msx.launchBrowser' && code === 'TEXT_TIMEOUT' ? 'The TV did not confirm the launch request. Check its screen before trying again.' : method === 'msx.launchBrowser' && code === 'TEXT_REJECTED' ? 'The TV did not accept the browser launch. Use Enter link manually.' : method === 'msx.launchBrowser' && code === 'TEXT_CANCELLED' ? 'TV launch stopped. Check its screen before trying again.' : method === 'msx.textPairGrant' && ['TEXT_REJECTED', 'TEXT_INVALID_PIN'].includes(code) ? 'The TV did not accept this PIN. Check the code on the TV and try again.' : !['msx.typeAddress', 'msx.typeBrowserAddress'].includes(method) && code === 'TEXT_TIMEOUT' ? 'The TV has not confirmed permission. Check the TV, then refresh before trying again.' : TV_TEXT_ERRORS[code];
+      remote.typingNotice = notice;
+      remote.typingNoticeError = true;
+      if (code === 'TEXT_BROWSER_UNSUPPORTED') state.tvBrowserManual = true;
+      const failure = fixedError(code); failure.message = notice;
+      throw failure;
+    }
+  }, {}, '', consume).finally(() => { remote.textOperation = null; renderControls(); });
+}
+$('#msx-text-pair').addEventListener('click', () => {
+  if (!state.philips.startupUrl || state.philips.textPermissionSaved || state.philips.textPairing) return;
+  $('#msx-text-pin').value = '';
+  void tvTextCommand('msx.textPairRequest', {}, result => {
+    if (result?.pairing !== true) throw fixedError('TEXT_REJECTED');
+    state.philips.textPairing = true;
+    state.philips.textPairingExpiresInSeconds = result.expiresInSeconds;
+    state.philips.typingNotice = '';
+    renderControls(); $('#msx-text-pin').focus();
+    message('Enter the four-digit PIN shown on the TV.');
+  });
+});
+$('#msx-text-form').addEventListener('submit', event => {
+  event.preventDefault();
+  if (!state.philips.textPairing) return;
+  const pin = $('#msx-text-pin').value;
+  if (!/^[0-9]{4}$/u.test(pin)) { message(TV_TEXT_ERRORS.TEXT_INVALID_PIN, true); return; }
+  $('#msx-text-pin').value = '';
+  void tvTextCommand('msx.textPairGrant', { pin }, result => {
+    msxState(result);
+    state.philips.typingNotice = state.philips.textPermissionSaved ? state.tvEntry === 'browser' ? 'Permission saved. Tap Open TV receiver to request the TV page.' : 'Permission saved. Return to MSX Setup and select and clear its address field.' : TV_TEXT_ERRORS[result?.textError] || TV_TEXT_ERRORS.TEXT_UNSUPPORTED;
+    state.philips.typingNoticeError = !state.philips.textPermissionSaved;
+    message(state.philips.textPermissionSaved ? state.tvEntry === 'browser' ? 'TV permission saved. Tap Open TV receiver next.' : 'TV permission saved. Prepare its setup address field next.' : state.philips.typingNotice, !state.philips.textPermissionSaved);
+  });
+});
+$('#msx-type-address').addEventListener('click', () => {
+  const tv = state.philips;
+  if (!tv.typingAvailable || !tv.startupUrl || tv.typingBusy || tv.configured === false && tv.pairingOpen === false) return;
+  const browserEntry = state.tvEntry === 'browser';
+  if (browserEntry && !tv.browserSetupUrl) return;
+  const expectedChars = browserEntry ? tv.browserSetupUrl.length : new URL(tv.startupUrl).host.length;
+  tv.typingNotice = '';
+  void tvTextCommand(browserEntry ? 'msx.typeBrowserAddress' : 'msx.typeAddress', {}, result => {
+    if (result?.accepted !== true || result.acknowledgedChars !== expectedChars || browserEntry && (result.textEntryMode !== 'browser' || result.totalChars !== expectedChars)) throw fixedError('TEXT_REJECTED');
+    tv.typingNotice = browserEntry ? TV_BROWSER_ACK : TV_TEXT_ACK;
+    tv.typingNoticeError = false;
+    message('Input acknowledged. Check the TV address field.');
+  });
+});
+$('#msx-developer').addEventListener('toggle', renderControls);
+for (const [id, method, receiptMethod, notice] of [
+  ['msx-debug-ping', 'msx.debugPing', 'ping', 'TV ping acknowledged.'],
+  ['msx-debug-label', 'msx.debugLabel', 'set-label', 'Test message acknowledged by the TV.'],
+  ['msx-debug-reload', 'msx.reloadReceiver', 'reload', 'Reload acknowledged. Waiting for the TV to reconnect…'],
+]) $(`#${id}`).addEventListener('click', () => {
+  const tv = state.philips, debug = tv.playback?.receiverDebug;
+  if (state.target !== 'philips' || !state.native || state.busy || state.handoff || !tv.connected || tv.pendingCommand) return;
+  if (method === 'msx.reloadReceiver' ? debug?.remoteReload !== true || tv.playback?.active !== false : debug?.remoteCommands !== true) return;
+  tv.debugReloadHelloBaseline = null;
+  tv.debugNotice = 'Waiting for the TV acknowledgement…'; tv.debugNoticeError = false;
+  void command(async () => {
+    try {
+      const result = await rpc(method, {}, { timeoutMs: 20000 });
+      if (result?.accepted !== true || !Number.isSafeInteger(result.id) || result.id <= 0 || result.lastCommand?.id !== result.id || result.lastCommand?.method !== receiptMethod || result.lastCommand?.ok !== true) throw fixedError('MSX_REJECTED');
+      msxState(result);
+      if (method === 'msx.reloadReceiver' && Number.isSafeInteger(result.diagnostics?.helloAccepted) && result.diagnostics.helloAccepted >= 0) tv.debugReloadHelloBaseline = result.diagnostics.helloAccepted;
+      tv.debugNotice = notice; message(notice); return result;
+    } catch (error) {
+      const uncertain = ['TIMEOUT', 'MSX_TIMEOUT', 'CANCELLED'].includes(error.code);
+      tv.debugNotice = uncertain ? 'TV command outcome is unknown. Check the TV before trying again.' : 'The TV did not confirm this developer command. Check its receiver status.';
+      tv.debugNoticeError = true;
+      const failure = fixedError(error.code || 'MSX_REJECTED'); failure.message = tv.debugNotice; throw failure;
+    }
+  }, {}, '');
+});
+$('#msx-sample').addEventListener('click', async () => {
+  const tv = state.philips;
+  if (state.target !== 'philips' || !state.native || state.busy || state.handoff || !tv.connected || tv.pendingCommand || tv.openUncertain) return;
+  clearPendingVolume();
+  const afterReceipt = tv.lastReceiptId || 0;
+  state.busy = true;
+  renderControls();
+  message('Starting the sample on Philips TV…');
+  try {
+    // Native owns the fixed public sample and its separate authorization.
+    // No captured URL or fabricated capture token is supplied by the UI.
+    const result = await rpc('msx.sample', {}, { timeoutMs: 60000 });
+    msxState(result);
+    if (result?.accepted !== true || !Number.isSafeInteger(result.id) || result.lastCommand?.id !== result.id || result.lastCommand?.ok !== true || result.playback?.active !== true) throw fixedError('MSX_REJECTED');
+    page('remote');
+    message('Sample is playing on Philips TV. Your remote is ready.');
+  } catch (error) {
+    const uncertain = ['TIMEOUT', 'MSX_TIMEOUT', 'CANCELLED'].includes(error.code);
+    if (uncertain) tv.openUncertain = true;
+    // A JS bridge deadline is not proof that native finished. An old status
+    // snapshot cannot make this sample safe to send a second time.
+    if (error.code === 'TIMEOUT' || error.code === 'CANCELLED') { tv.sampleBridgeUncertain = true; tv.sampleAfterReceipt = afterReceipt; }
+    const observed = await rpc('msx.status', {}, { timeoutMs: 5000 }).catch(() => null);
+    if (observed) msxState(observed);
+    const reason = observed?.lastCommand?.error || observed?.playback?.error;
+    if (['PLAYBACK_REJECTED', 'PLAYBACK_TIMEOUT'].includes(reason)) message('Press “Start playback” on the TV, then refresh playback here.', true);
+    else if (uncertain) message('The TV has not confirmed the sample yet. Check the TV and refresh playback before retrying.', true);
+    else message(errors[error.code] || 'The sample could not start on the TV. Check playback and try again.', true);
+  } finally {
+    state.busy = false;
+    applyDeferredTarget();
+    renderControls();
+    if (state.autoStart) void startCasting();
+  }
+});
 $('#msx-confirm').addEventListener('click', async () => {
   const host = state.philips.pendingHost;
   if (!host) return;
-  if (await command('msx.confirm', { host }, 'TV allowed. Waiting for Media Station X…', msxState)) {
+  if (await command('msx.confirm', { host }, 'TV allowed. Waiting for the TV receiver…', msxState)) {
     if (state.philips.connected) { page('remote'); if (state.pendingMedia) void startCasting(); }
   }
 });
@@ -1113,7 +1536,153 @@ for (const button of document.querySelectorAll('[data-reset]')) button.addEventL
   });
   if (success) { closeSheet(); page('devices'); deviceStep(scope === 'kodi' ? 'kodi' : 'receiver'); }
 });
-$('#choose-video').addEventListener('click', () => browse());
+$('#choose-video').addEventListener('click', () => state.target === 'philips' && !state.philips.connected ? openTvReceiver() : browse());
+function libraryIdentity(value) {
+  return value && ['movie', 'tv'].includes(value.kind) && typeof value.id === 'string' && /^[1-9][0-9]{0,9}$/.test(value.id) ? {kind:value.kind,id:value.id} : null;
+}
+function savedProgress(value) {
+  if (!value || typeof value !== 'object') return null;
+  for (const key of ['positionSeconds','durationSeconds','resumeSeconds']) if (!Number.isFinite(value[key]) || value[key] < 0 || value[key] > 17280000) return null;
+  return {positionSeconds:value.positionSeconds,durationSeconds:value.durationSeconds,resumeSeconds:value.completed === true ? 0 : value.resumeSeconds,completed:value.completed === true,lastReceiver:['luma','philips'].includes(value.lastReceiver) ? value.lastReceiver : null};
+}
+function libraryProgressText(progress) {
+  if (!progress) return 'Not watched yet';
+  const duration = progress.durationSeconds > 0 ? ` / ${clock(progress.durationSeconds)}` : '';
+  return `${progress.completed ? 'Watched' : 'Saved at'} · ${clock(progress.positionSeconds)}${duration}${progress.lastReceiver ? ` · Last on ${progress.lastReceiver === 'philips' ? 'Philips TV' : 'Kodak LUMA'}` : ''}`;
+}
+function episodeSelection(identity, season, episode, progress = null) {
+  if (!identity) return null;
+  if (identity.kind === 'movie') return {...identity,progress};
+  return Number.isInteger(season) && season >= 0 && season <= 9999 && Number.isInteger(episode) && episode > 0 && episode <= 9999 ? {...identity,season,episode,progress} : null;
+}
+function selectionLabel(selection) { return selection?.kind === 'tv' ? `S${selection.season} E${selection.episode}` : 'Movie'; }
+function renderLibraryControls() {
+  const free = state.native && !state.busy && !state.handoff;
+  for (const control of $('#panel-history').querySelectorAll('button,input,select')) control.disabled = !free;
+  $('#history-more').disabled = !free || libraryLoading;
+  $('#history-resume').disabled = !free || libraryLoading || !librarySelected;
+  $('#history-restart').disabled = !free || libraryLoading || !librarySelected;
+  $('#history-next').disabled = !free || libraryLoading || !libraryNext;
+  $('#history-search').disabled = !free || libraryLoading;
+  $('#history-target').textContent = `Selected device: ${state.target === 'philips' ? 'Philips TV' : 'Kodak LUMA'}.`;
+}
+function selectLibraryEpisode(selection) {
+  librarySelected = selection;
+  $('#history-progress').textContent = selection ? `${selectionLabel(selection)} · ${libraryProgressText(selection.progress)}` : 'Choose an episode below.';
+  const action = selection?.progress?.completed ? 'Watch again' : (selection?.progress?.resumeSeconds || 0) >= 1 ? 'Resume' : 'Play';
+  $('#history-resume').textContent = `${action}${selection?.kind === 'tv' ? ` ${selectionLabel(selection)}` : ''}`;
+  for (const button of $('#history-episodes').querySelectorAll('button')) button.setAttribute('aria-pressed', String(selection?.kind === 'tv' && Number(button.dataset.season) === selection.season && Number(button.dataset.episode) === selection.episode));
+  renderLibraryControls();
+}
+function renderLibraryEpisodes(seasonNumber) {
+  $('#history-episodes').textContent = '';
+  const identity = libraryIdentity(libraryDetail), season = libraryDetail?.seasons.find(item => item.number === seasonNumber);
+  if (!season || !Array.isArray(season.episodes) || season.episodes.length > 1000) return;
+  for (const episode of season.episodes) {
+    const selection = episodeSelection(identity, season.number, episode?.number, savedProgress(episode?.progress));
+    if (!selection) continue;
+    const button = document.createElement('button'); button.type = 'button'; button.dataset.season = String(season.number); button.dataset.episode = String(episode.number);
+    button.textContent = `${selectionLabel(selection)} · ${safeText(episode.title, 200) || `Episode ${episode.number}`} · ${libraryProgressText(selection.progress)}`;
+    button.addEventListener('click', () => { if (!state.busy && !state.handoff) selectLibraryEpisode(selection); });
+    $('#history-episodes').append(button);
+  }
+  selectLibraryEpisode(librarySelected);
+}
+async function showLibraryDetails(row) {
+  const identity = libraryIdentity(row);
+  if (!identity || state.busy || state.handoff) return;
+  const epoch = ++historySelection; libraryLoading = true; librarySelected = libraryNext = null;
+  $('#history-list-view').hidden = true; $('#history-detail').hidden = false;
+  $('#history-title').textContent = title(row.title); $('#history-year').textContent = ''; $('#history-overview').textContent = '';
+  $('#history-progress').textContent = 'Loading saved details…'; $('#history-detail-status').textContent = '';
+  $('#history-episodes').textContent = ''; $('#history-seasons').hidden = true; $('#history-next').hidden = true;
+  renderLibraryControls();
+  try {
+    const detail = await rpc('watch.libraryDetails', identity, {timeoutMs:5000});
+    if (epoch !== historySelection || state.sheet !== 'history') return;
+    if (detail?.version !== 1 || detail.kind !== identity.kind || detail.id !== identity.id || !Array.isArray(detail.seasons) || detail.seasons.length > 1001) throw fixedError('INVALID_RESPONSE');
+    libraryDetail = detail; libraryLoading = false;
+    $('#history-title').textContent = title(detail.title); $('#history-year').textContent = safeText(detail.year, 12);
+    $('#history-overview').textContent = safeText(detail.overview, 2000) || 'No description has been saved yet.';
+    $('#history-detail-status').textContent = detail.storageAvailable === false ? 'Library storage is unavailable on this phone.' : detail.metadataAvailable === true ? 'Saved details are available offline.' : 'Saved progress is available offline. More title details have not been saved yet.';
+    librarySelected = episodeSelection(identity, detail.latest?.season, detail.latest?.episode, savedProgress(identity.kind === 'movie' ? detail.movieProgress || detail.latest : detail.latest));
+    libraryNext = detail.nextEpisode?.kind === 'tv' && detail.nextEpisode.id === identity.id ? episodeSelection(identity,detail.nextEpisode.season,detail.nextEpisode.episode) : null;
+    $('#history-next').hidden = !libraryNext;
+    if (libraryNext) $('#history-next').textContent = `Play next episode · ${selectionLabel(libraryNext)}`;
+    $('#history-seasons').hidden = identity.kind !== 'tv' || !detail.seasons.length;
+    $('#history-season').textContent = '';
+    for (const season of detail.seasons) {
+      if (!Number.isInteger(season?.number) || season.number < 0 || season.number > 9999) continue;
+      const option = document.createElement('option'); option.value = String(season.number); option.textContent = safeText(season.name, 100) || `Season ${season.number}`; $('#history-season').append(option);
+    }
+    if (identity.kind === 'tv' && $('#history-season').options.length) {
+      $('#history-season').value = String(librarySelected?.season ?? $('#history-season').options[0].value);
+      if (!$('#history-season').value) $('#history-season').selectedIndex = 0;
+      renderLibraryEpisodes(Number($('#history-season').value));
+    }
+    selectLibraryEpisode(librarySelected);
+    $('#history-resume').focus();
+  } catch {
+    if (epoch !== historySelection) return;
+    libraryLoading = false; $('#history-progress').textContent = 'Saved details could not load. Return to Library and try again.'; renderLibraryControls();
+  }
+}
+async function loadLibrary(more = false) {
+  if (libraryLoading || state.busy || state.handoff) return;
+  const epoch = ++historySelection; libraryLoading = true;
+  if (!more) { libraryItems = []; libraryOffset = 0; libraryQuery = $('#history-search').value.trim().slice(0,120); $('#history-list').textContent = ''; }
+  $('#history-status').textContent = 'Loading your saved library…'; renderLibraryControls();
+  const params = more ? {offset:libraryOffset + libraryLimit,limit:50,query:libraryQuery} : libraryQuery ? {query:libraryQuery} : {};
+  try {
+    const saved = await rpc('watch.library', params, {timeoutMs:5000});
+    if (epoch !== historySelection || state.sheet !== 'history') return;
+    if (saved?.version !== 1 || !Array.isArray(saved.items) || saved.items.length > 100 || !Number.isSafeInteger(saved.offset) || saved.offset < 0 || !Number.isInteger(saved.limit) || saved.limit < 1 || saved.limit > 100 || !Number.isSafeInteger(saved.total) || saved.total < 0 || saved.query !== libraryQuery) throw fixedError('INVALID_RESPONSE');
+    libraryOffset = saved.offset; libraryLimit = saved.limit; libraryHasMore = saved.hasMore === true;
+    const seen = new Set(libraryItems.map(row => `${row.kind}:${row.id}`));
+    for (const row of saved.items) {
+      const identity = libraryIdentity(row); if (!identity || seen.has(`${identity.kind}:${identity.id}`)) continue;
+      seen.add(`${identity.kind}:${identity.id}`); libraryItems.push(row);
+      const button = document.createElement('button'); button.type = 'button';
+      const latest = episodeSelection(identity,row.latest?.season,row.latest?.episode,savedProgress(row.latest));
+      button.textContent = `${title(row.title)}${identity.kind === 'tv' ? latest ? ` · ${selectionLabel(latest)}` : ' · Series' : ' · Movie'} · ${libraryProgressText(latest?.progress)}`;
+      button.addEventListener('click', () => void showLibraryDetails(row)); $('#history-list').append(button);
+    }
+    $('#history-status').textContent = saved.storageAvailable === false ? 'Library storage is unavailable on this phone.' : saved.total ? `${libraryItems.length} of ${saved.total} saved titles${libraryQuery ? ' found' : ''}.` : libraryQuery ? 'No saved titles match this search.' : 'Movies and series will appear here after you watch them.';
+    $('#history-more').hidden = !libraryHasMore;
+  } catch { if (epoch === historySelection) $('#history-status').textContent = 'Your saved library could not load. Try opening Library again.'; }
+  finally { if (epoch === historySelection) { libraryLoading = false; renderLibraryControls(); } }
+}
+function openLibrary() {
+  if (!state.native || state.busy || state.handoff) return;
+  sheet('history'); historySelection++; libraryLoading = false;
+  $('#history-list-view').hidden = false; $('#history-detail').hidden = true; $('#history-more').hidden = true;
+  void loadLibrary();
+}
+async function playLibrarySelection(selection, resume) {
+  if (!selection || state.busy || state.handoff) return;
+  const epoch = ++historySelection, target = state.target; historyController = new AbortController();
+  state.busy = true; renderControls();
+  $('#history-detail-status').textContent = 'Finding this video… Close to cancel. Current playback continues.';
+  try {
+    const params = {kind:selection.kind,id:selection.id,resume,...(selection.kind === 'tv' ? {season:selection.season,episode:selection.episode} : {})};
+    const media = await rpc('app.chooseCatalog', params, {signal:historyController.signal,timeoutMs:150000});
+    if (epoch !== historySelection || state.target !== target || state.sheet !== 'history') return;
+    if (!media || typeof media.url !== 'string' || typeof media.sourceToken !== 'string') throw fixedError('INVALID_MEDIA');
+    historyController = null; state.busy = false; closeSheet(); window.LumaApp.onCapturedMedia(media);
+  } catch (error) {
+    if (epoch !== historySelection) return;
+    historyController = null; state.busy = false; $('#history-detail-status').textContent = errors[error.code] || 'This title could not load. Try another title.'; renderControls();
+  }
+}
+$('#show-history').addEventListener('click', openLibrary);
+$('#open-library').addEventListener('click', openLibrary);
+$('#history-search-form').addEventListener('submit', event => { event.preventDefault(); void loadLibrary(); });
+$('#history-more').addEventListener('click', () => void loadLibrary(true));
+$('#history-back').addEventListener('click', () => { if (state.busy || state.handoff) return; historySelection++; libraryLoading = false; $('#history-detail').hidden = true; $('#history-list-view').hidden = false; renderLibraryControls(); });
+$('#history-season').addEventListener('change', () => renderLibraryEpisodes(Number($('#history-season').value)));
+$('#history-resume').addEventListener('click', () => void playLibrarySelection(librarySelected,true));
+$('#history-restart').addEventListener('click', () => void playLibrarySelection(librarySelected,false));
+$('#history-next').addEventListener('click', () => void playLibrarySelection(libraryNext,true));
 $('#browser-form').addEventListener('submit', event => { event.preventDefault(); void browse(true); });
 $('#capture-video').addEventListener('click', () => command('app.capture', {}, '', result => {
   const media = result?.media || (result?.url ? result : null);
@@ -1348,7 +1917,7 @@ $('#show-subtitles').addEventListener('click', () => {
     renderTracks();
   });
 });
-$('#subtitles-off').addEventListener('click', () => state.target === 'philips' ? command('msx.subtitle', msxParams({ index: state.philips.selectedIndex ?? 0, enabled: false }), 'Subtitles turned off.', result => { state.philips.subtitlesEnabled = false; state.philips.selectedIndex = null; msxState(result); renderTracks(); }) : command('kodi.setSubtitle', remoteParams({ index: 'off' }), 'Subtitles turned off.', async () => {
+$('#subtitles-off').addEventListener('click', () => state.target === 'philips' ? selectMsxSubtitle(state.philips.selectedIndex ?? 0, false) : command('kodi.setSubtitle', remoteParams({ index: 'off' }), 'Subtitles turned off.', async () => {
   state.subtitlesEnabled = false; state.selectedIndex = null; renderTracks();
   if (state.activeMedia && state.catalog.length) await rpc('app.rememberRemote', { expectedSourceUrl: state.activeMedia.url, remote: remoteDescriptor() });
 }));
@@ -1391,7 +1960,7 @@ document.addEventListener('keydown', event => {
   if (state.sheet) {
     if (event.key === 'Escape') { event.preventDefault(); closeSheet(); }
     if (event.key === 'Tab') {
-      const controls = [...$('#sheet').querySelectorAll('button, input')].filter(element => !element.disabled && element.offsetParent !== null);
+      const controls = [...$('#sheet').querySelectorAll('button, input, select')].filter(element => !element.disabled && element.offsetParent !== null);
       const first = controls[0]; const last = controls.at(-1);
       if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
       else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }

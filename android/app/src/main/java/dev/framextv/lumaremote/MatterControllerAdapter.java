@@ -56,6 +56,18 @@ import javax.crypto.spec.GCMParameterSpec;
 public final class MatterControllerAdapter implements AutoCloseable {
     public interface Listener { void onStateChanged(JSONObject snapshot); }
     public interface Callback { void success(JSONObject result); void failure(String code, String message); }
+    interface PowerOnCluster {
+        void readAcceptedCommands(ChipClusters.OnOffCluster.AcceptedCommandListAttributeCallback callback);
+        void on(ChipClusters.DefaultClusterCallback callback);
+        void readOnOff(ChipClusters.BooleanAttributeCallback callback);
+    }
+    interface PowerOnResult {
+        boolean current();
+        void capabilities(List<Long> commands);
+        void acknowledged();
+        void accepted(Boolean onOff);
+        void rejected(String code);
+    }
     private interface PointerAction { void run(long pointer, Request request); }
     private static final Object PLATFORM_LOCK = new Object();
     private static final ExecutorService SDK_WORKER = Executors.newSingleThreadExecutor();
@@ -68,12 +80,13 @@ public final class MatterControllerAdapter implements AutoCloseable {
     private final Handler main = new Handler(Looper.getMainLooper());
     private final SharedPreferences metadata;
     private volatile JSONObject published = object("available", false, "paired", false, "connected", false, "pairing", false, "paused", false,
-            "name", "Philips TV", "capabilities", object("navigation", false, "power", false, "volume", false, "inputs", false), "inputs", new JSONArray());
+            "name", "Philips TV", "capabilities", object("navigation", false, "power", false, "powerOn", false, "volume", false, "inputs", false), "inputs", new JSONArray());
     private volatile boolean closed;
+    private volatile String resolvedPrivateAddress = "";
     private ChipDeviceController controller;
     private AndroidChipPlatform platform;
     private boolean available, connected, pairing, refreshing, paused;
-    private boolean navigationSupported, powerSupported, volumeSupported, inputsSupported, openWindowSupported;
+    private boolean navigationSupported, powerSupported, powerOnSupported, volumeSupported, inputsSupported, openWindowSupported;
     private long nodeId, pairingNode, generation, lastRead;
     private int keyEndpoint = -1, powerEndpoint = -1, volumeEndpoint = -1, inputEndpoint = -1;
     private int currentVolume = -1, minVolume = 0, maxVolume = 254, currentInput = -1;
@@ -94,6 +107,21 @@ public final class MatterControllerAdapter implements AutoCloseable {
 
     public JSONObject snapshot() { return copy(published); }
 
+    /** Internal address of this phone's already paired TV; never a caller-selected target. */
+    public String currentPrivateAddress() { return resolvedPrivateAddress; }
+    public void resolvePrivateAddress(Callback callback) {
+        submit(() -> {
+            if (closed || !available || controller == null || nodeId == 0 || pairing || paused) {
+                main.post(() -> callback.failure("TEXT_ADDRESS_UNAVAILABLE", "Reconnect the paired TV.")); return;
+            }
+            Request request = new Request(callback, generation, 15000);
+            withPointer(request, (pointer, operation) -> {
+                if (resolvedPrivateAddress.isEmpty()) { operation.fail("TEXT_ADDRESS_UNAVAILABLE"); return; }
+                operation.success(object("host", resolvedPrivateAddress));
+            });
+        });
+    }
+
     public void request(String method, JSONObject args, Callback callback) {
         if (closed) { main.post(() -> callback.failure("CANCELLED", "Matter controller is closed.")); return; }
         JSONObject input = args == null ? new JSONObject() : copy(args);
@@ -113,6 +141,7 @@ public final class MatterControllerAdapter implements AutoCloseable {
             if (closed) { main.post(() -> callback.failure("CANCELLED", "Matter controller is closed.")); return; }
             Request request = new Request(callback, generation, "matter.pair".equals(method) ? 10000 : 15000);
             if ("matter.disconnect".equals(method)) {
+                resolvedPrivateAddress = "";
                 paused = true; connected = false; refreshing = false; generation++;
                 cancelPairing();
                 publish(); request.success(snapshot()); return;
@@ -155,6 +184,11 @@ public final class MatterControllerAdapter implements AutoCloseable {
                         if (!Boolean.TRUE.equals(input.opt("confirmed"))) { request.fail("INVALID_INPUT"); break; }
                         if (powerEndpoint < 0 || !powerSupported) { request.fail("MATTER_UNSUPPORTED"); break; }
                         withPointer(request, (pointer, work) -> new ChipClusters.OnOffCluster(pointer, powerEndpoint).off(commandCallback(work, () -> work.success(snapshot()))));
+                        break;
+                    case "matter.powerOn":
+                        if (input.length() != 0) { request.fail("INVALID_INPUT"); break; }
+                        if (powerEndpoint < 0 || !powerOnSupported) { request.fail("MATTER_UNSUPPORTED"); break; }
+                        withPointer(request, this::powerOn);
                         break;
                     case "matter.openWindow": openWindow(request); break;
                     case "matter.forget": forget(input, request); break;
@@ -245,7 +279,7 @@ public final class MatterControllerAdapter implements AutoCloseable {
 
     private void refresh(Request request) {
         if (closed || refreshing || pairing || paused || nodeId == 0) { if (request != null) request.success(snapshot()); return; }
-        refreshing = true; lastRead = android.os.SystemClock.elapsedRealtime();
+        refreshing = true; powerOnSupported = false; lastRead = android.os.SystemClock.elapsedRealtime();
         Request work = request == null ? new Request(new Callback() { public void success(JSONObject result) {} public void failure(String code, String text) {} }, generation, 15000) : request;
         withPointer(work, (pointer, operation) -> {
             clusters.clear(); videoEndpoints.clear(); speakerEndpoints.clear();
@@ -290,7 +324,7 @@ public final class MatterControllerAdapter implements AutoCloseable {
     private void finishDiscovery(long pointer, Request request) {
         if (!guard(request)) return;
         keyEndpoint = powerEndpoint = volumeEndpoint = inputEndpoint = -1;
-        navigationSupported = powerSupported = volumeSupported = inputsSupported = openWindowSupported = false;
+        navigationSupported = powerSupported = powerOnSupported = volumeSupported = inputsSupported = openWindowSupported = false;
         List<Integer> speakerLevels = new ArrayList<>(), videoLevels = new ArrayList<>();
         for (Map.Entry<Integer, List<Long>> entry : clusters.entrySet()) {
             int endpoint = entry.getKey(); List<Long> servers = entry.getValue();
@@ -343,7 +377,7 @@ public final class MatterControllerAdapter implements AutoCloseable {
             });
         } else if (step == 1 && powerEndpoint >= 0) {
             new ChipClusters.OnOffCluster(pointer, powerEndpoint).readAcceptedCommandListAttribute(new ChipClusters.OnOffCluster.AcceptedCommandListAttributeCallback() {
-                public void onSuccess(List<Long> value) { submit(() -> { if (!guard(request)) return; powerSupported = value.contains(0L); next.run(); }); }
+                public void onSuccess(List<Long> value) { submit(() -> { if (!guard(request)) return; powerSupported = value.contains(0L); powerOnSupported = value.contains(1L); next.run(); }); }
                 public void onError(Exception error) { submit(next); }
             });
         } else if (step == 2 && volumeEndpoint >= 0) {
@@ -390,9 +424,13 @@ public final class MatterControllerAdapter implements AutoCloseable {
                 if (!request.current()) { controller.releaseConnectedDevicePointer(pointer); return; }
                 request.pointer = pointer;
                 connected = true;
+                try {
+                    String resolved = controller.getIpAddress(nodeId);
+                    resolvedPrivateAddress = MsxServer.privateAddress(resolved) ? resolved : "";
+                } catch (Throwable unavailable) { resolvedPrivateAddress = ""; }
                 try { action.run(pointer, request); } catch (Throwable error) { request.fail("MATTER_REJECTED"); }
             }); }
-            public void onConnectionFailure(long node, Exception error) { submit(() -> { if (!guard(request)) return; connected = false; refreshing = false; errorCode = "MATTER_NOT_CONNECTED"; publish(); request.fail("MATTER_NOT_CONNECTED"); }); }
+            public void onConnectionFailure(long node, Exception error) { submit(() -> { if (!guard(request)) return; resolvedPrivateAddress = ""; connected = false; refreshing = false; errorCode = "MATTER_NOT_CONNECTED"; publish(); request.fail("MATTER_NOT_CONNECTED"); }); }
         });
     }
 
@@ -401,6 +439,71 @@ public final class MatterControllerAdapter implements AutoCloseable {
             public void onSuccess() { submit(() -> { if (guard(request)) { errorCode = ""; publish(); success.run(); } }); }
             public void onError(Exception error) { request.fail("MATTER_REJECTED"); }
         };
+    }
+    private void powerOn(long pointer, Request request) {
+        ChipClusters.OnOffCluster cluster = new ChipClusters.OnOffCluster(pointer, powerEndpoint);
+        requestPowerOn(new PowerOnCluster() {
+            public void readAcceptedCommands(ChipClusters.OnOffCluster.AcceptedCommandListAttributeCallback callback) {
+                cluster.readAcceptedCommandListAttribute(new ChipClusters.OnOffCluster.AcceptedCommandListAttributeCallback() {
+                    public void onSuccess(List<Long> value) { submit(() -> callback.onSuccess(value)); }
+                    public void onError(Exception error) { submit(() -> callback.onError(error)); }
+                });
+            }
+            public void on(ChipClusters.DefaultClusterCallback callback) {
+                cluster.on(new ChipClusters.DefaultClusterCallback() {
+                    public void onSuccess() { submit(callback::onSuccess); }
+                    public void onError(Exception error) { submit(() -> callback.onError(error)); }
+                });
+            }
+            public void readOnOff(ChipClusters.BooleanAttributeCallback callback) {
+                cluster.readOnOffAttribute(new ChipClusters.BooleanAttributeCallback() {
+                    public void onSuccess(boolean value) { submit(() -> callback.onSuccess(value)); }
+                    public void onError(Exception error) { submit(() -> callback.onError(error)); }
+                });
+            }
+        }, new PowerOnResult() {
+            public boolean current() { return guard(request); }
+            public void capabilities(List<Long> commands) { powerSupported = commands.contains(0L); powerOnSupported = commands.contains(1L); publish(); }
+            public void acknowledged() { request.powerOnAcknowledged = true; }
+            public void accepted(Boolean onOff) {
+                errorCode = ""; publish(); request.success(powerOnReceipt(onOff));
+            }
+            public void rejected(String code) { request.fail(code); }
+        });
+    }
+    private JSONObject powerOnReceipt(Boolean onOff) {
+        JSONObject result = snapshot();
+        put(result, "accepted", true); put(result, "powerStateVerified", Boolean.TRUE.equals(onOff)); put(result, "onOff", onOff == null ? JSONObject.NULL : onOff);
+        return result;
+    }
+    /** Fresh capability gate and one discrete On, followed by optional observed state. */
+    static void requestPowerOn(PowerOnCluster cluster, PowerOnResult result) {
+        AtomicBoolean invoked = new AtomicBoolean(), acknowledged = new AtomicBoolean(), finished = new AtomicBoolean();
+        ChipClusters.BooleanAttributeCallback readback = new ChipClusters.BooleanAttributeCallback() {
+            public void onSuccess(boolean value) { if (result.current() && finished.compareAndSet(false, true)) result.accepted(value); }
+            public void onError(Exception error) { if (result.current() && finished.compareAndSet(false, true)) result.accepted(null); }
+        };
+        ChipClusters.DefaultClusterCallback command = new ChipClusters.DefaultClusterCallback() {
+            public void onSuccess() {
+                if (!result.current() || !acknowledged.compareAndSet(false, true) || finished.get()) return;
+                result.acknowledged();
+                try { cluster.readOnOff(readback); } catch (RuntimeException unavailable) { readback.onError(unavailable); }
+            }
+            public void onError(Exception error) { if (result.current() && !acknowledged.get() && finished.compareAndSet(false, true)) result.rejected("MATTER_REJECTED"); }
+        };
+        ChipClusters.OnOffCluster.AcceptedCommandListAttributeCallback supported = new ChipClusters.OnOffCluster.AcceptedCommandListAttributeCallback() {
+            public void onSuccess(List<Long> commands) {
+                if (!result.current() || !invoked.compareAndSet(false, true)) return;
+                List<Long> known = commands == null ? new ArrayList<>() : commands;
+                result.capabilities(known);
+                if (!known.contains(1L)) { finished.set(true); result.rejected("MATTER_UNSUPPORTED"); return; }
+                try { cluster.on(command); } catch (RuntimeException unavailable) { command.onError(unavailable); }
+            }
+            public void onError(Exception error) {
+                if (result.current() && invoked.compareAndSet(false, true)) { finished.set(true); result.capabilities(new ArrayList<>()); result.rejected("MATTER_UNAVAILABLE"); }
+            }
+        };
+        try { cluster.readAcceptedCommands(supported); } catch (RuntimeException unavailable) { supported.onError(unavailable); }
     }
     private boolean guard(Request request) { if (request.current()) return true; request.release(); return false; }
 
@@ -434,16 +537,16 @@ public final class MatterControllerAdapter implements AutoCloseable {
     private void clearSavedPairing(Request request, String reason, boolean tvFabricRemoved) {
         if (!metadata.edit().remove("node").commit()) { request.fail("MATTER_STORAGE"); return; }
         generation++; cancelPairing();
-        nodeId = 0; connected = refreshing = paused = false; errorCode = "";
+        nodeId = 0; resolvedPrivateAddress = ""; connected = refreshing = paused = false; errorCode = "";
         keyEndpoint = powerEndpoint = volumeEndpoint = inputEndpoint = -1; currentVolume = currentInput = -1;
         inputs = new JSONArray(); clusters.clear(); videoEndpoints.clear(); speakerEndpoints.clear();
-        navigationSupported = powerSupported = volumeSupported = inputsSupported = openWindowSupported = false;
+        navigationSupported = powerSupported = powerOnSupported = volumeSupported = inputsSupported = openWindowSupported = false;
         publish(); JSONObject result = snapshot(); put(result, "resetReason", reason); put(result, "tvFabricRemoved", tvFabricRemoved); request.success(result);
     }
 
     private void publish() {
         JSONObject state = object("available", available, "paired", nodeId != 0, "connected", connected, "pairing", pairing, "paused", paused,
-                "name", name, "capabilities", object("navigation", navigationSupported, "power", powerSupported,
+                "name", name, "capabilities", object("navigation", navigationSupported, "power", powerSupported, "powerOn", powerOnSupported,
                         "volume", volumeSupported && currentVolume >= 0, "inputs", inputsSupported && inputs.length() > 0, "openWindow", openWindowSupported), "inputs", inputs);
         put(state, "volume", currentVolume >= 0 ? object("current", currentVolume, "min", minVolume, "max", maxVolume) : JSONObject.NULL);
         put(state, "currentInput", currentInput >= 0 ? currentInput : JSONObject.NULL);
@@ -485,9 +588,16 @@ public final class MatterControllerAdapter implements AutoCloseable {
         private final long revision;
         private final AtomicBoolean done = new AtomicBoolean();
         private volatile long pointer;
+        private volatile boolean powerOnAcknowledged;
         Request(Callback callback, long revision, long timeout) { this.callback = callback; this.revision = revision; main.postDelayed(() -> submit(() -> {
             if (!done.compareAndSet(false, true)) return;
-            if (revision == generation) { refreshing = false; connected = false; errorCode = "MATTER_TIMEOUT"; publish(); }
+            if (!closed && revision == generation && powerOnAcknowledged) {
+                // On is known accepted even if the optional read stays silent.
+                // Keep its SDK pointer until a late callback can safely release it.
+                JSONObject receipt = powerOnReceipt(null);
+                main.post(() -> callback.success(copy(receipt))); return;
+            }
+            if (revision == generation) { resolvedPrivateAddress = ""; refreshing = false; connected = false; errorCode = "MATTER_TIMEOUT"; publish(); }
             // A late SDK callback releases the pointer. Releasing it while its
             // native read/invoke is outstanding risks a use-after-free.
             main.post(() -> callback.failure(revision == generation ? "MATTER_TIMEOUT" : "CANCELLED", "Matter request timed out."));
@@ -500,6 +610,7 @@ public final class MatterControllerAdapter implements AutoCloseable {
 
     @Override public void close() {
         if (closed) return;
+        resolvedPrivateAddress = "";
         closed = true;
         submit(() -> {
             generation++;

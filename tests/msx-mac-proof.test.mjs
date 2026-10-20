@@ -91,7 +91,7 @@ test('media validation rejects credentials, local/special hosts and unsupported 
 test('only the pinned TV capability serves allowlisted existing receiver/HLS assets; roots expose nothing', async t => {
   const f = await fixture(t);
   const receiverOrigin = new URL(f.receiver).origin;
-  for (const pathname of ['/', '/msx/start.json', '/receiver.html', '/not-a-capability/receiver.html']) {
+  for (const pathname of ['/', '/receiver.html', '/not-a-capability/receiver.html']) {
     const response = await request(receiverOrigin + pathname); assert.equal(response.status, 404);
     assert.equal(response.text.includes(new URL(f.receiver).pathname), false);
   }
@@ -110,14 +110,42 @@ test('only the pinned TV capability serves allowlisted existing receiver/HLS ass
   assert.equal(status.text.includes(new URL(f.control).pathname), false);
 });
 
+test('shared receiver bootstrap matches its loaded capability without claiming or renewing a session', async t => {
+  const f = await fixture(t);
+  const bootstrapUrl = new URL('../msx/start.json', f.proof.receiverUrl).href;
+  const bootstrap = await request(bootstrapUrl);
+  assert.equal(bootstrap.status, 200);
+  assert.deepEqual(bootstrap.body, {parameter: 'content:' + f.receiver + 'home.json'});
+  assert.equal(bootstrap.headers['cache-control'], 'no-store');
+  assert.equal(bootstrap.headers['referrer-policy'], 'no-referrer');
+  assert.equal(f.proof.status().diagnostics.hellos, 0);
+  assert.equal(f.proof.status().connected, false);
+
+  const tv = await f.connected();
+  await tv.state(state());
+  assert.equal((await request(bootstrapUrl)).status, 200);
+  assert.equal((await tv.poll()).status, 200);
+  assert.equal(f.proof.status().connected, true);
+  assert.equal(f.proof.status().diagnostics.hellos, 1);
+
+  const replacement = await fixture(t);
+  const fresh = await request(new URL('../msx/start.json', replacement.proof.receiverUrl));
+  assert.notEqual(fresh.body.parameter, bootstrap.body.parameter);
+});
+
 test('origins and host headers are restricted independently on receiver and loopback control', async t => {
   const f = await fixture(t);
-  for (const url of [f.proof.receiverUrl, f.control + 'status']) {
+  const bootstrapUrl = new URL('../msx/start.json', f.proof.receiverUrl).href;
+  for (const url of [f.proof.receiverUrl, bootstrapUrl, f.control + 'status']) {
     for (const origin of ['https://attacker.example', 'https://msx.benzac.de']) assert.equal((await request(url, {headers: {Origin: origin}})).status, 403);
     for (const origin of ['null', new URL(url).origin]) assert.equal((await request(url, {headers: {Origin: origin}})).status, 200);
     assert.equal((await request(url, {headers: {Host: 'attacker.example'}})).status, 403);
     assert.equal((await request(url, {method: 'OPTIONS'})).status, 404);
   }
+  assert.equal((await request(bootstrapUrl, {method: 'POST', json: {}})).status, 404);
+  assert.equal((await request(bootstrapUrl + '?client=' + CLIENT)).status, 404);
+  const wrongPeer = await fixture(t, {tvHost: '192.168.200.200'});
+  assert.equal((await request(new URL('../msx/start.json', wrongPeer.proof.receiverUrl))).status, 403);
 });
 
 test('receiver diagnostics distinguish TCP contact, TLS upgrade and malformed HTTP without retaining packets', async t => {

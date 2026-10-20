@@ -1,0 +1,725 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TV browser compatibility</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; background: #101827; color: #f5f8ff; }
+    body { font-family: Arial, Helvetica, sans-serif; font-size: 28px; }
+    main { width: 88%; max-width: 1400px; margin: 5vh auto; }
+    h1 { font-size: 64px; margin: 0 0 20px; }
+    .build { display: block; margin-top: 8px; font-size: 16px; color: #94abc5; }
+    .notice { padding: 20px; background: #1a2b40; border-left: 7px solid #7ee8d3; line-height: 1.4; }
+    table { width: 100%; border-collapse: collapse; margin: 28px 0; }
+    th, td { padding: 18px; border-bottom: 2px solid #43536b; text-align: left; }
+    th { width: 65%; font-family: monospace; font-weight: normal; }
+    td { color: #ffdc73; }
+    .small { font-size: 23px; color: #c6d4e8; line-height: 1.4; }
+    h2 { font-size: 32px; margin-top: 30px; }
+    .surface { font-size: 20px; }
+    .surface th { width: auto; font-family: inherit; }
+    .surface td:first-child { font-family: monospace; overflow-wrap: break-word; }
+    .surface th, .surface td { padding: 10px; }
+    @media (max-height: 800px) {
+      body { font-size: 23px; }
+      main { margin: 3vh auto; }
+      h1 { font-size: 48px; margin-bottom: 12px; }
+      .notice { padding: 14px; }
+      table { margin: 18px 0; }
+      th, td { padding: 12px; }
+      .small { font-size: 20px; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>TV browser compatibility<span class="build" id="revision">Loading revision...</span></h1>
+    <p class="notice">Browser diagnostics and fixed remote-control proof; no playback or storage access</p>
+    <p class="small" id="browser-summary">Reading browser version tokens...</p>
+    <p class="small" id="context-summary">Reading context and dimensions...</p>
+    <p class="small" id="msx-framework" role="status">MSX framework settings: checking the existing parent connection…</p>
+    <p class="small" id="socket-summary">Checking socket exposure and policy...</p>
+    <p class="notice" id="remote-label">Awaiting a remote label</p>
+    <p class="small" id="remote-control">Remote commands: waiting.</p>
+    <table aria-label="Native bridge presence">
+      <tbody>
+        <tr><th>loadApp</th><td id="loadApp">Waiting</td></tr>
+        <tr><th>enableDevtools</th><td id="enableDevtools">Waiting</td></tr>
+        <tr><th>SmartTvA_API</th><td id="smartTvApi">Waiting</td></tr>
+        <tr><th>oipfObjectFactory</th><td id="oipfFactory">Waiting</td></tr>
+      </tbody>
+    </table>
+    <p class="small" id="runtime">Waiting for JavaScript...</p>
+    <p class="small" id="report-status">Local proof reporting: waiting.</p>
+    <p class="small">Presence alone does not prove that an API works or grants app installation.</p>
+    <h2>Browser API declarations</h2>
+    <p class="small">Presence is a compatibility hint. webCodecs checks VideoDecoder exposure; WebGL checks constructors only. No decoder or graphics context is created. HTTP can hide secure-context APIs; another app context may differ.</p>
+    <table class="surface" aria-label="Browser API declarations"><thead><tr><th>API</th><th>Present</th></tr></thead><tbody id="compatibility-apis"></tbody></table>
+    <h2>Declared media support</h2>
+    <p class="small">Fixed type checks only. A positive result does not prove decoding, actual stream playback, subtitle support or DRM compatibility. No media is fetched.</p>
+    <table class="surface" aria-label="Declared media support"><thead><tr><th>Format</th><th>canPlayType</th><th>MSE type support</th></tr></thead><tbody id="compatibility-media"></tbody></table>
+    <h2>SmartTvA_API property names</h2>
+    <p class="small" id="surface-status">Waiting for the one-time sample.</p>
+    <table class="surface" aria-label="Read-only SmartTvA API surface">
+      <thead><tr><th>Name</th><th>Kind</th><th>Level</th><th>Native marker</th></tr></thead>
+      <tbody id="surface"></tbody>
+    </table>
+    <p class="small">At most 48 names across the object and two prototype levels. Accessors are never evaluated and values are never reported. A native-code text marker does not prove native execution. Scroll for more rows.</p>
+    <noscript><p>JavaScript is disabled. Presence checks cannot run.</p></noscript>
+  </main>
+  <script>
+    (function () {
+      'use strict';
+      var started = new Date().getTime();
+      var sequence = 0;
+      var revision = '__TV_PROBE_REVISION__';
+      var activeDiagnostics = '__TV_PROBE_DIAGNOSTICS__' === 'active';
+      var probeContext = {v: 1, embedded: window !== window.top, activeDiagnostics: activeDiagnostics};
+      var reloading = false;
+      var bridges = {
+        loadApp: false,
+        enableDevtools: false,
+        smartTvApi: false,
+        oipfFactory: false
+      };
+      var names = ['loadApp', 'enableDevtools', 'smartTvApi', 'oipfFactory'];
+      var smartTvSurface = null;
+      var index;
+      put(document.getElementById('revision'), 'Revision ' + revision.slice(0, 12) + ' | remote updates enabled');
+
+      function put(element, text) {
+        if ('textContent' in element) element.textContent = text;
+        else element.innerText = text;
+      }
+
+      /* Own bounded helper; official TVX Plugin0.0.79 videoPlugin message contract.
+       * Caller selects one exact known MSX parent origin; no arbitrary action or URL.
+       * onResult gets {version:string, secure:integer0..4} or null on timeout/error.
+       * No SDK, network API, storage, video/native API or extended/system-info call.
+       */
+      function observeMsxFramework(expectedOrigin, onResult) {
+        'use strict';
+        if (expectedOrigin !== 'http://msx.benzac.de' &&
+            expectedOrigin !== 'https://msx.benzac.de') throw new Error('Invalid MSX origin');
+        var peer = window.parent;
+        var done = false;
+        var requested = false;
+        var requestId = 'lumaFramework_' + String(new Date().getTime());
+        var timer;
+        function finish(value) {
+          if (done) return;
+          done = true;
+          window.removeEventListener('message', receive, false);
+          window.clearTimeout(timer);
+          onResult(value);
+        }
+        function send(action, data) {
+          peer.postMessage({type: 'videoPlugin', sender: 'plugin', target: 'app',
+            action: action, data: data}, expectedOrigin);
+        }
+        function receive(event) {
+          if (done || event.source !== peer || event.origin !== expectedOrigin) return;
+          var message = event.data;
+          if (!message || message.type !== 'videoPlugin' ||
+              message.sender !== 'app' || message.target !== 'plugin') return;
+          if (message.init === 1 && !requested) {
+            requested = true;
+            send('player:commit:info:framework', {requestId: requestId, dataId: 'info:framework'});
+            return;
+          }
+          var payload = message.data;
+          if (!requested || !payload || !payload.data ||
+              payload.data.requestId !== requestId || payload.data.dataId !== 'info:framework') return;
+          if (payload.error != null && payload.error !== '') { finish(null); return; }
+          var framework = payload.info && payload.info.framework;
+          var version = framework && framework.version;
+          var secure = framework && framework.settings && framework.settings.secure;
+          if (typeof version !== 'string' || !/^[0-9]+(?:\.[0-9]+){0,5}$/.test(version) ||
+              version.length > 32 || typeof secure !== 'number' || !isFinite(secure) ||
+              Math.floor(secure) !== secure || secure < 0 || secure > 4) { finish(null); return; }
+          finish({version: version, secure: secure});
+        }
+        window.addEventListener('message', receive, false);
+        timer = window.setTimeout(function () { finish(null); }, 8000);
+        if (peer === window) { finish(null); return; }
+        send('plugin:init', null);
+        return function () { finish(null); };
+      }
+
+      function elapsed() {
+        return Math.max(0, Math.floor((new Date().getTime() - started) / 1000));
+      }
+
+      // Global accessors are deliberately not read either. Unsupported or
+      // inaccessible descriptors remain unconfirmed, rather than invoking them.
+      function bridgeValue(name) {
+        var descriptor;
+        try {
+          descriptor = Object.getOwnPropertyDescriptor(window, name);
+          if (descriptor && Object.prototype.hasOwnProperty.call(descriptor, 'value')) {
+            return descriptor.value;
+          }
+        } catch (error) {}
+        return undefined;
+      }
+
+      function isObject(value) {
+        return value !== null && (typeof value === 'object' || typeof value === 'function');
+      }
+
+      function sampleSurface(value) {
+        var rows = [];
+        var current = value;
+        var level;
+        var properties;
+        var property;
+        var name;
+        var descriptor;
+        var kind;
+        var nativeCode;
+        for (level = 0; level < 3 && current && rows.length < 48; level++) {
+          if (current === Object.prototype || current === Function.prototype) break;
+          try { properties = Object.getOwnPropertyNames(current); } catch (error) { break; }
+          for (property = 0; property < properties.length && rows.length < 48; property++) {
+            name = properties[property];
+            if (!/^[A-Za-z_$][A-Za-z0-9_$]{0,63}$/.test(name)) continue;
+            try { descriptor = Object.getOwnPropertyDescriptor(current, name); } catch (error) { continue; }
+            if (!descriptor) continue;
+            kind = 'accessor';
+            nativeCode = false;
+            if (Object.prototype.hasOwnProperty.call(descriptor, 'value')) {
+              kind = typeof descriptor.value === 'function' ? 'function' : 'value';
+              if (kind === 'function') {
+                try {
+                  nativeCode = Function.prototype.toString.call(descriptor.value).indexOf('[native code]') !== -1;
+                } catch (error) {}
+              }
+            }
+            rows.push({ name: name, kind: kind, level: level, nativeCode: nativeCode });
+          }
+          try { current = Object.getPrototypeOf(current); } catch (error) { break; }
+        }
+        return rows;
+      }
+
+      var smartTvValue = bridgeValue('SmartTvA_API');
+      bridges.loadApp = typeof bridgeValue('loadApp') === 'function';
+      bridges.enableDevtools = typeof bridgeValue('enableDevtools') === 'function';
+      bridges.smartTvApi = isObject(smartTvValue);
+      bridges.oipfFactory = isObject(bridgeValue('oipfObjectFactory'));
+      if (bridges.smartTvApi) smartTvSurface = sampleSurface(smartTvValue);
+
+      for (index = 0; index < names.length; index++) {
+        put(document.getElementById(names[index]), bridges[names[index]] ? 'Present' : 'Not present');
+      }
+
+      put(document.getElementById('surface-status'), smartTvSurface === null ?
+        'No inspectable SmartTvA_API data property; accessor globals are not read.' :
+        'One-time sample: ' + smartTvSurface.length + ' properties (bounded; may be partial).');
+      if (smartTvSurface !== null) {
+        for (index = 0; index < smartTvSurface.length; index++) {
+          var row = document.createElement('tr');
+          var entry = smartTvSurface[index];
+          var cells = [entry.name, entry.kind, String(entry.level), entry.nativeCode ? 'Yes' : 'No'];
+          var cellIndex;
+          for (cellIndex = 0; cellIndex < cells.length; cellIndex++) {
+            var cell = document.createElement('td');
+            put(cell, cells[cellIndex]);
+            row.appendChild(cell);
+          }
+          document.getElementById('surface').appendChild(row);
+        }
+      }
+
+      function readStandard(object, name) {
+        try { return object ? object[name] : undefined; } catch (error) { return undefined; }
+      }
+
+      function versionToken(userAgent, expression) {
+        var match = expression.exec(userAgent);
+        return match && /^[0-9]{1,4}(?:\.[0-9]{1,4}){0,3}$/.test(match[1]) && match[1].length <= 32 ? match[1] : null;
+      }
+
+      function dimension(value, maximum, integer) {
+        return typeof value === 'number' && isFinite(value) && value >= 0 && value <= maximum &&
+          (!integer || Math.floor(value) === value) ? value : null;
+      }
+
+      function optionalBoolean(value) {
+        return typeof value === 'boolean' ? value : null;
+      }
+
+      function sampleCompatibility() {
+        var browserNavigator = readStandard(window, 'navigator');
+        var browserScreen = readStandard(window, 'screen');
+        var userAgent = readStandard(browserNavigator, 'userAgent');
+        var platform = readStandard(browserNavigator, 'platform');
+        var cryptoObject = readStandard(window, 'crypto');
+        var mediaSourceObject = readStandard(window, 'MediaSource');
+        var video = null;
+        var mediaTypes = [
+          ['h264Baseline', 'video/mp4; codecs="avc1.42E01E"'],
+          ['h264High', 'video/mp4; codecs="avc1.640028"'],
+          ['hevc', 'video/mp4; codecs="hvc1.1.6.L93.B0"'],
+          ['vp8', 'video/webm; codecs="vp8"'],
+          ['vp9', 'video/webm; codecs="vp09.00.10.08"'],
+          ['av1', 'video/mp4; codecs="av01.0.04M.08"'],
+          ['hls', 'application/vnd.apple.mpegurl'],
+          ['dash', 'application/dash+xml'],
+          ['aac', 'audio/mp4; codecs="mp4a.40.2"'],
+          ['opus', 'audio/webm; codecs="opus"'],
+          ['ac3', 'audio/mp4; codecs="ac-3"'],
+          ['eac3', 'audio/mp4; codecs="ec-3"']
+        ];
+        var result;
+        var mediaIndex;
+        var canPlay;
+        var mse;
+        if (typeof userAgent !== 'string') userAgent = '';
+        if (typeof platform !== 'string' || platform.length > 64 || !/^[A-Za-z0-9 ._()\/-]*$/.test(platform)) platform = null;
+        result = {
+          chromeVersion: versionToken(userAgent, /(?:^|\s)(?:Headless)?Chrome\/([0-9.]+)/),
+          chromiumVersion: versionToken(userAgent, /(?:^|\s)Chromium\/([0-9.]+)/),
+          appleWebKitVersion: versionToken(userAgent, /(?:^|\s)AppleWebKit\/([0-9.]+)/),
+          firefoxVersion: versionToken(userAgent, /(?:^|\s)Firefox\/([0-9.]+)/),
+          browserVersion: versionToken(userAgent, /(?:^|\s)Version\/([0-9.]+)/),
+          operaVersion: versionToken(userAgent, /(?:^|\s)OPR\/([0-9.]+)/),
+          omiVersion: versionToken(userAgent, /(?:^|\s)OMI\/([0-9.]+)/),
+          titanOsVersion: versionToken(userAgent, /(?:^|\s)TitanOS\/([0-9.]+)/),
+          nettvVersion: versionToken(userAgent, /(?:^|\s)NETTV\/([0-9.]+)/),
+          smartTvAllianceVersion: versionToken(userAgent, /(?:^|\s)SmartTvA\/([0-9.]+)/),
+          platform: platform,
+          viewportWidth: dimension(readStandard(window, 'innerWidth'), 16384, true),
+          viewportHeight: dimension(readStandard(window, 'innerHeight'), 16384, true),
+          screenWidth: dimension(readStandard(browserScreen, 'width'), 16384, true),
+          screenHeight: dimension(readStandard(browserScreen, 'height'), 16384, true),
+          devicePixelRatio: dimension(readStandard(window, 'devicePixelRatio'), 16, false),
+          secureContext: optionalBoolean(readStandard(window, 'isSecureContext')),
+          crossOriginIsolated: optionalBoolean(readStandard(window, 'crossOriginIsolated')),
+          fetch: typeof readStandard(window, 'fetch') === 'function',
+          promise: typeof readStandard(window, 'Promise') === 'function',
+          webAssembly: typeof readStandard(window, 'WebAssembly') === 'object' && readStandard(window, 'WebAssembly') !== null,
+          webSocket: typeof readStandard(window, 'WebSocket') === 'function',
+          mediaSource: typeof mediaSourceObject === 'function',
+          eme: typeof readStandard(browserNavigator, 'requestMediaKeySystemAccess') === 'function',
+          webCodecs: typeof readStandard(window, 'VideoDecoder') === 'function',
+          webGL: typeof readStandard(window, 'WebGLRenderingContext') === 'function',
+          webGL2: typeof readStandard(window, 'WebGL2RenderingContext') === 'function',
+          serviceWorker: !!browserNavigator && 'serviceWorker' in browserNavigator,
+          cryptoSubtle: !!cryptoObject && 'subtle' in cryptoObject,
+          localStorage: 'localStorage' in window,
+          indexedDB: 'indexedDB' in window,
+          tcpServerSocket: typeof readStandard(window, 'TCPServerSocket') === 'function',
+          tcpSocket: typeof readStandard(window, 'TCPSocket') === 'function',
+          udpSocket: typeof readStandard(window, 'UDPSocket') === 'function',
+          webTransport: typeof readStandard(window, 'WebTransport') === 'function',
+          rtcPeerConnection: typeof readStandard(window, 'RTCPeerConnection') === 'function',
+          media: []
+        };
+        try { video = document.createElement('video'); } catch (error) {}
+        for (mediaIndex = 0; mediaIndex < mediaTypes.length; mediaIndex++) {
+          canPlay = null;
+          mse = null;
+          try {
+            if (video && typeof video.canPlayType === 'function') {
+              canPlay = video.canPlayType(mediaTypes[mediaIndex][1]);
+              if (canPlay !== '' && canPlay !== 'maybe' && canPlay !== 'probably') canPlay = null;
+            }
+          } catch (error) { canPlay = null; }
+          try {
+            if (mediaSourceObject && typeof mediaSourceObject.isTypeSupported === 'function') {
+              mse = optionalBoolean(mediaSourceObject.isTypeSupported(mediaTypes[mediaIndex][1]));
+            }
+          } catch (error) { mse = null; }
+          result.media.push({ id: mediaTypes[mediaIndex][0], canPlayType: canPlay, mse: mse });
+        }
+        return result;
+      }
+
+      function appendCells(container, cells) {
+        var row = document.createElement('tr');
+        var cell;
+        var cellIndex;
+        for (cellIndex = 0; cellIndex < cells.length; cellIndex++) {
+          cell = document.createElement('td');
+          put(cell, cells[cellIndex]);
+          row.appendChild(cell);
+        }
+        container.appendChild(row);
+      }
+
+      function descriptorAt(object, name) {
+        var level;
+        var descriptor;
+        for (level = 0; level < 3 && object; level++) {
+          if (object === Object.prototype || object === Function.prototype) break;
+          try { descriptor = Object.getOwnPropertyDescriptor(object, name); } catch (error) { return null; }
+          if (descriptor) return descriptor;
+          try { object = Object.getPrototypeOf(object); } catch (error) { return null; }
+        }
+        return null;
+      }
+
+      function diagnosticRoot(name, value, descriptor, limit) {
+        var result = {root: name, state: 'missing', entries: []};
+        var current;
+        var level;
+        var properties;
+        var i;
+        var property;
+        var entry;
+        if (descriptor && !Object.prototype.hasOwnProperty.call(descriptor, 'value')) {
+          result.state = 'accessor';
+          return result;
+        }
+        if (!isObject(value)) {
+          if (descriptor) result.state = 'other';
+          return result;
+        }
+        result.state = 'object';
+        current = value;
+        for (level = 0; level < 3 && current && result.entries.length < limit; level++) {
+          if (current === Object.prototype || current === Function.prototype) break;
+          try { properties = Object.getOwnPropertyNames(current); } catch (error) { break; }
+          for (i = 0; i < properties.length && result.entries.length < limit; i++) {
+            property = properties[i];
+            if (!/^[A-Za-z_$][A-Za-z0-9_$]{0,63}$/.test(property)) continue;
+            if ((name === 'window' || name === 'navigator') && !/socket|tcp|udp|vewd|opera|native|titan|nettv|loadapp|devtool|chrome|external|hbbtv|oipf|smarttva|bridge/i.test(property)) continue;
+            try { entry = Object.getOwnPropertyDescriptor(current, property); } catch (error) { continue; }
+            if (!entry) continue;
+            result.entries.push({name: property, kind: Object.prototype.hasOwnProperty.call(entry, 'value') ?
+              (typeof entry.value === 'function' ? 'function' : 'value') : 'accessor'});
+          }
+          try { current = Object.getPrototypeOf(current); } catch (error) { break; }
+        }
+        return result;
+      }
+
+      function dataMethodAt(value, name) {
+        var descriptor = isObject(value) ? descriptorAt(value, name) : null;
+        return !!descriptor && Object.prototype.hasOwnProperty.call(descriptor, 'value') && typeof descriptor.value === 'function';
+      }
+
+      function sampleSocketDiagnostics() {
+        var descriptor = descriptorAt(window, 'TCPServerSocket');
+        var constructor = {exposure: 'absent', attempt: 'not-exposed', errorName: null};
+        var result = {v: 1, policy: 'unsupported', constructor: constructor, surfaces: []};
+        var policy;
+        var roots = ['chrome', 'opera', 'external', 'SmartTvA_API', 'opera_omi', 'NetTV_Connection', 'NetTV_ContentManager', 'NetTV_DeviceUI'];
+        var rootIndex;
+        var rootDescriptor;
+        var registryDescriptor;
+        var registryValue;
+        var registry;
+        var registryEntry;
+        var registryIndex;
+        var registryLimit;
+        var registryIterator;
+        var registryStep;
+        var registryRows;
+        var registryName;
+        var csConstructor;
+        var csCode;
+        var csPrototype;
+        var csRows;
+        var csIndex;
+        var value;
+        // This standard policy query does not request a permission or change it.
+        try {
+          policy = document.permissionsPolicy || document.featurePolicy;
+          if (policy && typeof policy.features === 'function' && typeof policy.allowsFeature === 'function' &&
+              policy.features().indexOf('direct-sockets') !== -1) {
+            result.policy = policy.allowsFeature('direct-sockets') ? 'allowed' : 'blocked';
+          }
+        } catch (error) { result.policy = 'error'; }
+        if (descriptor) {
+          constructor.attempt = 'not-callable';
+          if (!Object.prototype.hasOwnProperty.call(descriptor, 'value')) constructor.exposure = 'accessor';
+          else if (typeof descriptor.value !== 'function') constructor.exposure = 'other';
+          else {
+            constructor.exposure = 'function';
+            constructor.attempt = 'not-attempted';
+            if (activeDiagnostics) {
+                // Fixed invalid IP literal: upstream rejects before opening a socket.
+                // Do not try a valid bind: the reference close() path is unfinished.
+                try {
+                  value = new descriptor.value('not-an-ip', {});
+                  constructor.attempt = 'unexpected-result';
+                } catch (error) {
+                  constructor.errorName = error && ['TypeError', 'NotAllowedError', 'SecurityError', 'NotSupportedError', 'Error'].indexOf(error.name) !== -1 ? error.name : 'Error';
+                  constructor.attempt = constructor.errorName === 'TypeError' ? 'type-error' :
+                    (constructor.errorName === 'NotAllowedError' || constructor.errorName === 'SecurityError' ? 'permission-rejected' : 'error');
+                }
+              }
+            }
+          }
+          result.surfaces.push(diagnosticRoot('window', window, null, 20));
+          result.surfaces.push(diagnosticRoot('navigator', readStandard(window, 'navigator'), null, 4));
+          for (rootIndex = 0; rootIndex < roots.length; rootIndex++) {
+            rootDescriptor = descriptorAt(window, roots[rootIndex]);
+            value = rootDescriptor && Object.prototype.hasOwnProperty.call(rootDescriptor, 'value') ? rootDescriptor.value : undefined;
+            if (roots[rootIndex] === 'external' && rootDescriptor &&
+                !Object.prototype.hasOwnProperty.call(rootDescriptor, 'value')) {
+              // Deliberate one-time standard Window.external getter read. The
+              // reference getter allocates a cached object. Nested getters and
+              // returned methods are never invoked; no values are reported.
+              try { value = window.external; rootDescriptor = {value: value}; } catch (error) {}
+            }
+            result.surfaces.push(diagnosticRoot(roots[rootIndex], value, rootDescriptor, 4));
+          }
+          // One fixed vendor constructor-registry getter read. Its behavior is
+          // not documented publicly. Only the explicitly enabled fixed CSManager
+          // construction probe may invoke a registered value.
+          value = bridgeValue('opera_omi');
+          registryDescriptor = isObject(value) ? descriptorAt(value, 'constructors') : null;
+          registryValue = registryDescriptor && Object.prototype.hasOwnProperty.call(registryDescriptor, 'value') ? registryDescriptor.value : undefined;
+          if (registryDescriptor && !Object.prototype.hasOwnProperty.call(registryDescriptor, 'value')) {
+            try { registryValue = value.constructors; registryDescriptor = {value: registryValue}; } catch (error) {}
+          }
+          try {
+            csConstructor = Map.prototype.get.call(registryValue, 'CSManager');
+            if (typeof csConstructor === 'function') {
+              csCode = Function.prototype.toString.call(csConstructor);
+              if (csCode.length <= 131072) {
+                csManagerSource = {v: 1, source: csCode.slice(0, 4096), totalLength: csCode.length,
+                  complete: csCode.length <= 4096, nativeMarker: csCode.indexOf('[native code]') !== -1, prototype: []};
+                if (activeDiagnostics) {
+                  csManagerAttempt.attempted = true;
+                  try {
+                    csManagerInstance = new csConstructor();
+                    csManagerAttempt.constructed = isObject(csManagerInstance);
+                    csManagerAttempt.localMethod = dataMethodAt(csManagerInstance, 'getApp2AppLocalBaseURL');
+                    csManagerAttempt.remoteMethod = dataMethodAt(csManagerInstance, 'getApp2AppRemoteBaseURL');
+                    if (isObject(csManagerInstance)) {
+                      csRows = sampleSurface(csManagerInstance);
+                      for (csIndex = 0; csIndex < Math.min(csRows.length, 16); csIndex++) {
+                        csManagerAttempt.instance.push({name: csRows[csIndex].name, kind: csRows[csIndex].kind});
+                      }
+                    }
+                  } catch (error) {
+                    csManagerAttempt.errorName = error && ['TypeError', 'NotAllowedError', 'SecurityError', 'NotSupportedError', 'Error'].indexOf(error.name) !== -1 ? error.name : 'Error';
+                  }
+                }
+                csPrototype = Object.getOwnPropertyDescriptor(csConstructor, 'prototype');
+                if (csPrototype && Object.prototype.hasOwnProperty.call(csPrototype, 'value') && isObject(csPrototype.value)) {
+                  csRows = sampleSurface(csPrototype.value);
+                  for (csIndex = 0; csIndex < Math.min(csRows.length, 16); csIndex++) {
+                    csManagerSource.prototype.push({name: csRows[csIndex].name, kind: csRows[csIndex].kind});
+                  }
+                }
+              }
+            }
+          } catch (error) {}
+          registryLimit = 64;
+          for (registryIndex = 0; registryIndex < result.surfaces.length; registryIndex++) registryLimit -= result.surfaces[registryIndex].entries.length;
+          registryLimit = Math.max(0, Math.min(32, registryLimit));
+          registry = null;
+          // The observed registry has Map-shaped descriptors. Use the standard
+          // built-in Map iterator with its brand check, never a returned method.
+          try {
+            if (typeof Map === 'function' && typeof Map.prototype.entries === 'function') {
+              registryIterator = Map.prototype.entries.call(registryValue);
+              registryRows = [];
+              for (registryIndex = 0; registryIndex < 128; registryIndex++) {
+                registryStep = registryIterator.next();
+                if (registryStep.done) break;
+                registryName = registryStep.value[0];
+                if (typeof registryName === 'string' && /^[A-Za-z_$][A-Za-z0-9_$]{0,63}$/.test(registryName)) {
+                  registryRows.push({name: registryName, kind: typeof registryStep.value[1] === 'function' ? 'function' : 'value'});
+                }
+              }
+              registryRows.sort(function (a, b) {
+                var pattern = /socket|tcp|udp|connection|network|server|remote|devtool|debug|load|file|process|player|media/i;
+                return Number(pattern.test(b.name)) - Number(pattern.test(a.name));
+              });
+              registry = {root: 'opera_omi.constructors', state: 'object', entries: registryRows.slice(0, registryLimit)};
+            }
+          } catch (error) {}
+          if (!registry && Array.isArray(registryValue)) {
+            registry = {root: 'opera_omi.constructors', state: 'object', entries: []};
+            for (registryIndex = 0; registryIndex < Math.min(registryValue.length, 32) && registry.entries.length < registryLimit; registryIndex++) {
+              try { registryEntry = Object.getOwnPropertyDescriptor(registryValue, String(registryIndex)); } catch (error) { continue; }
+              if (registryEntry && Object.prototype.hasOwnProperty.call(registryEntry, 'value') &&
+                  typeof registryEntry.value === 'string' && /^[A-Za-z_$][A-Za-z0-9_$]{0,63}$/.test(registryEntry.value)) {
+                registry.entries.push({name: registryEntry.value, kind: 'value'});
+              }
+            }
+          } else if (!registry) registry = diagnosticRoot('opera_omi.constructors', registryValue, registryDescriptor, registryLimit);
+          result.surfaces.push(registry);
+          return result;
+        }
+
+        var hbbtvElement = null;
+        var hbbtvObject = {v: 1, factoryAvailable: false, objectSupported: null, elementCreated: false,
+          localMethod: false, remoteMethod: false, errorName: null};
+        try {
+          var factory = bridgeValue('oipfObjectFactory');
+          hbbtvObject.factoryAvailable = isObject(factory);
+          if (activeDiagnostics) {
+          if (factory && dataMethodAt(factory, 'isObjectSupported')) {
+            var support = factory.isObjectSupported('application/hbbtvCSManager');
+            if (typeof support === 'boolean') hbbtvObject.objectSupported = support;
+          }
+          hbbtvElement = document.createElement('object');
+          hbbtvElement.setAttribute('type', 'application/hbbtvCSManager');
+          hbbtvElement.setAttribute('aria-hidden', 'true');
+          hbbtvElement.style.cssText = 'position:absolute;width:1px;height:1px;opacity:0;pointer-events:none';
+          document.body.appendChild(hbbtvElement);
+          hbbtvObject.elementCreated = true;
+        }
+      } catch (error) {
+        hbbtvObject.errorName = error && ['TypeError', 'NotAllowedError', 'SecurityError', 'NotSupportedError', 'Error'].indexOf(error.name) !== -1 ? error.name : 'Error';
+      }
+      function finishHbbtvSample() {
+        try {
+          hbbtvObject.localMethod = dataMethodAt(hbbtvElement, 'getApp2AppLocalBaseURL');
+          hbbtvObject.remoteMethod = dataMethodAt(hbbtvElement, 'getApp2AppRemoteBaseURL');
+        } catch (error) {
+          hbbtvObject.errorName = error && ['TypeError', 'NotAllowedError', 'SecurityError', 'NotSupportedError', 'Error'].indexOf(error.name) !== -1 ? error.name : 'Error';
+        }
+        // Method lookup only. The local URL getter can activate a service and
+        // is deliberately not called by this presence diagnostic.
+        report('ready');
+      }
+      var csManagerInstance = null;
+      var csManagerAttempt = {v: 1, attempted: false, constructed: false, localMethod: false, remoteMethod: false, errorName: null, instance: []};
+      var csManagerSource = null;
+      var socketDiagnostics = sampleSocketDiagnostics();
+      put(document.getElementById('socket-summary'), 'TCP server: ' + socketDiagnostics.constructor.exposure +
+        ' | fixed argument check: ' + socketDiagnostics.constructor.attempt + ' | direct-sockets policy query: ' + socketDiagnostics.policy);
+      var pendingReceipt = null;
+      var processedCommands = [];
+      var pingCount = 0;
+
+      function receiveCommand(command) {
+        var keys;
+        var seen;
+        var commandIndex;
+        if (!command || typeof command !== 'object' || !/^[A-Za-z0-9_-]{32}$/.test(command.id)) return;
+        keys = Object.keys(command);
+        if (command.method === 'ping') {
+          if (keys.length !== 2) return;
+        } else if (command.method === 'set-label') {
+          if (keys.length !== 3 || command.value !== 'Controlled remotely') return;
+        } else return;
+        seen = false;
+        for (commandIndex = 0; commandIndex < processedCommands.length; commandIndex++) {
+          if (processedCommands[commandIndex].id === command.id) {
+            if (processedCommands[commandIndex].method !== command.method) return;
+            seen = true;
+          }
+        }
+        if (!seen) {
+          if (command.method === 'ping') pingCount++;
+          else {
+            var label = document.getElementById('remote-label');
+            if (!label) return;
+            put(label, 'Controlled remotely');
+            if (('textContent' in label ? label.textContent : label.innerText) !== 'Controlled remotely') return;
+          }
+          processedCommands.push({id: command.id, method: command.method});
+          if (processedCommands.length > 8) processedCommands.shift();
+        }
+        pendingReceipt = {id: command.id, method: command.method, ok: true};
+        put(document.getElementById('remote-control'), 'Remote command ' + command.method + ' applied; ping count ' + pingCount + '.');
+      }
+
+      var compatibility = sampleCompatibility();
+      var apiNames = ['fetch', 'promise', 'webAssembly', 'webSocket', 'mediaSource', 'eme', 'webCodecs',
+        'webGL', 'webGL2', 'serviceWorker', 'cryptoSubtle', 'localStorage', 'indexedDB',
+        'tcpServerSocket', 'tcpSocket', 'udpSocket', 'webTransport', 'rtcPeerConnection'];
+      var engineNames = ['chromeVersion', 'chromiumVersion', 'appleWebKitVersion', 'firefoxVersion', 'browserVersion',
+        'operaVersion', 'omiVersion', 'titanOsVersion', 'nettvVersion', 'smartTvAllianceVersion'];
+      var engineLabels = ['Chrome', 'Chromium', 'AppleWebKit', 'Firefox', 'Version', 'Opera', 'OMI', 'TitanOS', 'NETTV', 'SmartTvA'];
+      var engineParts = [];
+      for (index = 0; index < engineNames.length; index++) {
+        if (compatibility[engineNames[index]] !== null) engineParts.push(engineLabels[index] + ' ' + compatibility[engineNames[index]]);
+      }
+      put(document.getElementById('browser-summary'), 'Browser tokens: ' +
+        (engineParts.length ? engineParts.join(' | ') : 'not reported') + '. Platform: ' + (compatibility.platform || 'not reported') + '.');
+      put(document.getElementById('context-summary'), 'Viewport: ' + compatibility.viewportWidth + 'x' + compatibility.viewportHeight +
+        ' | Screen: ' + compatibility.screenWidth + 'x' + compatibility.screenHeight + ' | Pixel ratio: ' + compatibility.devicePixelRatio +
+        ' | Secure context: ' + String(compatibility.secureContext) + ' | Cross-origin isolated: ' + String(compatibility.crossOriginIsolated));
+      for (index = 0; index < apiNames.length; index++) {
+        appendCells(document.getElementById('compatibility-apis'), [apiNames[index], compatibility[apiNames[index]] ? 'Yes' : 'No']);
+      }
+      for (index = 0; index < compatibility.media.length; index++) {
+        var mediaEntry = compatibility.media[index];
+        appendCells(document.getElementById('compatibility-media'), [mediaEntry.id,
+          mediaEntry.canPlayType === null ? 'Unavailable' : (mediaEntry.canPlayType || 'No declared support'),
+          mediaEntry.mse === null ? 'Unavailable' : (mediaEntry.mse ? 'Yes' : 'No')]);
+      }
+
+      function report(event) {
+        var request;
+        var status = document.getElementById('report-status');
+        var sentReceipt = pendingReceipt;
+        var payload = { v: 1, event: event, sequence: ++sequence, uptimeSeconds: elapsed(), revision: revision, remoteReload: true, remoteCommands: true };
+        if (sentReceipt) payload.commandResult = sentReceipt;
+        if (event === 'ready') {
+          payload.probeContext = probeContext;
+          payload.socketDiagnostics = socketDiagnostics;
+          if (csManagerSource) payload.csManagerSource = csManagerSource;
+          payload.hbbtvObject = hbbtvObject;
+          payload.csManagerAttempt = csManagerAttempt;
+          payload.bridges = bridges;
+          payload.smartTvSurface = smartTvSurface;
+          payload.compatibility = compatibility;
+        }
+        try {
+          request = new XMLHttpRequest();
+          request.open('POST', 'report', true);
+          request.setRequestHeader('Content-Type', 'application/json');
+          request.timeout = 3000;
+          request.onreadystatechange = function () {
+            var acknowledgement;
+            if (request.readyState !== 4) return;
+            put(status, request.status >= 200 && request.status < 300 ?
+              'Local proof reporting: received by the Mac.' :
+              'Local proof reporting: unavailable. Checks remain visible.');
+            if (sentReceipt && (request.status === 403 || (request.status >= 200 && request.status < 300)) &&
+                pendingReceipt && pendingReceipt.id === sentReceipt.id) pendingReceipt = null;
+            if (request.status < 200 || request.status >= 300 || reloading) return;
+            try { acknowledgement = JSON.parse(request.responseText); } catch (error) { return; }
+            // Only the fixed reload and two allowlisted command handlers run.
+            if (acknowledgement && acknowledgement.reload === true) {
+              reloading = true;
+              put(status, 'Local proof reporting: loading the updated probe.');
+              window.location.reload();
+              return;
+            }
+            if (acknowledgement && acknowledgement.command) receiveCommand(acknowledgement.command);
+          };
+          request.onerror = request.ontimeout = function () {
+            put(status, 'Local proof reporting: unavailable. Checks remain visible.');
+          };
+          request.send(JSON.stringify(payload));
+        } catch (error) {
+          put(status, 'Local proof reporting: unavailable. Checks remain visible.');
+        }
+      }
+
+      function tick() {
+        put(document.getElementById('runtime'), 'JavaScript running - ' + elapsed() + 's');
+      }
+
+      // Fixed read-only parent-app query. The HTTP parent origin was measured
+      // on this TV; only its framework version/security setting is displayed.
+      var msxParentOrigin = 'http://msx.benzac.de';
+      if (/^https:\/\/msx\.benzac\.de(?:\/|$)/.test(document.referrer || '')) msxParentOrigin = 'https://msx.benzac.de';
+      observeMsxFramework(msxParentOrigin, function (result) {
+        put(document.getElementById('msx-framework'), result ?
+          'MSX framework ' + result.version + ' | secure=' + result.secure :
+          'MSX framework settings: unconfirmed (no valid parent reply).');
+      });
+
+      tick();
+      window.setTimeout(finishHbbtvSample, 1500);
+      window.setInterval(tick, 1000);
+      window.setInterval(function () { report('heartbeat'); }, 2000);
+    }());
+  </script>
+</body>
+</html>

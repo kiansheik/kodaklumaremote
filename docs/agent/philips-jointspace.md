@@ -43,10 +43,23 @@ require independent observation. Keys are limited to ordinary navigation;
 there are no power/reset controls. Context reports only known focus enums.
 
 `type` accepts one printable Unicode string through hidden terminal input or
-stdin only, preserving spaces and rejecting controls/overlong text. It posts
-`input/key` with the upstream `unicode` field and never logs or persists text.
-It reports `textAppliedVerified:false`: the correct field must be visibly
-focused, and TV acceptance does not prove typing or replacement. No verified
+stdin only, preserving spaces and rejecting controls/overlong text. Live
+2026-10-20: a bulk string produced only its first `h`, matching upstream's
+single-key semantics. The corrected client validates all text before writing,
+then posts one codepoint per authenticated `input/key` request,150ms between
+ACKs. It sends no Enter/Confirm, clears no field and never retries a failed key.
+The user confirmed a full ASCII URL after sequential input. Other Unicode is
+fixture-tested, not physically render-tested.
+
+A scoped POSIX wall alarm bounds the whole attempt to65s and restores the prior
+handler; competing alarms/non-main-thread use fail before writes. Each request
+also uses its remaining budget, capped8s. Success reports `acknowledgedChars`;
+errors report count/`partialInput` and preserve uncertain-write outcomes. Counts
+never establish field contents, and unknown input must not be blindly replayed.
+Text is never logged or persisted. It reports `textAppliedVerified:false`: the
+correct field must be visibly focused, and TV acceptance does not prove typing
+or replacement. Remote Confirm selects the currently focused keyboard key; the
+user's visible Go/Ir button is the grounded submission route. No verified
 textentry read/replace schema was found, so no guessed textentry endpoint or
 replacement payload is implemented. A terminal that cannot hide input is
 refused rather than falling back to visible echo.
@@ -73,3 +86,8 @@ expiry/no duplicate prompts, sanitized info/context, browser/key payloads,
 rejected writes, redirect isolation, URL/address validation, private-file guards
 secret-safe argument rejection, authenticated Unicode typing, rejected text and
 private-input handling. No TV/phone calls occurred in these tests.
+
+After the physical typing correction,21 loopback fixtures pass, including
+sequential non-ASCII/spaces, upfront rejection, partial known/unknown failures,
+shared network/pacing deadline, alarm interruption/restoration and redacted CLI
+error output. No device calls occurred in that suite.

@@ -12,6 +12,9 @@ def bundleMobileAssets = tasks.register('bundleMobileAssets', Exec) {
         new File(mobileRepository, 'scripts/build-mobile.mjs'),
         new File(mobileRepository, 'package.json'),
         new File(mobileRepository, 'package-lock.json'))
+    def diagnosticSample = providers.environmentVariable('LUMA_DIAGNOSTIC_SAMPLE').orElse('')
+    inputs.property('diagnosticSample', diagnosticSample)
+    if (!diagnosticSample.get().isEmpty()) inputs.file(new File(diagnosticSample.get()))
     outputs.dir(layout.buildDirectory.dir('generated/lumaAssets'))
 }
 tasks.named('preBuild').configure { dependsOn(bundleMobileAssets) }
@@ -29,8 +32,8 @@ android {
         applicationId 'dev.framextv.lumaremote'
         minSdk 24
         targetSdk 35
-        versionCode 14
-        versionName '0.4.5'
+        versionCode 16
+        versionName '0.4.6'
         testInstrumentationRunner 'dev.framextv.lumaremote.BackendInstrumentation'
     }
     compileOptions {

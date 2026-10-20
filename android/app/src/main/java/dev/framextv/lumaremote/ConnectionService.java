@@ -62,11 +62,24 @@ public final class ConnectionService extends Service {
             new ArrayBlockingQueue<>(16));
     private final ThreadPoolExecutor subtitleNetwork = new ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS,
             new ArrayBlockingQueue<>(4));
+    private final ThreadPoolExecutor textNetwork = new ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS,
+            new ArrayBlockingQueue<>(1));
+    private final ThreadPoolExecutor catalogNetwork = new ThreadPoolExecutor(2, 2, 0, TimeUnit.MILLISECONDS,
+            new ArrayBlockingQueue<>(4));
+    private final ThreadPoolExecutor libraryReads = new ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS,
+            new ArrayBlockingQueue<>(8));
     private SubtitleDelivery subtitleDelivery;
+    private WatchHistory watchHistory;
+    private LibraryStore libraryStore;
+    private CatalogClient catalogClient;
+    private WebContentResolver catalogWebResolver;
     private volatile String subtitleSource = "";
     private final java.util.concurrent.atomic.AtomicLong subtitleGeneration = new java.util.concurrent.atomic.AtomicLong();
     private NativeBackend backend;
     private MsxServer television;
+    private PhilipsTextController televisionText;
+    private volatile boolean textRequestPending;
+    private volatile long textGeneration;
     private MatterControllerAdapter matter;
     private boolean matterPollQueued;
     private volatile String selectedTarget = "luma";
@@ -109,10 +122,32 @@ public final class ConnectionService extends Service {
 
     @Override public void onCreate() {
         super.onCreate();
+        watchHistory = new WatchHistory(getApplicationContext());
+        libraryStore = new LibraryStore(getApplicationContext());
+        libraryStore.migrate(watchHistory.snapshot());
+        watchHistory.setProgressListener(libraryStore::record);
+        catalogClient = new CatalogClient();
+        catalogWebResolver = new WebContentResolver(getApplicationContext());
         subtitleDelivery = new SubtitleDelivery(NativeBackend::publicUrl);
         backend = newBackend();
         settings = new SettingsStore(getApplicationContext());
         television = new MsxServer(getApplicationContext());
+        television.setLibrary(new MsxServer.Library() {
+            @Override public JSONObject metadata(String action, JSONObject params) throws MsxServer.LibraryException {
+                if (destroyed) throw new MsxServer.LibraryException("CANCELLED");
+                if ("history".equals(action)) {
+                    if (params.length() != 0) throw new MsxServer.LibraryException("CATALOG_INVALID_INPUT");
+                    return watchHistory.snapshot();
+                }
+                try { return catalogClient.handle(action, params); }
+                catch (CatalogClient.CatalogException error) { throw new MsxServer.LibraryException(error.code); }
+            }
+            @Override public JSONObject resolve(JSONObject selection, java.util.function.BooleanSupplier current) throws MsxServer.LibraryException {
+                return resolveCatalogMedia(selection, current);
+            }
+            @Override public void onReady(JSONObject media, boolean resumeApplied) { rememberWatchHandoff(media, "philips", resumeApplied); }
+        });
+        televisionText = new PhilipsTextController(getApplicationContext());
         matter = new MatterControllerAdapter(getApplicationContext(), value -> main.post(() -> {
             if (destroyed) return;
             updateTelevisionState(); scheduleMatterPoll();
@@ -211,6 +246,105 @@ public final class ConnectionService extends Service {
     public void addListener(Listener listener) { if (listener != null) { listeners.add(listener); main.post(() -> { if (listeners.contains(listener)) listener.onStateChanged(snapshot()); }); } }
     public void removeListener(Listener listener) { listeners.remove(listener); }
     public JSONObject snapshot() { synchronized (stateLock) { return copy(state); } }
+    /** Stable identity comes from our native browser URL, never the stream URL. */
+    public JSONObject attachWatchMetadata(JSONObject media, String pageUrl) {
+        JSONObject result = copy(media);
+        JSONObject content = WatchHistory.contentFromPage(pageUrl, result.optString("title"));
+        result.remove("content"); result.remove("resumeSeconds");
+        if (content != null) {
+            put(result, "content", content);
+            JSONObject saved = libraryStore == null ? null : libraryStore.findProgress(content);
+            if (saved == null) saved = watchHistory.find(content.optString("key"));
+            put(result, "resumeSeconds", saved == null ? 0 : saved.optDouble("resumeSeconds", 0));
+        }
+        return result;
+    }
+    /** Record only an accepted handoff whose requested resume was applied. */
+    public void rememberWatchHandoff(JSONObject media, String target, boolean resumeApplied) {
+        if (media == null || media.optDouble("resumeSeconds", 0) > 0 && !resumeApplied) return;
+        JSONObject owned = copy(media);
+        main.post(() -> {
+            if (destroyed) return;
+            String receiver = "philips".equals(target) ? "philips" : "luma";
+            JSONObject playback = "philips".equals(receiver) ? television.status().optJSONObject("playback") : snapshot().optJSONObject("playback");
+            if (playback == null || !playback.optBoolean("active") || !owned.optString("url").equals(playback.optString("sourceUrl", playback.optString("source")))) return;
+            if (watchHistory.bind(receiver, owned)) watchHistory.observe(receiver, playback);
+        });
+    }
+    public void chooseCatalog(JSONObject params, java.util.function.BooleanSupplier current, Callback callback) {
+        requestCatalog("catalog.resolve", params, current, callback);
+    }
+    private void requestLibrary(String method, JSONObject params, Callback callback) {
+        JSONObject owned = copy(params);
+        try {
+            libraryReads.execute(() -> {
+                JSONObject result = null; String failure = null;
+                try {
+                    if (destroyed || libraryStore == null) throw new IllegalStateException();
+                    result = "watch.library".equals(method) ? libraryStore.list(owned) : libraryStore.details(owned);
+                } catch (LibraryStore.LibraryException invalid) { failure = invalid.code; }
+                catch (RuntimeException unavailable) { failure = "LIBRARY_UNAVAILABLE"; }
+                JSONObject response = result; String code = failure;
+                main.post(() -> {
+                    if (destroyed) { reject(callback, "NOT_CONNECTED", "Open the app to view your library."); return; }
+                    if (code != null) reject(callback, code, "The saved library could not load. Playback has not changed.");
+                    else if (callback != null) callback.success(response);
+                });
+            });
+        } catch (RejectedExecutionException busy) { reject(callback, "BUSY", "Wait for the current library view."); }
+    }
+    private void requestCatalog(String method, JSONObject params, Callback callback) {
+        requestCatalog(method, params, () -> true, callback);
+    }
+    private void requestCatalog(String method, JSONObject params, java.util.function.BooleanSupplier current, Callback callback) {
+        String action = method.substring("catalog.".length());
+        if (!java.util.Arrays.asList("list", "search", "details", "episodes", "resolve").contains(action)) {
+            reject(callback, "CATALOG_INVALID_INPUT", "Choose a catalog action."); return;
+        }
+        JSONObject owned = copy(params);
+        try {
+            catalogNetwork.execute(() -> {
+                JSONObject result = null; String failure = null;
+                try {
+                    if (!catalogCurrent(current)) throw new MsxServer.LibraryException("CANCELLED");
+                    result = "resolve".equals(action) ? resolveCatalogMedia(owned, current) : catalogClient.handle(action, owned);
+                    if (!catalogCurrent(current)) throw new MsxServer.LibraryException("CANCELLED");
+                } catch (MsxServer.LibraryException error) { failure = error.code; }
+                catch (CatalogClient.CatalogException error) { failure = error.code; }
+                catch (RuntimeException error) { failure = "CATALOG_RESPONSE"; }
+                JSONObject response = result; String code = failure;
+                main.post(() -> {
+                    if (!catalogCurrent(current)) { reject(callback, "CANCELLED", "Content selection changed."); return; }
+                    if (code != null) reject(callback, code, "Could not prepare this title. Choose another source or try again.");
+                    else if (callback != null) callback.success(response);
+                });
+            });
+        } catch (RejectedExecutionException busy) { reject(callback, "BUSY", "Wait for the current catalog request."); }
+    }
+    private boolean catalogCurrent(java.util.function.BooleanSupplier current) {
+        try { return !destroyed && current != null && current.getAsBoolean(); }
+        catch (RuntimeException cancelled) { return false; }
+    }
+    private JSONObject resolveCatalogMedia(JSONObject selection, java.util.function.BooleanSupplier current) throws MsxServer.LibraryException {
+        JSONObject params = copy(selection);
+        if (params.has("resume") && !(params.opt("resume") instanceof Boolean)) throw new MsxServer.LibraryException("CATALOG_INVALID_INPUT");
+        boolean resume = params.optBoolean("resume", true); params.remove("resume");
+        if (!catalogCurrent(current)) throw new MsxServer.LibraryException("CANCELLED");
+        JSONObject media;
+        try { media = catalogClient.handle("resolve", params); }
+        catch (CatalogClient.CatalogException error) {
+            if ("CATALOG_INVALID_INPUT".equals(error.code)) throw new MsxServer.LibraryException(error.code);
+            if (!catalogCurrent(current)) throw new MsxServer.LibraryException("CANCELLED");
+            try { media = catalogWebResolver.resolve(params, () -> catalogCurrent(current)); }
+            catch (WebContentResolver.ResolveException failure) { throw new MsxServer.LibraryException(failure.code); }
+        }
+        if (!catalogCurrent(current)) throw new MsxServer.LibraryException("CANCELLED");
+        JSONObject content = media.optJSONObject("content");
+        if (content == null) throw new MsxServer.LibraryException("SOURCE_UNSUPPORTED");
+        media = attachWatchMetadata(media, content.optString("watchUrl"));
+        if (!resume) put(media, "resumeSeconds", 0);
+        return media;
+    }
     public void restoreReceivers() {
         main.post(() -> {
             if (!destroyed && matter.snapshot().optBoolean("paired")) request("matter.status", object("reconnect", true), null);
@@ -278,7 +412,7 @@ public final class ConnectionService extends Service {
             if ("app.selectTarget".equals(method)) {
                 String target = args.optString("target");
                 if (!"luma".equals(target) && !"philips".equals(target)) { reject(callback, "INVALID_REQUEST", "Choose a receiver."); return; }
-                if (!target.equals(selectedTarget)) { cancelQueuedVolume(); mediaRevision = UUID.randomUUID().toString(); }
+                if (!target.equals(selectedTarget)) { cancelQueuedVolume(); cancelTelevisionText(); mediaRevision = UUID.randomUUID().toString(); }
                 selectedTarget = target;
                 getSharedPreferences("receiver-selection", MODE_PRIVATE).edit().putString("target", target).apply();
                 synchronized (stateLock) { put(state, "selectedTarget", selectedTarget); }
@@ -288,6 +422,13 @@ public final class ConnectionService extends Service {
             }
             if (method != null && method.startsWith("msx.")) { requestTelevision(method, args, callback); return; }
             if (method != null && method.startsWith("matter.")) { requestMatter(method, args, callback); return; }
+            if ("watch.history".equals(method)) {
+                if (args.length() != 0) { reject(callback, "INVALID_REQUEST", "Open viewing history without extra fields."); return; }
+                if (callback != null) callback.success(watchHistory.snapshot());
+                return;
+            }
+            if ("watch.library".equals(method) || "watch.libraryDetails".equals(method)) { requestLibrary(method, args, callback); return; }
+            if (method != null && method.startsWith("catalog.")) { requestCatalog(method, args, callback); return; }
             if ("device.disconnect".equals(method)) { disconnect(callback); return; }
             if ("kodi.prepareSubtitle".equals(method) || "kodi.subtitleDelivery".equals(method)) {
                 requestSubtitle(method, args, callback); return;
@@ -611,7 +752,7 @@ public final class ConnectionService extends Service {
     }
     private void requestMatter(String method, JSONObject args, Callback callback) {
         if (!java.util.Arrays.asList("matter.status", "matter.pair", "matter.key", "matter.volume", "matter.input",
-                "matter.powerOff", "matter.openWindow", "matter.forget", "matter.disconnect").contains(method)) {
+                "matter.powerOff", "matter.powerOn", "matter.openWindow", "matter.forget", "matter.disconnect").contains(method)) {
             reject(callback, "INVALID_REQUEST", "Unknown TV control."); return;
         }
         boolean needsConnection = "matter.pair".equals(method) || !"matter.disconnect".equals(method) && matter.snapshot().optBoolean("paired") && (!matter.snapshot().optBoolean("paused") || args.optBoolean("reconnect"));
@@ -657,31 +798,108 @@ public final class ConnectionService extends Service {
         if (!destroyed && foreground && matter.snapshot().optBoolean("paired") && !matter.snapshot().optBoolean("paused")) main.postDelayed(matterPoll, 15000);
     }
     private JSONObject televisionSnapshot() {
-        JSONObject current = television.status();
+        JSONObject current = withTextState(television.status());
         if (matter != null) put(current, "matter", matter.snapshot());
         return current;
     }
+    private JSONObject withTextState(JSONObject current) {
+        String browserUrl = "";
+        if (current.optBoolean("running")) {
+            try { browserUrl = PhilipsTextController.browserSetupUrl(current.optString("startupUrl")); }
+            catch (PhilipsTextController.TextException invalid) { /* No setup URL without a valid current native origin. */ }
+        }
+        put(current, "browserSetupUrl", browserUrl);
+        if (televisionText == null) return current;
+        JSONObject typing = televisionText.status(matter == null ? "" : matter.currentPrivateAddress());
+        for (java.util.Iterator<String> keys = typing.keys(); keys.hasNext();) { String key = keys.next(); put(current, key, typing.opt(key)); }
+        if (textRequestPending) put(current, "typingBusy", true);
+        return current;
+    }
+    private void cancelTelevisionText() { textGeneration++; if (televisionText != null) televisionText.cancel(); }
+    private void requestTelevisionText(String method, JSONObject args, Callback callback) {
+        boolean grant = "msx.textPairGrant".equals(method);
+        if (!"philips".equals(selectedTarget) || (grant ? args.length() != 1 || !(args.opt("pin") instanceof String) || !args.optString("pin").matches("[0-9]{4}") : args.length() != 0)) {
+            reject(callback, grant ? "TEXT_INVALID_PIN" : "TEXT_INVALID_INPUT", "Check the TV text setup details."); return;
+        }
+        if (textRequestPending) { reject(callback, "TEXT_BUSY", "Wait for the current text request."); return; }
+        if (!television.status().optBoolean("running")) { reject(callback, "MSX_NOT_CONNECTED", "Start TV setup first."); return; }
+        textRequestPending = true; updateTelevisionState(); publish();
+        final long revision = televisionGeneration;
+        final long textRevision = textGeneration;
+        matter.resolvePrivateAddress(new MatterControllerAdapter.Callback() {
+            public void failure(String code, String message) { textRequestPending = false; updateTelevisionState(); publish(); reject(callback, "TEXT_ADDRESS_UNAVAILABLE", "Reconnect the paired TV before text setup."); }
+            public void success(JSONObject address) {
+                if (destroyed || revision != televisionGeneration || textRevision != textGeneration || !"philips".equals(selectedTarget)) { textRequestPending = false; updateTelevisionState(); publish(); reject(callback, "TEXT_CANCELLED", "TV text setup changed."); return; }
+                final String host = address.optString("host");
+                try {
+                    textNetwork.execute(() -> {
+                        JSONObject result = null; String error = null;
+                        try {
+                            if (destroyed || revision != televisionGeneration || textRevision != textGeneration || !"philips".equals(selectedTarget)) throw new PhilipsTextController.TextException("TEXT_CANCELLED");
+                            if ("msx.textPairRequest".equals(method)) result = televisionText.pairRequest(host);
+                            else if (grant) televisionText.pairGrant(host, args.optString("pin"));
+                            else if ("msx.launchBrowser".equals(method)) result = televisionText.launchBrowser(host, television.status().optString("startupUrl"));
+                            else if ("msx.typeBrowserAddress".equals(method)) result = televisionText.typeBrowserAddress(host, television.status().optString("startupUrl"));
+                            else result = televisionText.typeAddress(host, television.status().optString("startupUrl"));
+                        } catch (PhilipsTextController.TextException failure) { error = failure.code; }
+                        catch (Exception invalid) { error = "TEXT_REJECTED"; }
+                        final JSONObject reply = result; final String failure = error;
+                        main.post(() -> {
+                            textRequestPending = false;
+                            if (destroyed || revision != televisionGeneration || textRevision != textGeneration) { updateTelevisionState(); publish(); reject(callback, "TEXT_CANCELLED", "TV text setup changed."); return; }
+                            updateTelevisionState(); publish();
+                            if (failure != null) reject(callback, failure, "msx.launchBrowser".equals(method)
+                                    ? "Check the TV and receiver status before requesting another browser launch."
+                                    : "Check TV text setup and its focused field before trying again.");
+                            else if (callback != null) {
+                                JSONObject snapshot = television.status();
+                                if (reply != null) for (java.util.Iterator<String> keys = reply.keys(); keys.hasNext();) { String key = keys.next(); put(snapshot, key, reply.opt(key)); }
+                                callback.success(withTextState(snapshot));
+                            }
+                        });
+                    });
+                } catch (RejectedExecutionException busy) { textRequestPending = false; updateTelevisionState(); publish(); reject(callback, "TEXT_BUSY", "Wait for the current text request."); }
+            }
+        });
+    }
     private void requestTelevision(String method, JSONObject args, Callback callback) {
-        if (!java.util.Arrays.asList("msx.start", "msx.status", "msx.confirm", "msx.open", "msx.playPause",
-                "msx.seek", "msx.volume", "msx.subtitle", "msx.stop", "msx.disconnect", "msx.reset").contains(method)) {
+        if (java.util.Arrays.asList("msx.textPairRequest", "msx.textPairGrant", "msx.typeAddress", "msx.typeBrowserAddress", "msx.launchBrowser").contains(method)) { requestTelevisionText(method, args, callback); return; }
+        if (!java.util.Arrays.asList("msx.start", "msx.status", "msx.confirm", "msx.open", "msx.sample", "msx.playPause",
+                "msx.seek", "msx.volume", "msx.subtitle", "msx.stop", "msx.disconnect", "msx.reset", "msx.debugPing", "msx.debugLabel", "msx.reloadReceiver").contains(method)) {
             reject(callback, "INVALID_REQUEST", "Unknown television control."); return;
+        }
+        final boolean debugControl = "msx.debugPing".equals(method) || "msx.debugLabel".equals(method) || "msx.reloadReceiver".equals(method);
+        if (debugControl && (args.length() != 0 || !"philips".equals(selectedTarget))) {
+            reject(callback, "INVALID_REQUEST", "Select Philips TV and use the fixed receiver control."); return;
+        }
+        if ("msx.reloadReceiver".equals(method)) {
+            JSONObject current = television.status();
+            JSONObject observed = current.optJSONObject("playback");
+            if ((observed != null && observed.optBoolean("active")) || current.has("pendingCommand")
+                    || televisionNetwork.getActiveCount() != 0 || !televisionNetwork.getQueue().isEmpty()) {
+                reject(callback, "RELOAD_BLOCKED", "Wait until playback and pending receiver commands finish."); return;
+            }
+        }
+        if ("msx.sample".equals(method) && (args.length() != 0 || !"philips".equals(selectedTarget))) {
+            reject(callback, "INVALID_REQUEST", "Select Philips TV and use the fixed playback test."); return;
         }
         // Reads and disconnect must remain available while a slow TV Open awaits
         // its receipt. They never share Kodi's queue or wait behind TV playback.
         if ("msx.status".equals(method)) {
             updateTelevisionState();
-            if (callback != null) callback.success(television.status());
+            if (callback != null) callback.success(withTextState(television.status()));
             return;
         }
         if ("msx.disconnect".equals(method)) {
             televisionGeneration++;
+            cancelTelevisionText();
             television.disconnect(); televisionRunning = false;
             televisionNetwork.getQueue().clear();
             cancelQueuedVolume();
             mediaRevision = UUID.randomUUID().toString();
             updateTelevisionState(); publish();
             if (!connected()) demote();
-            if (callback != null) callback.success(television.status());
+            if (callback != null) callback.success(withTextState(television.status()));
             return;
         }
         if ("msx.start".equals(method)) {
@@ -690,27 +908,35 @@ public final class ConnectionService extends Service {
             try {
                 Intent start = new Intent(this, ConnectionService.class).setAction(START);
                 if (Build.VERSION.SDK_INT >= 26) startForegroundService(start); else startService(start);
-                notice = "Open Media Station X on Philips";
+                notice = "Open the LUMA receiver page on Philips TV";
                 promote();
             } catch (RuntimeException ignored) { televisionStarting = false; reject(callback, "BACKGROUND_START", "Open the app to connect the TV."); return; }
         }
+        if ("msx.reset".equals(method)) cancelTelevisionText();
         if ("msx.open".equals(method)) {
             String token = args.optString("sourceToken");
             if (token.isEmpty() || !token.equals(authorizedToken)) { reject(callback, "SOURCE_CHANGED", "Choose the video again."); return; }
             cancelQueuedVolume();
             mediaRevision = UUID.randomUUID().toString();
         }
+        if ("msx.sample".equals(method)) { cancelQueuedVolume(); mediaRevision = UUID.randomUUID().toString(); }
         final long session = televisionGeneration;
+        final String debugRevision = mediaRevision;
         try {
             televisionNetwork.execute(() -> {
                 JSONObject result = null; String code = null;
                 try {
                     if (destroyed || session != televisionGeneration) throw new IllegalStateException();
+                    if (debugControl && (!"philips".equals(selectedTarget) || !debugRevision.equals(mediaRevision))) throw new MsxServer.MsxException("SOURCE_CHANGED");
                     if ("msx.start".equals(method)) result = television.start();
                     else if ("msx.status".equals(method)) result = television.status();
                     else if ("msx.confirm".equals(method)) result = television.confirmPairing(args.optString("host"));
                     else if ("msx.disconnect".equals(method)) { television.disconnect(); result = television.status(); }
                     else if ("msx.reset".equals(method)) { television.reset(); result = television.status(); }
+                    else if ("msx.sample".equals(method)) result = television.sample();
+                    else if ("msx.debugPing".equals(method)) result = television.command("ping", new JSONObject());
+                    else if ("msx.debugLabel".equals(method)) result = television.command("set-label", object("label", "LUMA debug channel ready"));
+                    else if ("msx.reloadReceiver".equals(method)) result = television.command("reload", new JSONObject());
                     else result = television.command(method.substring(4), args);
                 } catch (MsxServer.MsxException failure) { code = failure.code; }
                 catch (Exception ignored) { code = "MSX_UNAVAILABLE"; }
@@ -727,8 +953,8 @@ public final class ConnectionService extends Service {
                     publish();
                     if (televisionRunning) scheduleTelevisionPoll();
                     else if (!connected()) demote();
-                    if (error == null) { if (callback != null) callback.success(response == null ? television.status() : response); }
-                    else reject(callback, error, "Could not complete the TV control. Check Media Station X and try again.");
+                    if (error == null) { if (callback != null) callback.success(withTextState(response == null ? television.status() : response)); }
+                    else reject(callback, error, "Could not complete the TV control. Check the LUMA receiver page and try again.");
                 });
             });
         } catch (RejectedExecutionException ignored) {
@@ -738,6 +964,7 @@ public final class ConnectionService extends Service {
     }
     private void updateTelevisionState() {
         JSONObject current = televisionSnapshot(), playback = current.optJSONObject("playback");
+        if (watchHistory != null && playback != null && current.optBoolean("connected")) watchHistory.observe("philips", playback);
         String source = playback != null && playback.optBoolean("active") ? playback.optString("source") : "";
         if (!source.equals(televisionSource)) {
             televisionSource = source;
@@ -970,6 +1197,7 @@ public final class ConnectionService extends Service {
     /** A fresh service may attach controls to video already playing on Kodi.
      * A remembered source or an in-progress handoff always keeps its own scope. */
     private void adoptObservedPlayback(JSONObject current) {
+        if (watchHistory != null) watchHistory.observe("luma", current);
         observeSubtitleSource(current);
         synchronized (stateLock) {
             JSONObject connection = state.optJSONObject("connection");
@@ -1216,6 +1444,11 @@ public final class ConnectionService extends Service {
         return PendingIntent.getService(this, requestCode, intent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
     }
     @Override public void onDestroy() {
+        if (watchHistory != null) watchHistory.close();
+        if (libraryStore != null) libraryStore.close();
+        libraryReads.shutdownNow();
+        if (catalogWebResolver != null) catalogWebResolver.close();
+        catalogNetwork.shutdownNow();
         clearSubtitleDelivery();
         if (subtitleDelivery != null) subtitleDelivery.close();
         subtitleNetwork.shutdownNow();
@@ -1225,6 +1458,7 @@ public final class ConnectionService extends Service {
         for (Work work : pending) work.cancel();
         if (backend != null) backend.close(); network.shutdownNow();
         if (television != null) television.close(); televisionNetwork.shutdownNow();
+        if (televisionText != null) televisionText.close(); textNetwork.shutdownNow();
         if (matter != null) matter.close();
         if (mediaSession != null) { mediaSession.setActive(false); mediaSession.release(); }
         getSystemService(NotificationManager.class).cancel(MEDIA_NOTIFICATION);

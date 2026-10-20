@@ -47,6 +47,12 @@ public final class BackendInstrumentation extends UiSmokeInstrumentation {
         if ("matter".equals(args.getString("mode"))) { MatterInstrumentation.run(this); return; }
         if ("multi-receiver".equals(args.getString("mode"))) { MultiReceiverInstrumentation.run(this, args); return; }
         if ("msx".equals(args.getString("mode"))) { MsxInstrumentation.run(this); return; }
+        if ("philips-text".equals(args.getString("mode"))) { PhilipsTextInstrumentation.run(this); return; }
+        if ("watch-history".equals(args.getString("mode"))) { WatchHistoryInstrumentation.run(this); return; }
+        if ("library".equals(args.getString("mode"))) { LibraryInstrumentation.run(this); return; }
+        if ("catalog".equals(args.getString("mode"))) { CatalogInstrumentation.run(this); return; }
+        if ("tv-catalog".equals(args.getString("mode"))) { TVCatalogInstrumentation.run(this); return; }
+        if ("web-content".equals(args.getString("mode")) || "web-content-live".equals(args.getString("mode"))) { WebContentInstrumentation.run(this, args); return; }
         if ("migration-seed".equals(args.getString("mode")) || "migration-check".equals(args.getString("mode"))) { SigningMigrationInstrumentation.run(this, args); return; }
         if ("live-controls".equals(args.getString("mode"))) { LiveControlsInstrumentation.run(this, args); return; }
         if ("updates".equals(args.getString("mode"))) { UpdateInstrumentation.run(this, args); return; }

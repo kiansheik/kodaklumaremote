@@ -73,6 +73,7 @@ public final class MainActivity extends Activity {
     };
     private final AtomicLong pageGeneration = new AtomicLong();
     private final AtomicLong captureSequence = new AtomicLong();
+    private volatile long catalogAttempt;
     private final String captureSession = java.util.UUID.randomUUID().toString();
     private volatile String capturedToken;
     private volatile long capturedGeneration = -1;
@@ -382,6 +383,7 @@ public final class MainActivity extends Activity {
                         captureFailure(requestId, "Open a playable episode, then tap Cast again."); return;
                     }
                     JSONObject media = data.getJSONObject("media");
+                    if (connectionService != null) media = connectionService.attachWatchMetadata(media, url);
                     int trackCount = media.optJSONArray("tracks") == null ? 0 : media.optJSONArray("tracks").length();
                     String kind = media.optString("contentType", "").toLowerCase(java.util.Locale.ROOT);
                     android.util.Log.i("LumaHandoff", "captured tracks=" + trackCount + " format="
@@ -487,6 +489,39 @@ public final class MainActivity extends Activity {
                 if (!url.isEmpty()) navigate(url); else showBrowser(true);
                 reply(id, new JSONObject().put("accepted", true), null, null);
             } else if (method.equals("app.capture")) capture(id);
+            else if (method.equals("app.cancelCatalog")) {
+                if (params.length() != 0) { reply(id, null, "INVALID_REQUEST", "Cancel selection without extra fields."); return; }
+                if (catalogAttempt != 0 && catalogAttempt == captureSequence.get()) captureSequence.incrementAndGet();
+                catalogAttempt = 0;
+                reply(id, new JSONObject().put("accepted", true), null, null);
+            }
+            else if (method.equals("app.chooseCatalog")) {
+                if (connectionService == null) { reply(id, null, "BUSY", "The remote is starting. Try again in a moment."); return; }
+                connectionService.revokeToken(capturedToken);
+                capturedToken = null; capturedMedia = null; capturedGeneration = -1;
+                final long generation = pageGeneration.get(), attempt = captureSequence.incrementAndGet();
+                catalogAttempt = attempt;
+                connectionService.chooseCatalog(params,
+                        () -> !destroyed && generation == pageGeneration.get() && attempt == captureSequence.get() && catalogAttempt == attempt,
+                        new ConnectionService.Callback() {
+                            @Override public void success(JSONObject result) {
+                                if (destroyed || generation != pageGeneration.get() || attempt != captureSequence.get() || catalogAttempt != attempt) {
+                                    reply(id, null, "SOURCE_CHANGED", "Content selection changed."); return;
+                                }
+                                catalogAttempt = 0;
+                                try {
+                                    JSONObject media = new JSONObject(result.toString());
+                                    capturedToken = captureSession + ":" + generation + ":" + attempt;
+                                    capturedGeneration = generation; media.put("sourceToken", capturedToken); capturedMedia = media;
+                                    showBrowser(false); reply(id, media, null, null);
+                                } catch (Exception invalid) { reply(id, null, "SOURCE_UNSUPPORTED", "This title did not expose a supported stream."); }
+                            }
+                            @Override public void failure(String code, String message) {
+                                if (catalogAttempt == attempt) catalogAttempt = 0;
+                                reply(id, null, code, message);
+                            }
+                        });
+            }
             else if (method.equals("app.beginHandoff")) {
                 String token = params.optString("sourceToken", "");
                 if (connectionService == null || capturedMedia == null || capturedGeneration != pageGeneration.get()
@@ -522,6 +557,8 @@ public final class MainActivity extends Activity {
                     }
                     android.util.Log.i("LumaHandoff", "remote metadata accepted");
                 }
+                if (connectionService != null) connectionService.rememberWatchHandoff(capturedMedia,
+                        params.optString("target", "luma"), params.optBoolean("resumeApplied", false));
                 String script;
                 try (InputStream input = getAssets().open("capture.js")) {
                     script = new String(readBounded(input, 256 * 1024), StandardCharsets.UTF_8);

@@ -1,6 +1,6 @@
-# Media Station X receiver
+# TV receiver
 
-These files run on the TV inside Media Station X. The Android sender serves the
+These files run in the TV Internet browser or inside Media Station X. The Android sender serves the
 receiver assets and a small control channel on its Wi-Fi address. The TV fetches
 the original video and selected subtitle URL itself; the phone never relays
 media. Once the video and selected subtitle have loaded, losing the phone control
@@ -8,8 +8,33 @@ connection does not stop or reset the TV player.
 
 ## Setup and platform boundary
 
-Install **Media Station X**, open Settings → Start Parameter → Setup, and enter
-the address shown under TV receiver setup in LUMA Remote. MSX requests
+In LUMA Remote, select Philips → Video receiver → **TV browser** and tap
+**Open TV receiver**. The phone prepares its listener. First time only, enable
+TV browser control with the four-digit PIN shown by the TV, then tap **Open TV
+receiver** again. Existing saved permission is reused. The native launch request
+uses this phone's direct LAN URL `http://PHONE:PORT/msx/connect.html`; callers
+cannot provide a URL. A launch acknowledgement does not prove the TV opened the
+page. Wait for the actual TV connection, then explicitly **Allow this TV**.
+
+If automatic launch is unavailable, choose **Enter link manually**. Open
+**Internet on the TV**, select and clear its address bar, then tap **Type browser
+link** on the phone. Check the TV address and select **Go / OK on the TV**. The
+phone types its own fixed LAN setup link only; it does not clear or submit the field.
+The phone and TV must share a network; no public redirect service is involved.
+Actual TV launch, navigation and playback remain device acceptance checks.
+
+The secondary **Media Station X** option retains its original setup flow. Tap
+**Set up TV** if needed. Enable address entry once with the TV PIN if it is not
+already saved.
+This text-control permission is separate from Matter and receiver approval.
+After permission is saved, return to **Media Station X → Settings → Start
+Parameter → Setup** on the TV. Select and clear its address field, leave the
+keyboard open and the padlock open, then tap **Enter TV address** on the phone.
+The phone sends only its own current `PHONE:PORT` startup address. Check the
+displayed text and confirm **Go / OK on the TV**; the phone does not submit it.
+If entry is interrupted or partial, clear the field before trying again. A
+successful protocol acknowledgement does not verify the displayed text.
+If text control is unavailable, enter the shown address manually. MSX requests
 `http://PHONE:PORT/msx/start.json`. The phone generates that start object and a
 home page containing a `video:plugin:` action pointing at `receiver.html` under
 the private capability prefix. Open **Connect this TV**, then explicitly approve
@@ -45,10 +70,11 @@ by TV model and region.
   attempt to settle. Network/codec/startup/subtitle failures return bounded error
   codes. A failed subtitle attempt can coexist with active video playback.
 
-The official MSX `TVXVideoPlugin` bridge connects the TV's native player overlay
-to the same player. Its SDK is loaded once from the official
+When embedded in MSX, the official `TVXVideoPlugin` bridge connects the TV's
+native player overlay to the same player. Its SDK is loaded once from the official
 `https://msx.benzac.de/js/tvx-plugin.min.js`, with no referrer. It is deliberately
-not redistributed under an assumed license. An SDK network failure does not
+not redistributed under an assumed license. Standalone TV browser pages skip
+this SDK and bridge entirely. An SDK network failure does not
 disable the phone control channel or stop an already playing video; native MSX
 overlay integration will be unavailable for that launch. HLS.js is separately
 pinned and bundled by the mobile build.
@@ -59,7 +85,12 @@ All endpoints below are under the phone-generated secret URL prefix. Native
 code additionally pins the approved TV address/client and owns consent,
 validation and command timeouts.
 
-1. `GET hello?client=ID` → `{sessionId,approved}`. The random TV client ID persists
+1. Before each new session, the receiver GETs same-origin `/msx/start.json` and
+   checks its content URL against the already loaded capability. This lets a
+   waiting TV reclaim its peer after the phone renews an expired setup window,
+   without reloading or affecting media. A changed capability is rejected;
+   the page never navigates automatically or approves itself.
+   `GET hello?client=ID` → `{sessionId,approved}`. The random TV client ID persists
    in local storage when the TV browser permits it.
 2. `GET poll?client=ID&sessionId=ID&after=N` → `{approved,commands:[{id,method,params}]}`.
 3. `POST state {client,sessionId,playback}` reports observed playback before an ACK.

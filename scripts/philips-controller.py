@@ -2,6 +2,7 @@
 """Small, local Philips JointSpace v6 client. No discovery or Matter changes."""
 import argparse
 import base64
+import contextlib
 import getpass
 import hashlib
 import hmac
@@ -12,6 +13,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import signal
 import socket
 import ssl
 import stat
@@ -33,12 +35,42 @@ FOCUS_VALUES = {"Home", "WatchTv", "WatchSatellite", "App", "Apps", "Application
                 "Browser", "Media Station X", "MediaStationX", "MSX", "Android", "Launcher",
                 "TV", "SmartTV", "YouTube", "On", "Off", "on", "off"}
 MAX_RESPONSE = 1024 * 1024
+TYPE_PACING_SECONDS = 0.15
+TYPE_DEADLINE_SECONDS = 65
 
 
 class PhilipsError(Exception):
-    def __init__(self, code, uncertain=False):
+    def __init__(self, code, uncertain=False, *, acknowledged_chars=None, partial_input=None):
         super().__init__(code)
         self.code, self.uncertain = code, uncertain
+        self.acknowledged_chars, self.partial_input = acknowledged_chars, partial_input
+
+
+@contextlib.contextmanager
+def typing_deadline(deadline, in_flight):
+    # A socket timeout is an inactivity bound, and Digest can open more than one
+    # connection. A scoped POSIX alarm also bounds those operations as a whole.
+    # Refuse competing alarms/non-main-thread use before sending any input.
+    if any(signal.getitimer(signal.ITIMER_REAL)):
+        raise PhilipsError("TYPING_DEADLINE_UNAVAILABLE")
+    previous = signal.getsignal(signal.SIGALRM)
+
+    def expired(signum, frame):
+        raise PhilipsError("TYPING_DEADLINE", in_flight())
+
+    try:
+        signal.signal(signal.SIGALRM, expired)
+    except ValueError:
+        raise PhilipsError("TYPING_DEADLINE_UNAVAILABLE") from None
+    try:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise PhilipsError("TYPING_DEADLINE")
+        signal.setitimer(signal.ITIMER_REAL, remaining)
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
 
 
 class SafeParser(argparse.ArgumentParser):
@@ -141,7 +173,7 @@ class JsonTransport:
     def __init__(self, base_url):
         self.base_url = base_url.rstrip("/") + "/"
 
-    def request(self, path, payload=None, credentials=None, json_required=True):
+    def request(self, path, payload=None, credentials=None, json_required=True, timeout=8):
         # This context belongs only to this one fixed LAN endpoint. No trust-store
         # changes, environment proxies, redirects or automatic write retries.
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
@@ -157,7 +189,7 @@ class JsonTransport:
         request = urllib.request.Request(self.base_url + path, data=body,
                                          headers={"Accept": "application/json", "Content-Type": "application/json"})
         try:
-            with opener.open(request, timeout=8) as response:
+            with opener.open(request, timeout=timeout) as response:
                 if response.status != 200:
                     raise PhilipsError("TV_REJECTED")
                 raw = response.read(MAX_RESPONSE + 1)
@@ -308,8 +340,32 @@ class PhilipsController:
         if (not isinstance(text, str) or not 1 <= len(text) <= 2048
                 or any(ord(ch) < 32 or 127 <= ord(ch) <= 159 or 0xd800 <= ord(ch) <= 0xdfff for ch in text)):
             raise PhilipsError("INVALID_TEXT")
-        self.transport.request("input/key", {"unicode": text}, self.credentials(), json_required=False)
-        return {"accepted": True, "textAppliedVerified": False}
+        acknowledged = 0
+        in_flight = False
+        deadline = time.monotonic() + TYPE_DEADLINE_SECONDS
+        try:
+            with typing_deadline(deadline, lambda: in_flight):
+                credentials = self.credentials()
+                for character in text:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= (TYPE_PACING_SECONDS if acknowledged else 0):
+                        raise PhilipsError("TYPING_DEADLINE")
+                    if acknowledged:
+                        time.sleep(TYPE_PACING_SECONDS)
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise PhilipsError("TYPING_DEADLINE")
+                    # JointSPACE Unicode input is one key per request. Never
+                    # submit, retry a failed key, or infer visible text from ACKs.
+                    in_flight = True
+                    self.transport.request("input/key", {"unicode": character}, credentials,
+                                           json_required=False, timeout=min(8, remaining))
+                    in_flight = False
+                    acknowledged += 1
+        except PhilipsError as error:
+            raise PhilipsError(error.code, error.uncertain, acknowledged_chars=acknowledged,
+                               partial_input=acknowledged > 0 or error.uncertain) from None
+        return {"accepted": True, "textAppliedVerified": False, "acknowledgedChars": acknowledged}
 
 
 def read_private_input(prompt):
@@ -357,7 +413,11 @@ def main():
         print(json.dumps(result, separators=(",", ":")))
         return 0
     except PhilipsError as error:
-        print(json.dumps({"error": error.code, "outcome": "unknown" if error.uncertain else "not_confirmed"}), file=sys.stderr)
+        result = {"error": error.code, "outcome": "unknown" if error.uncertain else "not_confirmed"}
+        if error.acknowledged_chars is not None:
+            result.update({"acknowledgedChars": error.acknowledged_chars, "partialInput": error.partial_input,
+                           "textAppliedVerified": False})
+        print(json.dumps(result), file=sys.stderr)
         return 1
     except KeyboardInterrupt:
         print('{"error":"CANCELLED","outcome":"not_confirmed"}', file=sys.stderr)
