@@ -35,7 +35,7 @@ const attribute = (element, name) => element.getAttribute?.(name) || '';
 const finiteTime = (value) => Number.isFinite(value) && value >= 0 ? value : 0;
 
 /** Read only sources explicitly exposed by an ordinary, unencrypted video element. */
-export function extractMedia(video, { baseURI, title } = {}) {
+export function extractMedia(video, { baseURI, title, allowTextSubtitles = false } = {}) {
   if (!video || typeof video.querySelectorAll !== 'function') {
     throw failure('SOURCE_UNAVAILABLE', 'No video player is available.');
   }
@@ -78,14 +78,22 @@ export function extractMedia(video, { baseURI, title } = {}) {
     if (!trackURL) continue;
     const declaredType = (attribute(element, 'type') || '').split(';', 1)[0].trim().toLowerCase();
     const extension = new URL(trackURL).pathname.match(/\.([a-z0-9]+)$/i)?.[1].toLowerCase();
-    // HTML subtitle/caption <track> resources are WebVTT by contract. Allow an
-    // extensionless declared endpoint, but never relabel an explicit SRT/ASS file.
-    if (declaredType && declaredType !== 'text/vtt') continue;
-    if (declaredType !== 'text/vtt' && extension && extension !== 'vtt') continue;
+    // CAF uses WebVTT directly. The native phone can validate/normalize the
+    // actual bytes of additional text formats before Kodi receives them.
+    const subtitleTypes = { vtt: 'text/vtt', srt: 'application/x-subrip', ass: 'text/x-ass', ssa: 'text/x-ssa', ttml: 'application/ttml+xml', dfxp: 'application/ttml+xml' };
+    let subtitleType = 'text/vtt';
+    if (allowTextSubtitles) {
+      if (declaredType && !['text/vtt', 'application/x-subrip', 'application/srt', 'text/srt', 'text/x-ass', 'text/x-ssa', 'text/ass', 'text/ssa', 'application/x-ass', 'application/x-ssa', 'application/ttml+xml', 'application/xml', 'text/xml'].includes(declaredType)) continue;
+      if (!declaredType && extension && !Object.hasOwn(subtitleTypes, extension)) continue;
+      subtitleType = declaredType || subtitleTypes[extension] || 'text/vtt';
+    } else {
+      if (declaredType && declaredType !== 'text/vtt') continue;
+      if (declaredType !== 'text/vtt' && extension && extension !== 'vtt') continue;
+    }
     tracks.push({
       id: tracks.length + 1,
       url: trackURL,
-      contentType: 'text/vtt',
+      contentType: subtitleType,
       language: String(attribute(element, 'srclang') || element.srclang || '').slice(0, 64),
       label: String(attribute(element, 'label') || element.label || '').slice(0, 200),
       active: element.track?.mode === 'showing',

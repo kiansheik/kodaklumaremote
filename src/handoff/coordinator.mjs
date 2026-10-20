@@ -6,6 +6,10 @@
 // kodi.open(media, options); kodi.status(options) -> {active, sourceUrl};
 // kodi.getSubtitles(options) -> {tracks:[{index,url?}], enabled, currentIndex};
 // kodi.addSubtitle(track, options); kodi.setSubtitle(index|'off', options);
+// Optional native preparation: kodi.prepareSubtitle(track, options) returns an
+// opaque preparedId; kodi.subtitleDelivery(preparedId, track, options) reports
+// {downloaded:boolean} only after its complete response body reached Kodi.
+// addSubtitle receives options.preparedId while track.url stays the original URL.
 // remote.ready(result, options). Every options object includes AbortSignal.
 // addSubtitle options.onNotSent() may report explicit proof that this request
 // was never applied or queued, including a verified Kodi rejection or a late
@@ -28,6 +32,12 @@ const MESSAGES = Object.freeze({
   SUBTITLE_TIMEOUT: 'Kodi did not register a subtitle in time.',
   HANDOFF_TIMEOUT: 'Casting setup took too long. Try again.',
   SUBTITLE_BINDING: 'Kodi changed the subtitle list unexpectedly. Start the video again.',
+  SUBTITLE_DOWNLOAD: 'Could not download these subtitles. Choose the language again to retry.',
+  SUBTITLE_FORMAT: 'This subtitle format is not supported.',
+  SUBTITLE_INVALID: 'These subtitles could not be prepared. Choose the language again.',
+  SUBTITLE_TOO_LARGE: 'This subtitle file is too large.',
+  SUBTITLE_DELIVERY: 'Kodi has not downloaded these subtitles. Keep the video playing and try the language again.',
+  SUBTITLE_EXPIRED: 'The prepared subtitle is no longer available. Choose the language again.',
   ADAPTER_FAILED: 'The receiver could not complete casting setup. Try again.',
 });
 
@@ -41,6 +51,8 @@ export class HandoffError extends Error {
 
 function fail(code) { return new HandoffError(code); }
 const TRANSIENT_ADAPTER_CODES = new Set(['KODI_UNAVAILABLE', 'TIMEOUT', 'BUSY', 'KODI_RESPONSE', 'KODI_REJECTED']);
+const SUBTITLE_ADAPTER_CODES = new Set(['SUBTITLE_DOWNLOAD', 'SUBTITLE_FORMAT', 'SUBTITLE_INVALID', 'SUBTITLE_TOO_LARGE', 'SUBTITLE_DELIVERY', 'SUBTITLE_EXPIRED']);
+const preparedTicket = value => typeof value === 'string' && /^[A-Za-z0-9_-]{16,128}$/u.test(value);
 function safeText(value, limit) { return typeof value === 'string' ? value.replace(/[\u0000-\u001f\u007f-\u009f]/gu, '').slice(0, limit) : ''; }
 function sourceUrl(value) {
   if (typeof value !== 'string' || /[\s\u0000-\u001f\u007f\\|]/u.test(value)) throw fail('INVALID_MEDIA');
@@ -104,6 +116,8 @@ export function createHandoffCoordinator({
     openRetry: bounded(limits.openRetryMs, 5000, 10000, 500),
     // Subtitle readiness and registration may settle after video starts.
     subtitle: bounded(limits.subtitleMs, 30000, 30000),
+    prepare: bounded(limits.prepareMs, 8000, 8000),
+    delivery: bounded(limits.deliveryMs, 10000, 10000),
     overall: bounded(limits.overallMs, 120000, 120000),
     poll: bounded(limits.pollMs, 350, 2000, 100),
     tracks: Math.floor(bounded(limits.maxTracks, 64, 128)),
@@ -111,6 +125,7 @@ export function createHandoffCoordinator({
   // Metadata only, never media bytes. Reuses confirmed bindings on a retry of
   // the still-active source. Unknown existing external tracks are not inferred.
   const sources = new Map();
+  let preparedSource = null;
   let current = null;
   let lastMutationAt = -Infinity;
 
@@ -161,9 +176,9 @@ export function createHandoffCoordinator({
     } catch (error) {
       if (error instanceof HandoffError) throw error;
       check(ctx);
-      const fixed = fail('ADAPTER_FAILED');
+      const fixed = fail(SUBTITLE_ADAPTER_CODES.has(error?.code) ? error.code : 'ADAPTER_FAILED');
       fixed.retryable = typeof error?.code !== 'string' || TRANSIENT_ADAPTER_CODES.has(error.code);
-      if (['SOURCE_CHANGED', 'KODI_REJECTED', 'KODI_AUTH', 'KODI_CONFIG'].includes(error?.code)) fixed.adapterCode = error.code;
+      if (SUBTITLE_ADAPTER_CODES.has(error?.code) || ['SOURCE_CHANGED', 'KODI_REJECTED', 'KODI_AUTH', 'KODI_CONFIG'].includes(error?.code)) fixed.adapterCode = error.code;
       throw fixed;
     } finally {
       clearTimeout(timer);
@@ -242,6 +257,10 @@ export function createHandoffCoordinator({
         if (track.url !== undefined && track.url !== cache.pending.url) throw fail('SUBTITLE_BINDING');
         cache.pending.boundIndex = track.index;
         cache.bindings.set(cache.pending.url, track.index);
+        cache.retiredIndices.get(cache.pending.url)?.delete(track.index);
+        // An unknown Add retains its own receipt identity even if navigation
+        // cleared reusable tickets. Binding it cannot skip delivery verification.
+        if (cache.pending.preparedId) cache.prepared.set(cache.pending.url, cache.pending.preparedId);
         cache.pending = null;
         return snapshot;
       }
@@ -252,7 +271,7 @@ export function createHandoffCoordinator({
 
   function cacheFor(media) {
     let cache = sources.get(media.url);
-    if (!cache) { cache = { bindings: new Map(), pending: null, opening: null }; sources.set(media.url, cache); }
+    if (!cache) { cache = { bindings: new Map(), prepared: new Map(), retiredTickets: new Set(), retiredIndices: new Map(), pending: null, opening: null }; sources.set(media.url, cache); }
     while (sources.size > 4) sources.delete(sources.keys().next().value);
     return cache;
   }
@@ -261,6 +280,7 @@ export function createHandoffCoordinator({
     const catalog = ctx.media.tracks.map(track => ({
       url: track.url, language: track.language, label: track.label,
       index: cache.bindings.get(track.url) ?? null,
+      ...(cache.prepared.has(track.url) ? { preparedId: cache.prepared.get(track.url) } : {}),
     }));
     const tracks = catalog.filter(track => track.index !== null)
       .map(({ index, language, label }) => ({ index, language, label }));
@@ -273,7 +293,7 @@ export function createHandoffCoordinator({
     snapshot = await finishPending(ctx, cache, snapshot);
     const present = new Set(snapshot.tracks.map(track => track.index));
     for (const [url, index] of cache.bindings) {
-      if (!present.has(index)) cache.bindings.delete(url);
+      if (!present.has(index)) { cache.bindings.delete(url); cache.prepared.delete(url); }
       else {
         const observed = snapshot.tracks.find(track => track.index === index);
         if (observed.url !== undefined && observed.url !== url) throw fail('SUBTITLE_BINDING');
@@ -281,24 +301,40 @@ export function createHandoffCoordinator({
     }
     const claimed = new Map([...cache.bindings].map(([url, index]) => [index, url]));
     const identified = ctx.media.tracks.flatMap(track => {
-      const observed = snapshot.tracks.find(item => item.url === track.url);
+      const observed = snapshot.tracks.find(item => item.url === track.url && !cache.retiredIndices.get(track.url)?.has(item.index));
       return observed ? [{ url: track.url, index: observed.index }] : [];
     });
     for (const track of [...identified, ...(ctx.knownCatalog || [])]) {
+      if (cache.retiredTickets.has(track.preparedId) || !track.preparedId && cache.retiredIndices.get(track.url)?.has(track.index)) continue;
       if (track.index === null || !present.has(track.index)) continue;
       const observed = snapshot.tracks.find(item => item.index === track.index);
       if ((observed.url !== undefined && observed.url !== track.url)
           || (claimed.has(track.index) && claimed.get(track.index) !== track.url)) throw fail('SUBTITLE_BINDING');
       if (!cache.bindings.has(track.url)) { cache.bindings.set(track.url, track.index); claimed.set(track.index, track.url); }
+      if (track.preparedId && cache.bindings.get(track.url) === track.index && !cache.prepared.has(track.url)) cache.prepared.set(track.url, track.preparedId);
     }
     return snapshot;
   }
 
   async function loadTrack(ctx, cache, track, snapshot) {
     if (!track || cache.bindings.has(track.url)) return snapshot;
-    const existing = snapshot.tracks.find(item => item.url === track.url);
+    const existing = snapshot.tracks.find(item => item.url === track.url && !cache.retiredIndices.get(track.url)?.has(item.index));
     if (existing) { cache.bindings.set(track.url, existing.index); return snapshot; }
-    const pending = { url: track.url, before: new Set(snapshot.tracks.map(item => item.index)), invoked: false };
+    let preparedId = cache.prepared.get(track.url);
+    if (typeof kodi.prepareSubtitle === 'function' && !preparedId) {
+      if (typeof kodi.subtitleDelivery !== 'function') throw fail('SUBTITLE_DELIVERY');
+      const preparation = stage(ctx, settings.prepare, 'SUBTITLE_DOWNLOAD');
+      await assertPlayback(ctx, preparation);
+      let prepared;
+      try { prepared = await call(ctx, options => kodi.prepareSubtitle(track, options), preparation); }
+      catch (error) { if (error.adapterCode === 'SOURCE_CHANGED') throw fail('SOURCE_CHANGED'); throw error; }
+      if (!preparedTicket(prepared?.preparedId)) throw fail('SUBTITLE_INVALID');
+      preparedId = prepared.preparedId;
+      cache.prepared.set(track.url, preparedId);
+    }
+    // Preparation is read-only. A failed/cancelled download must not create an
+    // uncertain Add that blocks a later explicit retry.
+    const pending = { url: track.url, preparedId, before: new Set(snapshot.tracks.map(item => item.index)), invoked: false };
     cache.pending = pending;
     const window = stage(ctx, settings.subtitle, 'SUBTITLE_TIMEOUT');
     let rejected;
@@ -307,8 +343,10 @@ export function createHandoffCoordinator({
         pending.invoked = true;
         return kodi.addSubtitle(track, {
           ...options,
+          ...(preparedId ? { preparedId } : {}),
           onNotSent() {
             pending.invoked = false;
+            cache.prepared.delete(pending.url);
             if (pending.boundIndex !== undefined && cache.bindings.get(pending.url) === pending.boundIndex) cache.bindings.delete(pending.url);
           },
         });
@@ -323,6 +361,32 @@ export function createHandoffCoordinator({
     const registration = stage(ctx, settings.subtitle, 'SUBTITLE_TIMEOUT');
     snapshot = await subtitles(ctx, registration);
     return finishPending(ctx, cache, snapshot, registration);
+  }
+
+  /** Renew a known delivery lease before selecting its already-loaded index.
+   * Only the adapter's explicit unavailable-ticket proof can retire it. */
+  async function preflightTrack(ctx, cache, track) {
+    const preparedId = cache.prepared.get(track.url), index = cache.bindings.get(track.url);
+    if (!preparedId || !Number.isInteger(index)) return;
+    if (typeof kodi.subtitleDelivery !== 'function') throw fail('SUBTITLE_DELIVERY');
+    const window = stage(ctx, settings.delivery, 'SUBTITLE_DELIVERY');
+    await assertPlayback(ctx, window);
+    try {
+      const receipt = await call(ctx, options => kodi.subtitleDelivery(preparedId, track, options), window);
+      if (typeof receipt?.downloaded !== 'boolean') throw fail('SUBTITLE_DELIVERY');
+    } catch (error) {
+      if (error.adapterCode === 'SOURCE_CHANGED') throw fail('SOURCE_CHANGED');
+      if (error.code !== 'SUBTITLE_EXPIRED' && error.adapterCode !== 'SUBTITLE_EXPIRED') throw error;
+      // observeTracks finished any unknown Add first. Expiry is not permission
+      // to erase an unobserved mutation or reapply it behind the caller's back.
+      if (cache.pending?.invoked) throw error;
+      cache.bindings.delete(track.url); cache.prepared.delete(track.url);
+      cache.retiredTickets.add(preparedId);
+      while (cache.retiredTickets.size > 256) cache.retiredTickets.delete(cache.retiredTickets.values().next().value);
+      let retired = cache.retiredIndices.get(track.url);
+      if (!retired) { retired = new Set(); cache.retiredIndices.set(track.url, retired); }
+      retired.add(index);
+    }
   }
 
   async function selectTrack(ctx, cache, track) {
@@ -341,6 +405,20 @@ export function createHandoffCoordinator({
       if (track ? observed.enabled === true && observed.currentIndex === index : observed.enabled === false) break;
       if (rejected?.adapterCode === 'KODI_REJECTED') throw rejected;
       await pause(ctx, selection);
+    }
+    const preparedId = track && cache.prepared.get(track.url);
+    if (preparedId) {
+      if (typeof kodi.subtitleDelivery !== 'function') throw fail('SUBTITLE_DELIVERY');
+      const delivery = stage(ctx, settings.delivery, 'SUBTITLE_DELIVERY');
+      while (true) {
+        await assertPlayback(ctx, delivery);
+        let receipt;
+        try { receipt = await call(ctx, options => kodi.subtitleDelivery(preparedId, track, options), delivery); }
+        catch (error) { if (error.adapterCode === 'SOURCE_CHANGED') throw fail('SOURCE_CHANGED'); throw error; }
+        if (receipt?.downloaded === true) break;
+        if (receipt?.downloaded !== false) throw fail('SUBTITLE_DELIVERY');
+        await pause(ctx, delivery);
+      }
     }
     return resultFor(ctx, cache, index);
   }
@@ -449,7 +527,7 @@ export function createHandoffCoordinator({
     const cache = cacheFor(ctx.media);
     if (initial?.active && initial.sourceUrl === ctx.media.url) cache.opening?.observed();
     if (!initial?.active || initial.sourceUrl !== ctx.media.url) {
-      cache.bindings.clear(); cache.pending = null;
+      cache.bindings.clear(); cache.prepared.clear(); cache.retiredTickets.clear(); cache.retiredIndices.clear(); cache.pending = null;
       status(ctx, 'opening', 'Starting the selected video…');
       await openVideo(ctx, cache, initial);
     }
@@ -467,6 +545,7 @@ export function createHandoffCoordinator({
     status(ctx, 'subtitles', 'Loading the selected subtitles…');
     const snapshot = await observeTracks(ctx, cache);
     const selected = ctx.media.tracks.find(track => track.url === ctx.trackUrl);
+    await preflightTrack(ctx, cache, selected);
     await loadTrack(ctx, cache, selected, snapshot);
     const result = await selectTrack(ctx, cache, selected);
     status(ctx, 'ready', 'Subtitles are ready.');
@@ -482,14 +561,21 @@ export function createHandoffCoordinator({
         if (!media.tracks.some(track => track.url === trackUrl)) throw fail('INVALID_SUBTITLE');
         if (knownCatalog !== undefined) {
           if (!Array.isArray(knownCatalog) || knownCatalog.length > 128) throw fail('INVALID_SUBTITLE');
+          const tickets = new Map();
           known = knownCatalog.map(track => {
             const url = sourceUrl(track?.url);
             if (!media.tracks.some(item => item.url === url) || (track.index !== null && (!Number.isInteger(track.index) || track.index < 0 || track.index > 1024))) throw fail('INVALID_SUBTITLE');
-            return { url, index: track.index };
+            if (track.preparedId !== undefined && (!preparedTicket(track.preparedId) || tickets.has(track.preparedId) && tickets.get(track.preparedId) !== url)) throw fail('INVALID_SUBTITLE');
+            if (track.preparedId) tickets.set(track.preparedId, url);
+            return { url, index: track.index, ...(track.preparedId ? { preparedId: track.preparedId } : {}) };
           });
         }
       }
     } catch (error) { return Promise.reject(error instanceof HandoffError ? error : fail('INVALID_MEDIA')); }
+    if (preparedSource !== media.url) {
+      for (const cache of sources.values()) { cache.prepared.clear(); cache.bindings.clear(); }
+      preparedSource = media.url;
+    }
     current?.controller.abort();
     const ctx = { media, controller: new AbortController(), isCurrentSource, phase, trackUrl, knownCatalog: known, deadline: now() + Math.min(settings.overall, phase === 'remote' ? 60000 : settings.overall) };
     current = ctx;
@@ -498,6 +584,10 @@ export function createHandoffCoordinator({
     else signal?.addEventListener('abort', abort, { once: true });
     return (phase === 'remote' ? runSubtitle(ctx) : run(ctx)).catch(error => {
       const fixed = error instanceof HandoffError ? error : fail('ADAPTER_FAILED');
+      if (fixed.code === 'SOURCE_CHANGED' || fixed.adapterCode === 'SOURCE_CHANGED' || fixed.code === 'SUBTITLE_BINDING') {
+        const cache = sources.get(ctx.media.url);
+        if (cache) { cache.prepared.clear(); cache.bindings.clear(); }
+      }
       status(ctx, fixed.code === 'CANCELLED' ? 'cancelled' : 'error', fixed.message);
       throw fixed;
     }).finally(() => {

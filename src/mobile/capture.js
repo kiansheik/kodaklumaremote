@@ -70,7 +70,7 @@ export function capture() {
   try {
     const candidates = videos().filter(candidate => candidate.area > 0).sort((a, b) => b.area - a.area);
     if (!candidates.length) return { ok: false, code: 'SOURCE_UNAVAILABLE' };
-    return { ok: true, media: extractMedia(candidates[0].video, { title: document.title }) };
+    return { ok: true, media: extractMedia(candidates[0].video, { title: document.title, allowTextSubtitles: true }) };
   } catch (error) {
     return { ok: false, code: CODES.has(error?.code) ? error.code : 'CAPTURE_FAILED' };
   }

@@ -417,3 +417,18 @@
   default-page Cast captured22 HLS tracks and reached ready/combined Remote with
   Kodi-reported playback. Projector picture/sound and subtitles not independently
   observed. No extra volume, power, navigation or subtitle commands were sent.
+
+- 2026-10-19 subtitle normalization: sampled twelve public English/Portuguese
+  subtitle files across four non-default homepage titles. All were actual SRT
+  and converted idempotently with preserved cue counts; format diversity alone
+  is not a proven failure cause. Implemented phone-side bounded download, body
+  sniffing/UTF-8 SRT normalization, receiver-scoped delivery and complete-response
+  observation after Kodi selection. Video-first/manual language behavior remains.
+  Known unavailable tickets recover on explicit selection; unknown writes stay
+  guarded. Fixed SPA address updates with draft preservation. Node201, JVM
+  parser24/transport10 and browser89 checks pass. Android validation, production
+  signing and0.4.5 publication follow. [Handoff](session-handoffs/2026-10-19-subtitle-normalization.md).
+- 2026-10-19 final normalization validation: Node201/browser89, JVM24+10 and
+  Android47 passed, including actual Android TTML/charsets, trusted tickets,
+  SPA/draft navigation, closed-Activity locked-screen/service and dual target
+  regressions. Final debug/test build and lintDebug passed. Release0.4.5 follows.

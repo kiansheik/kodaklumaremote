@@ -22,11 +22,11 @@ for (const [apk, expected] of [['android/app/build/outputs/apk/debug/app-debug.a
 const { stdout, stderr } = await run(adb, ['-s', serial, 'shell', 'am', 'instrument', '-w', '-e', 'mode', 'ui', `${appPackage}.test/dev.framextv.lumaremote.BackendInstrumentation`], { timeout: 60000, maxBuffer: 128 * 1024 });
 process.stdout.write(stdout); if (stderr) process.stderr.write(stderr);
 assert.match(stdout, /INSTRUMENTATION_RESULT: failures=0/u);
-assert.match(stdout, /INSTRUMENTATION_RESULT: passed=7/u);
+assert.match(stdout, /INSTRUMENTATION_RESULT: passed=9/u);
 assert.match(stdout, /INSTRUMENTATION_CODE: -1/u);
 if (stdout.includes('INSTRUMENTATION_RESULT: screenshot=')) {
   await mkdir('.local', { recursive: true });
   await run(adb, ['-s', serial, 'pull', `/sdcard/Android/data/${appPackage}/files/mobile-ui-smoke.png`, resolve('.local/mobile-ui-smoke.png')], { timeout: 10000 });
   console.log('Saved .local/mobile-ui-smoke.png');
 }
-console.log('Packaged Android UI: 7 emulator startup, bridge, source-token and intercepted HTTPS capture checks passed.');
+console.log('Packaged Android UI: 9 emulator startup, bridge, source-token, SPA address/draft and intercepted HTTPS capture checks passed.');

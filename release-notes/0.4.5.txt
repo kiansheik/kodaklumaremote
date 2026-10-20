@@ -1,0 +1,5 @@
+Subtitles are now downloaded and normalized on your phone before Kodi receives them. Supported text formats include SRT, WebVTT, ASS/SSA and media-time TTML/DFXP, with Unicode and common legacy Portuguese encodings converted to UTF-8 SRT.
+
+Choose a language after the video starts. The app checks that the complete file was served and Kodi selected its track; a download or format error keeps the video playing and lets you try another language. Prepared subtitles stay available while the current video remains active.
+
+The Browse address bar now follows navigation within the website while preserving text you are editing.

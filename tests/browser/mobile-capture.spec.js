@@ -53,6 +53,20 @@ test('mobile capture preserves the shared DRM and bare-blob guards while reading
   expect(await capture(page)).toEqual({ ok: false, code: 'SOURCE_UNSUPPORTED' });
 });
 
+test('native capture keeps declared SRT, ASS and TTML choices for phone normalization without accepting unrelated files', async ({ page }) => {
+  pages.set('/', html('<video style="width:640px;height:360px" src="/episode.mp4">'
+    + '<track kind="subtitles" src="/pt.srt" srclang="pt-BR" label="Portuguese">'
+    + '<track kind="subtitles" src="/en.ass" srclang="en" label="English">'
+    + '<track kind="subtitles" src="/fr.dfxp" srclang="fr" label="French">'
+    + '<track kind="subtitles" src="/bad.js" srclang="xx" label="Unrelated">'
+    + '</video>'));
+  await page.goto(origin);
+  const result = await capture(page);
+  expect(result.media.tracks.map(track => [track.language, track.contentType])).toEqual([
+    ['pt-BR', 'application/x-subrip'], ['en', 'text/x-ass'], ['fr', 'application/ttml+xml'],
+  ]);
+});
+
 test('mobile capture bounds iframe traversal to depth three and sixteen documents', async ({ page }) => {
   pages.set('/', html('<video style="width:100px;height:60px" src="/safe.mp4"></video><iframe src="/depth1" style="width:600px;height:400px"></iframe>'));
   for (let depth = 1; depth <= 4; depth++) pages.set(`/depth${depth}`, html(depth === 4 ? '<video style="width:590px;height:390px" src="/too-deep.mp4"></video>' : `<iframe src="/depth${depth + 1}" style="width:600px;height:400px"></iframe>`));

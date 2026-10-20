@@ -27,6 +27,11 @@
    0.4.3 now starts video without any
    subtitle requests and lets the user choose afterward, as requested after
    continued crashes/hangs in0.4.2. Other languages are not render-tested.
+   0.4.5 now prepares selected text on the phone as UTF-8 SRT and observes
+   complete serving plus Kodi selection before success. Twelve non-default
+   homepage bodies normalized successfully; physical non-default-title caption
+   rendering remains unverified. See the
+   [normalization handoff](session-handoffs/2026-10-19-subtitle-normalization.md).
    Does lazy selection and Activity restoration pass on the actual phone?
    S1E3 subsequently crashed Kodi on first attempt and played without subtitles
    after Retry. The phone now distinguishes verified rejection from an unknown

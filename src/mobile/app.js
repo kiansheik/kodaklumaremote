@@ -29,6 +29,12 @@ const errors = {
   NO_VIDEO: 'Kodi has no active video. Choose a video in Browse first.',
   INVALID_MEDIA: 'The page did not expose a supported video. Open its player and try Cast again.',
   INVALID_SUBTITLE: 'Choose an available subtitle track or turn subtitles off.',
+  SUBTITLE_DOWNLOAD: 'The subtitle could not be downloaded. Choose another language or try again.',
+  SUBTITLE_FORMAT: 'This subtitle format is not supported. Choose another subtitle.',
+  SUBTITLE_INVALID: 'This subtitle file has no valid timed captions. Choose another subtitle.',
+  SUBTITLE_TOO_LARGE: 'This subtitle file is too large. Choose another subtitle.',
+  SUBTITLE_EXPIRED: 'The prepared subtitle is no longer available. Choose it again.',
+  SUBTITLE_DELIVERY: 'Kodi could not retrieve the prepared subtitles. Check that the phone and projector share the same Wi-Fi.',
   CANNOT_SEEK: 'Kodi reports that this video cannot seek.',
   BUSY: 'The remote is busy. Wait a moment and try again.',
   CANCELLED: 'Casting was cancelled.',
@@ -319,7 +325,7 @@ function rpc(method, params = {}, { signal, timeoutMs = 10000, onNotSent, onSett
     item = {
       receiptOnly: false,
       resolve: result => { settled(); remove(); resolve(result); },
-      reject: code => { if (mutationReceipt && ['SOURCE_CHANGED', 'KODI_REJECTED'].includes(code)) notSent(); settled(); remove(); reject(fixedError(code)); },
+      reject: code => { if (mutationReceipt && ['SOURCE_CHANGED', 'KODI_REJECTED', 'SUBTITLE_EXPIRED'].includes(code)) notSent(); settled(); remove(); reject(fixedError(code)); },
     };
     pending.set(id, item);
     signal?.addEventListener('abort', abort, { once: true });
@@ -572,7 +578,9 @@ function restoredRemote(value, observedPlayback) {
       if (track.index !== null && (!Number.isInteger(track.index) || !indices.has(track.index) || bound.has(track.index))) return null;
       if (track.index !== null) bound.add(track.index);
       urls.add(trackUrl.href);
-      catalog.push({ url: trackUrl.href, contentType: 'text/vtt', language: safeText(track.language, 64), label: safeText(track.label, 200), index: track.index });
+      if (track.preparedId !== undefined && (typeof track.preparedId !== 'string' || !/^[A-Za-z0-9_-]{16,128}$/u.test(track.preparedId))) return null;
+      catalog.push({ url: trackUrl.href, contentType: 'text/vtt', language: safeText(track.language, 64), label: safeText(track.label, 200), index: track.index,
+        ...(Number.isInteger(track.index) && track.preparedId ? { preparedId: track.preparedId } : {}) });
     }
   }
   return {
@@ -697,7 +705,9 @@ const coordinator = createHandoffCoordinator({
     open: (media, options) => handoffRpc('kodi.open', handoffParams(options, { media, ...(options.onlyIfInactive === true ? { onlyIfInactive: true } : {}) }), options),
     status: async options => { const result = await handoffRpc('kodi.status', handoffParams(options), options); playback(result); return result; },
     getSubtitles: options => handoffRpc('kodi.getSubtitles', handoffParams(options), options),
-    addSubtitle: (track, options) => handoffRpc('kodi.addSubtitle', handoffParams(options, { track }), options),
+    prepareSubtitle: (track, options) => handoffRpc('kodi.prepareSubtitle', handoffParams(options, { track }), options),
+    addSubtitle: (track, options) => handoffRpc('kodi.addSubtitle', handoffParams(options, { track, ...(options.preparedId ? { preparedId: options.preparedId } : {}) }), options),
+    subtitleDelivery: (preparedId, track, options) => handoffRpc('kodi.subtitleDelivery', handoffParams(options, { preparedId, track }), options),
     setSubtitle: (index, options) => handoffRpc('kodi.setSubtitle', handoffParams(options, { index }), options),
   },
   remote: { async ready(result) {
@@ -714,7 +724,7 @@ const coordinator = createHandoffCoordinator({
     const remote = {
       media: { url: state.activeMedia.url, contentType: state.activeMedia.contentType, title: state.activeMedia.title },
       tracks: result.tracks.map(track => ({ index: track.index, language: track.language, label: track.label })),
-      catalog: state.catalog.map(track => ({ url: track.url, language: track.language, label: track.label, index: track.index })),
+      catalog: state.catalog.map(track => ({ url: track.url, language: track.language, label: track.label, index: track.index, ...(track.preparedId ? { preparedId: track.preparedId } : {}) })),
       selectedIndex: result.selectedIndex,
       subtitlesEnabled: result.selectedIndex !== null,
     };
@@ -943,7 +953,7 @@ function remoteDescriptor() {
   return {
     media: { url: state.activeMedia.url, contentType: state.activeMedia.contentType, title: state.activeMedia.title },
     tracks: state.tracks.map(track => ({ index: track.index, language: track.language, label: track.label })),
-    catalog: state.catalog.map(track => ({ url: track.url, language: track.language, label: track.label, index: track.index })),
+    catalog: state.catalog.map(track => ({ url: track.url, language: track.language, label: track.label, index: track.index, ...(track.preparedId ? { preparedId: track.preparedId } : {}) })),
     selectedIndex: state.selectedIndex,
     subtitlesEnabled: state.subtitlesEnabled,
   };
@@ -969,7 +979,7 @@ async function selectSubtitle(track) {
       try {
         return await coordinator.selectSubtitle({ ...media, tracks: catalog }, track.url, {
           knownCatalog: catalog,
-          isCurrentSource: () => state.activeMedia === media && state.connected,
+          isCurrentSource: () => state.activeMedia === media && state.configured,
         });
       } catch (error) { throw state.subtitleError || error; }
     }, {}, 'Subtitle selected. Check the projector.', async result => {

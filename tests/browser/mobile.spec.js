@@ -91,6 +91,8 @@ async function openApp(page, initialSnapshot = null) {
         case 'kodi.getSubtitles':
           if (receiver.pendingTrack && --receiver.subtitleDelayReads <= 0) { receiver.tracks.push(receiver.pendingTrack); receiver.pendingTrack = null; }
           return { tracks: receiver.tracks.map((track, index) => ({ index, name: 'External' })), enabled: receiver.enabled, currentIndex: receiver.currentIndex };
+        case 'kodi.prepareSubtitle': return { preparedId: 'prepared_' + btoa(params.track.url).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 95), format: 'srt', encoding: 'UTF-8', cueCount: 10 };
+        case 'kodi.subtitleDelivery': return { downloaded: !receiver.holdDelivery };
         case 'kodi.addSubtitle': if (receiver.subtitleDelayReads > 0) receiver.pendingTrack = params.track; else receiver.tracks.push(params.track); return { accepted: true };
         case 'kodi.setSubtitle': receiver.enabled = params.index !== 'off'; receiver.currentIndex = receiver.enabled ? params.index : null; return { accepted: true };
         case 'kodi.seek': receiver.position = params.position; return { accepted: true };
@@ -101,6 +103,10 @@ async function openApp(page, initialSnapshot = null) {
     const respond = request => {
       if ((request.method.startsWith('kodi.') || request.method === 'luma.launchKodi') && request.params.sourceToken && request.params.sourceToken !== receiver.activeJob) {
         window.LumaRPC.receive({ id: request.id, ok: false, error: { code: 'SOURCE_CHANGED', message: 'stale job' } });
+        return;
+      }
+      if (request.method === 'kodi.prepareSubtitle' && receiver.failPrepare) {
+        window.LumaRPC.receive({ id: request.id, ok: false, error: { code: receiver.failPrepare, message: 'private-subtitle-token' } });
         return;
       }
       if (request.method === 'kodi.addSubtitle' && receiver.failSubtitle) {
@@ -1011,4 +1017,39 @@ test('Turn off sends exactly one confirmed power request and disables on connect
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
   await layout(page);
   expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'luma.powerOff'))).toHaveLength(1);
+});
+
+
+test('invalid subtitle bytes never reach Kodi and another language remains usable without replay', async ({ page }) => {
+  await openApp(page); await setup(page); await cast(page);
+  await page.getByRole('button', { name: 'Subtitles', exact: true }).click();
+  await page.evaluate(() => { window.__receiver.failPrepare = 'SUBTITLE_INVALID'; });
+  await page.getByRole('button', { name: 'Portuguese (Brazil)', exact: true }).click();
+  await expect(page.locator('#sheet-message')).toHaveText('This subtitle file has no valid timed captions. Choose another subtitle.');
+  expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'kodi.addSubtitle').length)).toBe(0);
+  await page.evaluate(() => { window.__receiver.failPrepare = null; });
+  await page.getByRole('button', { name: 'English', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'English', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  const calls = await page.evaluate(() => window.__calls);
+  const add = calls.find(call => call.method === 'kodi.addSubtitle');
+  expect(add.params.track.url).toBe(media.tracks[0].url);
+  expect(add.params.preparedId).toMatch(/^[A-Za-z0-9_-]{16,128}$/);
+  const saved = calls.filter(call => call.method === 'app.rememberRemote').at(-1).params.remote.catalog.find(track => track.language === 'en');
+  expect(saved.url).toBe(media.tracks[0].url);
+  expect(saved.preparedId).toBe(add.params.preparedId);
+  expect(calls.filter(call => call.method === 'kodi.open')).toHaveLength(1);
+  await expect(page.locator('body')).not.toContainText('private-subtitle-token');
+});
+
+test('subtitle selection waits for complete normalized file delivery after the Add acknowledgement', async ({ page }) => {
+  await openApp(page); await setup(page); await cast(page);
+  await page.getByRole('button', { name: 'Subtitles', exact: true }).click();
+  await page.evaluate(() => { window.__receiver.holdDelivery = true; });
+  await page.getByRole('button', { name: 'Portuguese (Brazil)', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.__calls.filter(call => call.method === 'kodi.subtitleDelivery').length)).toBeGreaterThan(0);
+  expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'app.rememberRemote').length)).toBe(0);
+  await page.evaluate(() => { window.__receiver.holdDelivery = false; });
+  await expect(page.getByRole('button', { name: 'Portuguese (Brazil)', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'kodi.addSubtitle').length)).toBe(1);
+  expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'kodi.open').length)).toBe(1);
 });

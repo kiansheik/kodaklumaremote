@@ -73,11 +73,15 @@
   observation reconciles unresolved Opens. Startup makes no subtitle requests;
   launch and subsequent mutations have one-second settling. Manual language
   selection preserves the playing remote/catalog without another video Open.
+  Native adapters prepare selected text before Add, verify complete-body serving
+  after index selection, and preflight existing tickets before reselection.
+  Explicit unavailable-ticket proof retires known bindings; unknown writes remain guarded.
 - `src/mobile/{index.html,app.js,capture.js}`: no-scroll combined phone remote,
   native RPC adapters, same-origin declared source/track capture and matched pause.
   Native capture accepts the current HTTPS `framextv.cc` and legacy `.xyz`
   exact origins. Packaged UI fixtures exercise capture across that page change,
-  not only mocked capture metadata.
+  not only mocked capture metadata. The native opt-in captures declared SRT,
+  ASS/SSA and TTML alongside WebVTT; generic CAF extraction remains WebVTT-only.
 - `android/`: phone APK shell and native networking; browser WebView has no
   native bridge. MainActivity owns capture/job lifecycle and visible-app retries;
   ConnectionService owns background TCP/UDP/Kodi, MediaSession/notification and
@@ -91,6 +95,13 @@
   polling and cancelling unsent writes on receiver/source changes. The
   [Motorola recovery handoff](session-handoffs/2026-10-18-motorola-kodi-recovery.md)
   distinguishes fixture evidence from pending physical acceptance.
+- `SubtitleNormalizer.java`, `SubtitleDelivery.java`: phone-side bounded text
+  conversion to UTF-8 SRT and source/receiver-scoped RAM capabilities. Separate
+  fetch work does not block Kodi controls. Up to128 tracks/16MiB stay available
+  for the active source; disconnect/config/source/service teardown revokes them.
+  Public DNS addresses are checked per redirect, not pinned to the HTTP socket.
+  JVM runners cover parser/transport; Android subtitle fixtures cover runtime
+  XML/charsets and trusted-ticket versus captured-LAN boundaries.
 - `src/msx/`, `MsxServer.java`: TV-owned MSX player/subtitle renderer and
   capability/peer-pinned phone LAN control server. No media proxy. Independent
   service executor/heartbeat and selected-target system controls coexist with

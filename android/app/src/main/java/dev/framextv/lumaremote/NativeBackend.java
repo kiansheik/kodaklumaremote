@@ -44,6 +44,9 @@ import java.util.regex.Pattern;
  * to the browsing WebView. Call handle on one background executor. */
 public final class NativeBackend {
     public interface SourceGuard { boolean isCurrent(String token); }
+    public interface PreparedSubtitleResolver {
+        String resolve(String id, String sourceUrl, String subtitleUrl, String receiverHost) throws BackendException;
+    }
     public static final class BackendException extends Exception {
         public final String code;
         private BackendException(String code, String message) { super(message); this.code = code; }
@@ -59,6 +62,7 @@ public final class NativeBackend {
     private final Context context;
     private final ScheduledExecutorService deadlines = Executors.newSingleThreadScheduledExecutor();
     private volatile SourceGuard sourceGuard;
+    private volatile PreparedSubtitleResolver subtitleResolver;
     private volatile boolean closed;
     private volatile Socket luma;
     private volatile DatagramSocket discovering;
@@ -70,6 +74,7 @@ public final class NativeBackend {
 
     public NativeBackend(Context context) { this.context = context.getApplicationContext(); }
     public void setSourceGuard(SourceGuard guard) { sourceGuard = guard; }
+    public void setPreparedSubtitleResolver(PreparedSubtitleResolver resolver) { subtitleResolver = resolver; }
     /** Service worker only: forgetting Kodi does not close projector controls. */
     public synchronized void clearKodiConfiguration() { username = password = null; }
 
@@ -102,6 +107,12 @@ public final class NativeBackend {
             case "SOURCE_CHANGED": message = "The video source changed. Choose Cast again before controlling this video."; break;
             case "INVALID_MEDIA": message = "The page does not expose a supported public HTTP media source."; break;
             case "INVALID_SUBTITLE": message = "Choose an available subtitle track or turn subtitles off."; break;
+            case "SUBTITLE_DOWNLOAD": message = "The subtitle could not be downloaded. Choose another language or try again."; break;
+            case "SUBTITLE_FORMAT": message = "This subtitle format is not supported. Choose another subtitle."; break;
+            case "SUBTITLE_INVALID": message = "This subtitle file has no valid timed captions. Choose another subtitle."; break;
+            case "SUBTITLE_TOO_LARGE": message = "This subtitle file is too large. Choose another subtitle."; break;
+            case "SUBTITLE_EXPIRED": message = "The prepared subtitle is no longer available. Choose it again."; break;
+            case "SUBTITLE_DELIVERY": message = "Kodi could not retrieve the prepared subtitles. Check that the phone and projector share the same Wi-Fi."; break;
             case "CANNOT_SEEK": message = "Kodi reports that this video cannot seek."; break;
             default: code = "CONNECTION_FAILED"; message = "Could not reach the projector. Check its power, Wi-Fi and IP address.";
         }
@@ -526,6 +537,13 @@ public final class NativeBackend {
         if ("addSubtitle".equals(action)) {
             JSONObject track = params.optJSONObject("track"); if (track == null) throw fail("INVALID_SUBTITLE");
             String url = publicUrl(track.opt("url")); expectedSource(player, params);
+            if (params.has("preparedId")) {
+                String id = text(params, "preparedId", 128);
+                if (!id.matches("[A-Za-z0-9_-]{16,128}") || subtitleResolver == null || !params.has("expectedSourceUrl")) throw fail("INVALID_SUBTITLE");
+                // Only a service-owned ticket can resolve to a private URL.
+                // Captured/bridge URLs still pass the public-source validator.
+                url = subtitleResolver.resolve(id, publicUrl(params.opt("expectedSourceUrl")), url, host);
+            }
             rpcAccepted("Player.AddSubtitle", object("playerid", player, "subtitle", url)); return object("accepted", true);
         }
         if ("setSubtitle".equals(action)) {

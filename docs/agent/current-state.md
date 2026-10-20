@@ -625,3 +625,37 @@ and showed the combined remote with Kodi-reported Playing/22:35. Full URLs and
 UI images/logs remain ignored locally. Visible projector picture/sound and manual
 subtitle rendering were not separately confirmed. Chrome was unavailable for an
 optional install-page render check; public HTTPS assets were verified directly.
+
+Subtitle normalization follow-up (2026-10-19): user reports most non-default
+titles have no subtitles and the Browse address bar does not follow navigation.
+The current public homepage supplied four sampled titles (Masterplan, Tenzing,
+Law & Order: SVU S1E1, The Simpsons S1E1). Twelve English/Portuguese bodies were
+all SRT and normalized idempotently with364–1660 cues (SVU Portuguese588;
+Simpsons English364). Their original bodies/URLs remain ignored locally.
+Earlier Avatar evidence had MIME/body mismatches. Multiple formats alone are
+not an established cause of the reported failures.
+
+0.4.5/code14 prepares the selected subtitle on a separate native executor,
+sniffs/validates its contents and converts SRT, WebVTT, ASS/SSA and a conservative
+media-time TTML/DFXP subset to UTF-8 SRT. BOM/declared UTF16 and common Portuguese
+legacy encodings are supported; malformed captions/error pages, unsafe XML,
+unsupported frame/ancestor timing and oversized files fail without a Kodi Add.
+The service serves only prepared RAM files to the matching receiver through an
+opaque capability. Complete response serving plus observed Kodi selected/enabled
+index is required; this is not a rendering or parsing acknowledgement.
+No automatic startup subtitle requests were reintroduced. Existing normalized
+files persist for the active source (128 entries/16MiB aggregate); capacity fails
+without evicting registered files. A known unavailable ticket can be replaced
+on explicit language choice, while unknown Add outcomes remain protected.
+Browse history follows SPA navigation without overwriting a focused edited draft.
+
+Validation/release and physical acceptance are recorded in the
+[normalization handoff](session-handoffs/2026-10-19-subtitle-normalization.md).
+
+Final local0.4.5 checks passed: Node201, browser89 (mobile/capture41 and
+extension/dual/Matter48), JVM parser24/transport10, Android47 (subtitle8,
+backend12, UI9, service14 and dual4), final offline debug/test build/lintDebug.
+Android runtime caught and corrected Expat validation-error wrapping; exact
+Unicode/timing expectations remain. Native serving is bounded and source-scoped;
+queued old-source preparation is invalidated by a separately captured generation.
+Production signing/publication and physical acceptance follow.

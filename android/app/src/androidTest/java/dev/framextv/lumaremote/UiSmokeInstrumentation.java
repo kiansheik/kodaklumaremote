@@ -12,6 +12,8 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
+import android.widget.EditText;
+import android.view.inputmethod.EditorInfo;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import java.io.File;
@@ -88,6 +90,20 @@ public class UiSmokeInstrumentation extends Instrumentation {
     }
     private void passed(String name) {
         checks++; Bundle status = new Bundle(); status.putString("test", name); status.putInt("current", checks); sendStatus(0, status);
+    }
+    private String addressText() throws Exception {
+        AtomicReference<String> value = new AtomicReference<>();
+        runOnMainSync(() -> { try { value.set(((EditText) field("address")).getText().toString()); } catch (Exception error) { throw new RuntimeException(error); } });
+        return value.get();
+    }
+    private void waitAddress(String expected) throws Exception {
+        long end = SystemClock.elapsedRealtime() + 3000;
+        while (SystemClock.elapsedRealtime() < end) {
+            AtomicReference<String> nativeUrl = new AtomicReference<>(); runOnMainSync(() -> nativeUrl.set(browser.getUrl()));
+            if (expected.equals(nativeUrl.get()) && expected.equals(addressText())) return;
+            Thread.sleep(40);
+        }
+        throw new AssertionError("Visible address did not follow the current WebView URL");
     }
     private void captureOriginBoundaries() throws Exception {
         Method supports = MainActivity.class.getDeclaredMethod("supportsCapturePage", String.class); supports.setAccessible(true);
@@ -248,10 +264,50 @@ public class UiSmokeInstrumentation extends Instrumentation {
             require(!redirectGuard.isCurrent(redirectedJob), "HTTPS navigation retained the redirected source authorization");
             JSONObject directMedia = capturedFixture("ui-direct-capture");
             String directJob = begin("ui-direct-begin", directMedia.getString("sourceToken")); NativeBackend.SourceGuard directGuard = sourceGuard();
-            javascript(browser, "history.pushState({},'', '#new-source');true");
+            waitAddress(CAPTURE_XYZ);
+            runOnMainSync(() -> { try { require(((EditText) field("address")).requestFocus(), "Address could not receive normal toolbar focus"); } catch (Exception error) { throw new RuntimeException(error); } });
+            String pushed = "https://framextv.xyz/watch/native-next?episode=2#player";
+            javascript(browser, "history.pushState({},'', " + JSONObject.quote(pushed) + ");true"); waitAddress(pushed);
             end = SystemClock.elapsedRealtime() + 3000; while (directGuard.isCurrent(directJob) && SystemClock.elapsedRealtime() < end) Thread.sleep(50);
             require(!directGuard.isCurrent(directJob), "Capture-page history retained its handoff authorization");
             passed("production capture follows intercepted HTTPS redirect, retains declared tracks and invalidates changed pages without a browsing bridge");
+
+            JSONObject pushedMedia = capturedFixture("ui-pushed-capture");
+            String pushedJob = begin("ui-pushed-begin", pushedMedia.getString("sourceToken")); NativeBackend.SourceGuard pushedGuard = sourceGuard();
+            String replaced = "https://framextv.xyz/watch/native-next?episode=3#player";
+            javascript(browser, "history.replaceState({},'', " + JSONObject.quote(replaced) + ");true"); waitAddress(replaced);
+            require(!pushedGuard.isCurrent(pushedJob), "SPA replaceState retained the old source authorization");
+            runOnMainSync(() -> browser.getWebViewClient().onPageFinished(browser, CAPTURE_XYZ));
+            waitAddress(replaced);
+            passed("SPA pushState and replaceState update the visible address and stale page-finished callbacks cannot replace it");
+
+            JSONObject replacedMedia = capturedFixture("ui-replaced-capture");
+            String replacedJob = begin("ui-replaced-begin", replacedMedia.getString("sourceToken")); NativeBackend.SourceGuard replacedGuard = sourceGuard();
+            String draft = "https://framextv.cc/watch/an-unsubmitted-draft";
+            runOnMainSync(() -> {
+                try { EditText input = (EditText) field("address"); input.requestFocus(); input.setText(draft); input.setSelection(draft.length()); }
+                catch (Exception error) { throw new RuntimeException(error); }
+            });
+            String latest = "https://framextv.xyz/watch/native-next?episode=4#player";
+            javascript(browser, "history.pushState({},'', " + JSONObject.quote(latest) + ");true");
+            waitFor(browser, "location.href===" + JSONObject.quote(latest));
+            end = SystemClock.elapsedRealtime() + 3000; while (replacedGuard.isCurrent(replacedJob) && SystemClock.elapsedRealtime() < end) Thread.sleep(40);
+            require(!replacedGuard.isCurrent(replacedJob) && draft.equals(addressText()), "An active URL draft was overwritten or suppressed source invalidation");
+            runOnMainSync(() -> browser.getWebViewClient().onPageFinished(browser, CAPTURE_XYZ));
+            require(draft.equals(addressText()), "A stale page callback overwrote an active URL draft");
+            runOnMainSync(() -> {
+                try { require(((EditText) field("address")).getSelectionStart() == draft.length(), "Navigation moved the active draft caret"); }
+                catch (Exception error) { throw new RuntimeException(error); }
+                browser.requestFocus();
+            });
+            waitAddress(latest);
+            runOnMainSync(() -> {
+                try { EditText input = (EditText) field("address"); input.requestFocus(); input.setText("framextv.cc/watch/native-capture"); input.onEditorAction(EditorInfo.IME_ACTION_GO); }
+                catch (Exception error) { throw new RuntimeException(error); }
+            });
+            waitFor(browser, "document.readyState==='complete'&&location.href===" + JSONObject.quote(CAPTURE_CC)); waitAddress(CAPTURE_CC);
+            runOnMainSync(() -> { try { require(!((EditText) field("address")).hasFocus(), "Submitting Go left the old URL draft active"); } catch (Exception error) { throw new RuntimeException(error); } });
+            passed("active URL drafts retain their text and caret during navigation, then blur or Go restores the real address");
 
             Bitmap screenshot = getUiAutomation().takeScreenshot();
             if (screenshot != null) {

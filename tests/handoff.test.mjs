@@ -9,13 +9,13 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
 
 function fixture(options = {}) {
   const state = {
-    time: 0, calls: [], events: [], statuses: [], ready: [], adds: [], opened: 0, connections: 0,
-    playback: options.playback || { active: false, sourceUrl: '' },
+    time: 0, calls: [], events: [], statuses: [], ready: [], adds: [], addOptions: [], preparations: [], deliveries: [], opened: 0, connections: 0,
+    playback: options.playback || { active: false, sourceUrl: '' }, expectedSourceUrl: url,
     tracks: options.tracks || [], enabled: false, currentIndex: null, pending: [],
   };
   const record = (name, opts) => {
     assert.ok(opts.signal instanceof AbortSignal);
-    assert.equal(opts.expectedSourceUrl, url);
+    assert.equal(opts.expectedSourceUrl, state.expectedSourceUrl);
     state.calls.push(name);
     state.events.push({ name, time: state.time });
   };
@@ -25,7 +25,7 @@ function fixture(options = {}) {
       async connect(opts) { record('connect', opts); state.connections++; return { ready: state.connections >= (options.readyAfter || 1) }; },
       async open(value, opts) {
         record('open', opts); state.opened++; state.openedAt = state.time;
-        assert.equal(value.url, url);
+        assert.equal(value.url, state.expectedSourceUrl);
         state.playback = { active: !options.neverActive, sourceUrl: options.neverActive ? '' : value.url };
         await options.open?.(state, opts);
       },
@@ -43,7 +43,7 @@ function fixture(options = {}) {
         return { tracks: state.tracks.map(item => ({ ...item })), enabled: state.enabled, currentIndex: state.currentIndex };
       },
       async addSubtitle(value, opts) {
-        record('addSubtitle', opts); state.adds.push(value.url);
+        record('addSubtitle', opts); state.adds.push(value.url); state.addOptions.push(opts);
         if (options.add) { await options.add(state, value, opts); return; }
         const index = Math.max(-1, ...state.tracks.map(item => item.index), ...state.pending.map(item => item.index)) + 1;
         state.pending.push({ index, polls: 2 });
@@ -60,6 +60,12 @@ function fixture(options = {}) {
     wait: async (ms, opts) => { record('wait', opts); state.time += ms; await options.wait?.(state, opts); },
     onStatus: value => state.statuses.push(value),
     ...options.coordinator,
+  };
+  if (options.prepare) adapters.kodi.prepareSubtitle = async (value, opts) => {
+    record('prepareSubtitle', opts); state.preparations.push(value.url); return options.prepare(state, value, opts);
+  };
+  if (options.delivery) adapters.kodi.subtitleDelivery = async (preparedId, value, opts) => {
+    record('subtitleDelivery', opts); state.deliveries.push(preparedId); return options.delivery(state, preparedId, value, opts);
   };
   return { state, adapters, coordinator: createHandoffCoordinator(adapters) };
 }
@@ -746,4 +752,274 @@ test('handoff validates and snapshots declared media, caps tracks, and never sur
   const f = fixture({ neverActive: true, open: () => { throw new Error(url); }, coordinator: { limits: { activeMs: 700 } } });
   await assert.rejects(f.coordinator.start(media([])), error => error instanceof HandoffError && error.code === 'VIDEO_TIMEOUT' && !error.message.includes(url) && error.cause === undefined);
   assert.ok(!JSON.stringify(f.state.statuses).includes(url));
+});
+
+const preparedId = suffix => `prepared_ticket_${suffix}`;
+const preparedPlayback = { active: true, sourceUrl: url };
+
+test('subtitle preparation failures preserve playback and do not create an uncertain Add or reopen video', async () => {
+  for (const code of ['SUBTITLE_DOWNLOAD', 'SUBTITLE_FORMAT', 'SUBTITLE_INVALID', 'SUBTITLE_TOO_LARGE', 'SUBTITLE_DELIVERY', 'SUBTITLE_EXPIRED']) {
+    let rejectPreparation = true;
+    const f = fixture({ playback: preparedPlayback,
+      prepare: () => { if (rejectPreparation) throw Object.assign(new Error('Private provider failure: ' + url), { code }); return { preparedId: preparedId(code) }; },
+      delivery: () => ({ downloaded: true }),
+    });
+    const request = media([track('pt-BR'), track('en')]);
+    await assert.rejects(f.coordinator.selectSubtitle(request, track('pt-BR').url), error => error.code === code && error.adapterCode === code && !error.message.includes(url));
+    assert.equal(f.state.adds.length, 0); assert.equal(f.state.opened, 0); assert.equal(f.state.playback.active, true);
+    assert.equal(request.tracks.length, 2); assert.ok(!f.state.calls.includes('setSubtitle'));
+    rejectPreparation = false;
+    const selected = await f.coordinator.selectSubtitle(request, track('pt-BR').url);
+    assert.equal(selected.selectedIndex, 0); assert.equal(selected.catalog.length, 2); assert.equal(f.state.adds.length, 1);
+  }
+});
+
+test('preparation accepts only opaque bounded tickets and requires a delivery observer before Add', async () => {
+  for (const value of [null, {}, { preparedId: 'short' }, { preparedId: 'https://private.example/subtitle.srt' }, { preparedId: 'a'.repeat(129) }, { preparedId: 'a'.repeat(15) }]) {
+    const f = fixture({ playback: preparedPlayback, prepare: () => value, delivery: () => ({ downloaded: true }) });
+    await assert.rejects(f.coordinator.selectSubtitle(media([track('pt-BR')]), track('pt-BR').url), { code: 'SUBTITLE_INVALID' });
+    assert.equal(f.state.adds.length, 0); assert.equal(f.state.opened, 0);
+  }
+  for (const length of [16, 128]) {
+    const f = fixture({ playback: preparedPlayback, prepare: () => ({ preparedId: 'a'.repeat(length) }), delivery: () => ({ downloaded: true }) });
+    assert.equal((await f.coordinator.selectSubtitle(media([track('pt-BR')]), track('pt-BR').url)).catalog[0].preparedId, 'a'.repeat(length));
+  }
+  const missing = fixture({ playback: preparedPlayback, prepare: () => ({ preparedId: preparedId('missing') }) });
+  await assert.rejects(missing.coordinator.selectSubtitle(media([track('pt-BR')]), track('pt-BR').url), { code: 'SUBTITLE_DELIVERY' });
+  assert.equal(missing.state.preparations.length, 0); assert.equal(missing.state.adds.length, 0);
+});
+
+test('cancelled or changed-source preparation cannot send Add, and an explicit retry can prepare again', async () => {
+  for (const capturedPageChanged of [false, true]) {
+    let current = true, change = true;
+    const f = fixture({ playback: preparedPlayback,
+      prepare: state => { if (change) { if (capturedPageChanged) current = false; else state.playback = { active: true, sourceUrl: 'https://media.example.org/other.m3u8' }; } return { preparedId: preparedId('source') }; },
+      delivery: () => ({ downloaded: true }),
+    });
+    const request = media([track('pt-BR')]);
+    await assert.rejects(f.coordinator.selectSubtitle(request, track('pt-BR').url, { isCurrentSource: () => current }), { code: 'SOURCE_CHANGED' });
+    assert.equal(f.state.adds.length, 0); assert.equal(f.state.opened, 0);
+    change = false; current = true; f.state.playback = preparedPlayback;
+    await f.coordinator.selectSubtitle(request, track('pt-BR').url);
+    assert.equal(f.state.preparations.length, 2); assert.equal(f.state.adds.length, 1);
+  }
+  const started = deferred(), download = deferred(); let signal;
+  const f = fixture({ playback: preparedPlayback,
+    prepare: async (state, value, options) => { if (state.preparations.length === 1) { signal = options.signal; started.resolve(); await download.promise; } return { preparedId: preparedId('cancel') }; },
+    delivery: () => ({ downloaded: true }),
+  });
+  const request = media([track('pt-BR')]), selecting = f.coordinator.selectSubtitle(request, track('pt-BR').url);
+  const rejected = assert.rejects(selecting, { code: 'CANCELLED' }); await started.promise; f.coordinator.cancel(); await rejected;
+  assert.equal(signal.aborted, true); assert.equal(f.state.adds.length, 0); download.resolve();
+  await f.coordinator.selectSubtitle(request, track('pt-BR').url);
+  assert.equal(f.state.preparations.length, 2); assert.equal(f.state.adds.length, 1); assert.equal(f.state.opened, 0);
+});
+
+test('preparation has an eight-second cap and aborts a stalled read without poisoning Add retry', async () => {
+  let adapterSignal, first = true;
+  const f = fixture({ playback: preparedPlayback, coordinator: { limits: { prepareMs: 20 } },
+    prepare: (state, value, options) => { assert.ok(options.timeoutMs <= 8000); if (!first) return { preparedId: preparedId('retry') }; adapterSignal = options.signal; return new Promise(() => {}); },
+    delivery: () => ({ downloaded: true }),
+  });
+  const request = media([track('pt-BR')]);
+  await assert.rejects(f.coordinator.selectSubtitle(request, track('pt-BR').url), { code: 'SUBTITLE_DOWNLOAD' });
+  assert.equal(adapterSignal.aborted, true); assert.equal(f.state.adds.length, 0); first = false;
+  await f.coordinator.selectSubtitle(request, track('pt-BR').url); assert.equal(f.state.adds.length, 1);
+});
+
+test('read-only preparation preserves mutation pacing and passes its ticket without changing the original URL', async () => {
+  const f = fixture({ prepare: state => { state.time += 250; return { preparedId: preparedId('paced') }; }, delivery: () => ({ downloaded: true }) });
+  const request = media([track('pt-BR')]); await startAndSelect(f, request);
+  const event = name => f.state.events.find(item => item.name === name);
+  assert.equal(event('prepareSubtitle').time - event('open').time, 0);
+  assert.equal(event('addSubtitle').time - event('open').time, 1000);
+  assert.equal(event('setSubtitle').time - event('addSubtitle').time, 1000);
+  assert.equal(f.state.addOptions[0].preparedId, preparedId('paced')); assert.deepEqual(f.state.adds, [track('pt-BR').url]);
+  assert.ok(f.state.events.slice(f.state.events.indexOf(event('prepareSubtitle')) + 1, f.state.events.indexOf(event('addSubtitle'))).some(item => item.name === 'status'));
+});
+
+test('prepared subtitles become ready only after selection and full response delivery, retaining the ticket for reuse', async () => {
+  const f = fixture({ playback: preparedPlayback, prepare: () => ({ preparedId: preparedId('delivered') }),
+    delivery: (state, id, value, options) => {
+      assert.equal(state.enabled, true); assert.equal(state.currentIndex, 0); assert.equal(value.url, track('pt-BR').url);
+      assert.equal(id, preparedId('delivered')); assert.ok(options.timeoutMs <= 10000);
+      assert.ok(!state.statuses.some(item => item.step === 'ready'));
+      return { downloaded: state.deliveries.length >= 3 };
+    },
+  });
+  const request = media([track('pt-BR'), track('en')]), result = await f.coordinator.selectSubtitle(request, track('pt-BR').url);
+  assert.equal(f.state.deliveries.length, 3); assert.equal(result.catalog[0].url, track('pt-BR').url); assert.equal(result.catalog[0].preparedId, preparedId('delivered'));
+  assert.equal(result.selectedLanguage, 'pt-br');
+  f.adapters.kodi.subtitleDelivery = async () => ({ downloaded: true });
+  await f.coordinator.selectSubtitle(request, track('pt-BR').url);
+  assert.equal(f.state.preparations.length, 1); assert.equal(f.state.adds.length, 1); assert.equal(f.state.opened, 0);
+});
+
+test('delivery timeout preserves the playing video and binding; retry observes delivery without another Add', async () => {
+  let downloaded = false;
+  const f = fixture({ playback: preparedPlayback, coordinator: { limits: { deliveryMs: 700 } },
+    prepare: () => ({ preparedId: preparedId('timeout') }), delivery: () => ({ downloaded }),
+  });
+  const request = media([track('pt-BR')]);
+  await assert.rejects(f.coordinator.selectSubtitle(request, track('pt-BR').url), { code: 'SUBTITLE_DELIVERY' });
+  assert.equal(f.state.adds.length, 1); assert.equal(f.state.opened, 0); assert.equal(f.state.playback.active, true);
+  assert.equal(f.state.currentIndex, 0); assert.equal(f.state.enabled, true); assert.equal(f.state.statuses.at(-1).step, 'error');
+  downloaded = true; const result = await f.coordinator.selectSubtitle(request, track('pt-BR').url);
+  assert.equal(result.selectedIndex, 0); assert.equal(f.state.adds.length, 1); assert.equal(f.state.preparations.length, 1);
+});
+
+test('a lost prepared Add response still reconciles one registration and waits for delivery', async () => {
+  const f = fixture({ playback: preparedPlayback, prepare: () => ({ preparedId: preparedId('lost') }), delivery: () => ({ downloaded: true }),
+    add: state => { state.pending.push({ index: 0, polls: 3 }); throw Object.assign(new Error('Lost acknowledgement'), { code: 'KODI_RESPONSE' }); },
+  });
+  assert.equal((await f.coordinator.selectSubtitle(media([track('pt-BR')]), track('pt-BR').url)).selectedIndex, 0);
+  assert.equal(f.state.adds.length, 1); assert.equal(f.state.preparations.length, 1); assert.equal(f.state.deliveries.length, 1); assert.equal(f.state.opened, 0);
+});
+
+test('stale receiver bindings and an actual video reopen discard prepared tickets', async () => {
+  const f = fixture({ playback: preparedPlayback, prepare: state => ({ preparedId: preparedId(`generation_${state.preparations.length}`) }), delivery: () => ({ downloaded: true }) });
+  const request = media([track('pt-BR')]);
+  const first = await f.coordinator.selectSubtitle(request, track('pt-BR').url);
+  f.state.tracks = []; f.state.currentIndex = null; f.state.enabled = false;
+  const second = await f.coordinator.selectSubtitle(request, track('pt-BR').url);
+  assert.notEqual(first.catalog[0].preparedId, second.catalog[0].preparedId); assert.equal(f.state.preparations.length, 2);
+  f.state.playback = { active: false, sourceUrl: '' }; f.state.tracks = [];
+  const reopened = await f.coordinator.start(request); assert.equal(reopened.catalog[0].preparedId, undefined);
+  const third = await f.coordinator.selectSubtitle(request, track('pt-BR').url);
+  assert.notEqual(second.catalog[0].preparedId, third.catalog[0].preparedId); assert.equal(f.state.preparations.length, 3); assert.equal(f.state.adds.length, 3);
+});
+
+test('restored catalogs retain only valid source-bound prepared tickets and verify delivery without Add', async () => {
+  const f = fixture({ playback: preparedPlayback, tracks: [{ index: 5 }], prepare: () => { throw new Error('Already prepared'); }, delivery: () => ({ downloaded: true }) });
+  const request = media([track('pt-BR'), track('en')]);
+  const result = await f.coordinator.selectSubtitle(request, track('pt-BR').url, { knownCatalog: [{ ...track('pt-BR'), index: 5, preparedId: preparedId('restored') }] });
+  assert.equal(result.selectedIndex, 5); assert.equal(f.state.preparations.length, 0); assert.equal(f.state.adds.length, 0); assert.deepEqual(f.state.deliveries, [preparedId('restored'), preparedId('restored')]);
+  assert.ok(f.state.calls.indexOf('subtitleDelivery') < f.state.calls.indexOf('setSubtitle'));
+  await assert.rejects(f.coordinator.selectSubtitle(request, track('pt-BR').url, { knownCatalog: [{ ...track('pt-BR'), index: 5, preparedId: 'invalid' }] }), { code: 'INVALID_SUBTITLE' });
+  await assert.rejects(f.coordinator.selectSubtitle(request, track('pt-BR').url, { knownCatalog: [
+    { ...track('pt-BR'), index: 5, preparedId: preparedId('shared') }, { ...track('en'), index: null, preparedId: preparedId('shared') },
+  ] }), { code: 'INVALID_SUBTITLE' });
+});
+
+test('a different selected media source discards earlier generic index bindings and prepared tickets', async () => {
+  const f = fixture({ playback: preparedPlayback, prepare: state => ({ preparedId: preparedId(`source_${state.preparations.length}`) }), delivery: () => ({ downloaded: true }) });
+  const request = media([track('pt-BR')]), first = await f.coordinator.selectSubtitle(request, track('pt-BR').url);
+  const otherUrl = 'https://media.example.org/another-episode.m3u8';
+  f.state.expectedSourceUrl = otherUrl; f.state.playback = { active: true, sourceUrl: otherUrl };
+  await f.coordinator.start({ ...request, url: otherUrl });
+  f.state.expectedSourceUrl = url; f.state.playback = preparedPlayback;
+  const restored = await f.coordinator.selectSubtitle(request, track('pt-BR').url);
+  assert.equal(f.state.preparations.length, 2); assert.equal(f.state.adds.length, 2);
+  assert.notEqual(first.catalog[0].preparedId, restored.catalog[0].preparedId);
+  assert.equal(first.selectedIndex, 0); assert.equal(restored.selectedIndex, 1);
+});
+
+test('source changes or cancellation while delivery is pending never replay Add or claim ready', async () => {
+  for (const cancelled of [false, true]) {
+    let f;
+    f = fixture({ playback: preparedPlayback, prepare: () => ({ preparedId: preparedId('pending') }), delivery: () => ({ downloaded: false }),
+      wait: state => {
+        if (!state.deliveries.length) return;
+        if (cancelled) f.coordinator.cancel();
+        else state.playback = { active: true, sourceUrl: 'https://media.example.org/changed.m3u8' };
+      },
+    });
+    await assert.rejects(f.coordinator.selectSubtitle(media([track('pt-BR')]), track('pt-BR').url), { code: cancelled ? 'CANCELLED' : 'SOURCE_CHANGED' });
+    assert.equal(f.state.adds.length, 1); assert.equal(f.state.opened, 0); assert.equal(f.state.deliveries.length, 1);
+    assert.ok(!f.state.statuses.some(item => item.step === 'ready'));
+  }
+});
+
+test('preparation and delivery caps stay bounded and malformed delivery is never accepted', async () => {
+  const f = fixture({ playback: preparedPlayback, coordinator: { limits: { prepareMs: Infinity, deliveryMs: 999999 } },
+    prepare: (state, value, options) => { assert.equal(options.timeoutMs, 8000); return { preparedId: preparedId('budgets') }; },
+    delivery: (state, id, value, options) => { assert.equal(options.timeoutMs, 10000); return { downloaded: 'true' }; },
+  });
+  await assert.rejects(f.coordinator.selectSubtitle(media([track('pt-BR')]), track('pt-BR').url), { code: 'SUBTITLE_DELIVERY' });
+  assert.equal(f.state.adds.length, 1); assert.equal(f.state.deliveries.length, 1); assert.equal(f.state.playback.active, true);
+});
+
+test('an unresolved prepared Add blocks another language before any new preparation or mutation', async () => {
+  const f = fixture({ playback: preparedPlayback, prepare: () => ({ preparedId: preparedId('unknown') }), delivery: () => ({ downloaded: false }),
+    add: () => { throw Object.assign(new Error('No write receipt'), { code: 'KODI_UNAVAILABLE' }); }, coordinator: { limits: { subtitleMs: 700 } },
+  });
+  const request = media([track('pt-BR'), track('en')]);
+  await assert.rejects(f.coordinator.selectSubtitle(request, track('pt-BR').url), { code: 'SUBTITLE_TIMEOUT' });
+  await assert.rejects(f.coordinator.selectSubtitle(request, track('en').url), { code: 'SUBTITLE_TIMEOUT' });
+  assert.equal(f.state.preparations.length, 1); assert.equal(f.state.adds.length, 1); assert.equal(f.state.deliveries.length, 0); assert.equal(f.state.opened, 0);
+});
+
+test('source changes do not turn a pending prepared Add into a delivery-free success on retry', async () => {
+  let delivered = false;
+  const f = fixture({ playback: preparedPlayback, prepare: () => ({ preparedId: preparedId('pending_receipt') }),
+    delivery: () => ({ downloaded: delivered }), coordinator: { limits: { deliveryMs: 700 } },
+    add: state => { state.pending.push({ index: 0, polls: 2 }); state.playback = { active: true, sourceUrl: 'https://media.example.org/changed.m3u8' }; },
+  });
+  const request = media([track('pt-BR')]);
+  await assert.rejects(f.coordinator.selectSubtitle(request, track('pt-BR').url), { code: 'SOURCE_CHANGED' });
+  f.state.playback = preparedPlayback;
+  await assert.rejects(f.coordinator.selectSubtitle(request, track('pt-BR').url), { code: 'SUBTITLE_DELIVERY' });
+  assert.equal(f.state.adds.length, 1); assert.equal(f.state.preparations.length, 1); assert.ok(f.state.deliveries.every(id => id === preparedId('pending_receipt')));
+  delivered = true; await f.coordinator.selectSubtitle(request, track('pt-BR').url);
+  assert.equal(f.state.adds.length, 1); assert.equal(f.state.opened, 0);
+});
+
+test('a proven expired bound ticket is refreshed by one Add before Set and stale catalogs cannot restore it', async () => {
+  let expired = false; const selected = [];
+  const f = fixture({ playback: preparedPlayback,
+    prepare: state => ({ preparedId: preparedId(`lease_${state.preparations.length}`) }),
+    delivery: (state, id) => { if (expired && id === preparedId('lease_1')) throw Object.assign(new Error('Private expired lease'), { code: 'SUBTITLE_EXPIRED' }); return { downloaded: true }; },
+    select: (state, index) => { selected.push(index); state.currentIndex = index; state.enabled = true; },
+  });
+  const request = media([track('pt-BR')]), first = await f.coordinator.selectSubtitle(request, track('pt-BR').url);
+  expired = true;
+  const next = await f.coordinator.selectSubtitle(request, track('pt-BR').url, { knownCatalog: first.catalog });
+  assert.equal(next.selectedIndex, 1); assert.equal(next.catalog[0].preparedId, preparedId('lease_2'));
+  assert.deepEqual(selected, [0, 1]); assert.equal(f.state.adds.length, 2); assert.equal(f.state.preparations.length, 2);
+  const again = await f.coordinator.selectSubtitle(request, track('pt-BR').url, { knownCatalog: first.catalog });
+  assert.equal(again.selectedIndex, 1); assert.equal(again.catalog[0].preparedId, preparedId('lease_2'));
+  assert.equal(f.state.adds.length, 2); assert.equal(f.state.opened, 0);
+});
+
+test('retiring an expired restored binding survives a failed download and a later explicit choice', async () => {
+  let failPreparation = true;
+  const stale = preparedId('restored_expired');
+  const f = fixture({ playback: preparedPlayback, tracks: [{ index: 4, url: track('pt-BR').url }],
+    prepare: () => { if (failPreparation) throw Object.assign(new Error('Unavailable provider'), { code: 'SUBTITLE_DOWNLOAD' }); return { preparedId: preparedId('fresh_restored') }; },
+    delivery: (state, id) => { if (id === stale) throw Object.assign(new Error('Expired'), { code: 'SUBTITLE_EXPIRED' }); return { downloaded: true }; },
+  });
+  const request = media([track('pt-BR')]), knownCatalog = [{ ...track('pt-BR'), index: 4, preparedId: stale }];
+  await assert.rejects(f.coordinator.selectSubtitle(request, track('pt-BR').url, { knownCatalog }), { code: 'SUBTITLE_DOWNLOAD' });
+  assert.equal(f.state.adds.length, 0); assert.ok(!f.state.calls.includes('setSubtitle'));
+  failPreparation = false;
+  const result = await f.coordinator.selectSubtitle(request, track('pt-BR').url, { knownCatalog });
+  assert.equal(result.selectedIndex, 5); assert.equal(result.catalog[0].preparedId, preparedId('fresh_restored'));
+  assert.equal(f.state.adds.length, 1); assert.equal(f.state.preparations.length, 2); assert.equal(f.state.opened, 0);
+});
+
+test('a prepared lease that expires at prewrite resolution permits only a later explicit retry', async () => {
+  let writes = 0;
+  const f = fixture({ playback: preparedPlayback, prepare: state => ({ preparedId: preparedId(`resolve_${state.preparations.length}`) }), delivery: () => ({ downloaded: true }),
+    add: (state, value, options) => {
+      if (state.adds.length === 1) { options.onNotSent(); throw Object.assign(new Error('Expired before write'), { code: 'SUBTITLE_EXPIRED' }); }
+      writes++; state.pending.push({ index: 0, polls: 2 });
+    },
+  });
+  const request = media([track('pt-BR')]);
+  await assert.rejects(f.coordinator.selectSubtitle(request, track('pt-BR').url), { code: 'SUBTITLE_EXPIRED', adapterCode: 'SUBTITLE_EXPIRED' });
+  assert.equal(writes, 0); assert.equal(f.state.adds.length, 1); assert.ok(!f.state.calls.includes('setSubtitle'));
+  const result = await f.coordinator.selectSubtitle(request, track('pt-BR').url);
+  assert.equal(result.selectedIndex, 0); assert.equal(writes, 1); assert.equal(f.state.adds.length, 2); assert.equal(f.state.preparations.length, 2); assert.equal(f.state.opened, 0);
+});
+
+test('an expired-ticket observer cannot clear a different Add with an unknown write outcome', async () => {
+  const f = fixture({ playback: preparedPlayback, coordinator: { limits: { subtitleMs: 700 } },
+    prepare: () => ({ preparedId: preparedId('unknown_write') }),
+    delivery: () => { throw Object.assign(new Error('Expired'), { code: 'SUBTITLE_EXPIRED' }); },
+    add: () => { throw Object.assign(new Error('Unknown write'), { code: 'KODI_UNAVAILABLE' }); },
+  });
+  const request = media([track('pt-BR'), track('en')]);
+  await assert.rejects(f.coordinator.selectSubtitle(request, track('pt-BR').url), { code: 'SUBTITLE_TIMEOUT' });
+  await assert.rejects(f.coordinator.selectSubtitle(request, track('en').url), { code: 'SUBTITLE_TIMEOUT' });
+  assert.equal(f.state.adds.length, 1); assert.equal(f.state.preparations.length, 1); assert.equal(f.state.deliveries.length, 0); assert.equal(f.state.opened, 0);
 });

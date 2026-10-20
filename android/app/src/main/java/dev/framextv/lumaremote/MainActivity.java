@@ -42,6 +42,7 @@ public final class MainActivity extends Activity {
     private String pendingMatterScan;
     private WebView controls, browser;
     private EditText address;
+    private String displayedBrowserUrl = "";
     private LinearLayout browserPanel;
     private ProgressBar progress;
     private Button castButton;
@@ -149,6 +150,15 @@ public final class MainActivity extends Activity {
         address.setTextSize(13);
         address.setInputType(17); // URI, no autocorrect or password handling.
         address.setImeOptions(EditorInfo.IME_ACTION_GO);
+        address.setOnFocusChangeListener((view, focused) -> {
+            if (focused) return;
+            String previous = displayedBrowserUrl;
+            // Go may submit the draft in the same click. Reconcile only after
+            // that event, and never replace a newer navigation's address.
+            main.post(() -> {
+                if (!destroyed && browser != null && !address.hasFocus() && previous.equals(displayedBrowserUrl)) updateBrowserAddress(browser.getUrl());
+            });
+        });
         toolbar.addView(address, new LinearLayout.LayoutParams(0, dp(48), 1));
         address.setOnEditorActionListener((v, action, event) -> {
             if (action == EditorInfo.IME_ACTION_GO) { navigate(address.getText().toString()); return true; }
@@ -249,12 +259,13 @@ public final class MainActivity extends Activity {
             }
             @Override public void onPageStarted(WebView view, String url, android.graphics.Bitmap icon) {
                 invalidateSource(url);
-                address.setText(url);
+                updateBrowserAddress(url);
             }
             @Override public void doUpdateVisitedHistory(WebView view, String url, boolean reload) {
                 if (lastNavigationUrl == null || !lastNavigationUrl.equals(url)) invalidateSource(url);
+                updateBrowserAddress(url);
             }
-            @Override public void onPageFinished(WebView view, String url) { address.setText(url); }
+            @Override public void onPageFinished(WebView view, String url) { updateBrowserAddress(view.getUrl()); }
         });
         browser.setWebChromeClient(new WebChromeClient() {
             @Override public void onProgressChanged(WebView view, int value) {
@@ -262,6 +273,16 @@ public final class MainActivity extends Activity {
                 progress.setVisibility(value == 100 ? View.GONE : View.VISIBLE);
             }
         });
+    }
+
+    private void updateBrowserAddress(String url) {
+        if (url == null || url.isEmpty()) return;
+        String text = address.getText().toString();
+        // The toolbar may already have focus at startup. Only an edited draft
+        // should suspend URL updates while the user is typing.
+        if (address.hasFocus() && !text.equals(displayedBrowserUrl)) return;
+        if (!url.equals(text)) address.setText(url);
+        displayedBrowserUrl = url;
     }
 
     private void invalidateSource(String url) {
@@ -315,8 +336,12 @@ public final class MainActivity extends Activity {
         String url = value.trim();
         if (!url.contains("://")) url = "https://" + url;
         if (!isHttps(url)) { Toast.makeText(this, "Enter an HTTPS website address.", Toast.LENGTH_SHORT).show(); return; }
+        address.clearFocus();
+        displayedBrowserUrl = url;
+        address.setText(url);
         browser.loadUrl(url);
         showBrowser(true);
+        browser.requestFocus();
     }
 
     private void showBrowser(boolean visible) {

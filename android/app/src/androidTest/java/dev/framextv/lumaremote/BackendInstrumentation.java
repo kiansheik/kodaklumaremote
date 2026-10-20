@@ -53,6 +53,7 @@ public final class BackendInstrumentation extends UiSmokeInstrumentation {
         if ("ui".equals(args.getString("mode"))) { super.onStart(); return; }
         if ("service".equals(args.getString("mode"))) { ServiceInstrumentation.run(this, args); return; }
         if ("settings".equals(args.getString("mode"))) { SettingsInstrumentation.run(this); return; }
+        if ("subtitles".equals(args.getString("mode"))) { SubtitleInstrumentation.run(this, args); return; }
         backend = new NativeBackend(getTargetContext());
         backend.setSourceGuard(token -> "current".equals(token));
         int kodiPort = Integer.parseInt(args.getString("kodiPort")), slowPort = Integer.parseInt(args.getString("slowPort"));

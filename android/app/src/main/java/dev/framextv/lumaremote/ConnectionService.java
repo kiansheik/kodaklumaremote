@@ -60,6 +60,11 @@ public final class ConnectionService extends Service {
             new ArrayBlockingQueue<>(32));
     private final ThreadPoolExecutor televisionNetwork = new ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS,
             new ArrayBlockingQueue<>(16));
+    private final ThreadPoolExecutor subtitleNetwork = new ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS,
+            new ArrayBlockingQueue<>(4));
+    private SubtitleDelivery subtitleDelivery;
+    private volatile String subtitleSource = "";
+    private final java.util.concurrent.atomic.AtomicLong subtitleGeneration = new java.util.concurrent.atomic.AtomicLong();
     private NativeBackend backend;
     private MsxServer television;
     private MatterControllerAdapter matter;
@@ -104,6 +109,7 @@ public final class ConnectionService extends Service {
 
     @Override public void onCreate() {
         super.onCreate();
+        subtitleDelivery = new SubtitleDelivery(NativeBackend::publicUrl);
         backend = newBackend();
         settings = new SettingsStore(getApplicationContext());
         television = new MsxServer(getApplicationContext());
@@ -222,6 +228,11 @@ public final class ConnectionService extends Service {
     private NativeBackend newBackend() {
         NativeBackend transport = new NativeBackend(getApplicationContext());
         transport.setSourceGuard(token -> token != null && ("luma".equals(authorizedTarget) && token.equals(authorizedToken) || currentVolumeWrite(token)));
+        transport.setPreparedSubtitleResolver((id, source, original, peer) -> {
+            if (!"luma".equals(selectedTarget)) throw NativeBackend.fail("SOURCE_CHANGED");
+            try { return subtitleDelivery.resolve(id, source, original, peer).url; }
+            catch (SubtitleDelivery.DeliveryException error) { throw NativeBackend.fail("SUBTITLE_EXPIRED"); }
+        });
         return transport;
     }
     private interface NetworkAction { void run(Work work); }
@@ -278,6 +289,10 @@ public final class ConnectionService extends Service {
             if (method != null && method.startsWith("msx.")) { requestTelevision(method, args, callback); return; }
             if (method != null && method.startsWith("matter.")) { requestMatter(method, args, callback); return; }
             if ("device.disconnect".equals(method)) { disconnect(callback); return; }
+            if ("kodi.prepareSubtitle".equals(method) || "kodi.subtitleDelivery".equals(method)) {
+                requestSubtitle(method, args, callback); return;
+            }
+            if ("device.connect".equals(method) || "kodi.configure".equals(method) || "app.settings.reset".equals(method)) clearSubtitleDelivery();
             if ("luma.queueVolume".equals(method)) { queueVolume(args, callback); return; }
             if ("device.connect".equals(method) || "luma.setVolume".equals(method)) cancelQueuedVolume();
             boolean auto = "app.settings.autoConnect".equals(method), rescan = "app.settings.rescan".equals(method);
@@ -294,6 +309,7 @@ public final class ConnectionService extends Service {
                 } catch (RuntimeException ignored) { demote(); reject(callback, "BACKGROUND_START", "Open the app to connect to the projector."); return; }
             }
             if ("kodi.open".equals(method)) {
+                clearSubtitleDelivery();
                 cancelQueuedVolume();
                 mediaRevision = UUID.randomUUID().toString();
                 synchronized (stateLock) {
@@ -309,6 +325,7 @@ public final class ConnectionService extends Service {
         });
     }
     private void disconnect(Callback callback) {
+        clearSubtitleDelivery();
         cancelQueuedVolume();
         if ("luma".equals(authorizedTarget)) revokeTokens();
         generation++; mediaRevision = UUID.randomUUID().toString();
@@ -326,6 +343,77 @@ public final class ConnectionService extends Service {
         }
         notice = "Disconnected"; demote(); publish();
         if (callback != null) callback.success(object("connected", false));
+    }
+    private static String subtitleFailure(String code) {
+        if ("SUBTITLE_FETCH".equals(code)) return "SUBTITLE_DOWNLOAD";
+        if ("SUBTITLE_UNAVAILABLE".equals(code)) return "SUBTITLE_EXPIRED";
+        if ("SUBTITLE_NETWORK".equals(code)) return "SUBTITLE_DELIVERY";
+        return code;
+    }
+    private void clearSubtitleDelivery() {
+        subtitleGeneration.incrementAndGet();
+        subtitleSource = "";
+        if (subtitleDelivery != null) subtitleDelivery.revokeAll();
+    }
+    private void observeSubtitleSource(JSONObject playback) {
+        if (!subtitleSource.isEmpty() && (playback == null || !playback.optBoolean("active") || !subtitleSource.equals(playback.optString("sourceUrl")))) clearSubtitleDelivery();
+    }
+    private void requestSubtitle(String method, JSONObject args, Callback callback) {
+        try {
+            JSONObject track = args.optJSONObject("track");
+            if (track == null) throw NativeBackend.fail("INVALID_SUBTITLE");
+            final String source = NativeBackend.publicUrl(args.opt("expectedSourceUrl")), original = NativeBackend.publicUrl(track.opt("url"));
+            final String peer, revision = mediaRevision, token = args.has("sourceToken") ? args.optString("sourceToken") : null;
+            final long session = generation, subtitleEpoch;
+            synchronized (stateLock) {
+                JSONObject connection = state.optJSONObject("connection"), remote = state.optJSONObject("remote");
+                if (!"luma".equals(selectedTarget)) throw NativeBackend.fail("SOURCE_CHANGED");
+                if (connection == null || !connection.optBoolean("configured")) throw NativeBackend.fail("KODI_CONFIG");
+                if (!source.equals(rememberedSource()) || !matches(remote, state.optJSONObject("playback"))) throw NativeBackend.fail("SOURCE_CHANGED");
+                if (token != null && (!token.equals(authorizedToken) || !"luma".equals(authorizedTarget))) throw NativeBackend.fail("SOURCE_CHANGED");
+                boolean declared = false; JSONArray catalog = remote.optJSONArray("catalog");
+                if (catalog != null) for (int i = 0; i < catalog.length(); i++) {
+                    JSONObject entry = catalog.optJSONObject(i);
+                    if (entry != null && original.equals(entry.optString("url"))) { declared = true; break; }
+                }
+                if (!declared) throw NativeBackend.fail("INVALID_SUBTITLE");
+                peer = connection.optString("host");
+                if ("kodi.prepareSubtitle".equals(method)) {
+                    if (!subtitleSource.isEmpty() && !source.equals(subtitleSource)) clearSubtitleDelivery();
+                    subtitleSource = source;
+                }
+                subtitleEpoch = subtitleGeneration.get();
+            }
+            java.util.function.BooleanSupplier current = () -> !destroyed && session == generation && subtitleEpoch == subtitleGeneration.get() && revision.equals(mediaRevision)
+                    && (token == null || token.equals(authorizedToken));
+            if ("kodi.subtitleDelivery".equals(method)) {
+                String id = args.optString("preparedId");
+                subtitleDelivery.resolve(id, source, original, peer);
+                if (!current.getAsBoolean()) throw NativeBackend.fail("SOURCE_CHANGED");
+                if (callback != null) callback.success(object("downloaded", subtitleDelivery.downloaded(id)));
+                return;
+            }
+            // A slow public subtitle endpoint must not hold the Kodi control
+            // queue or consume its five-second RPC budget.
+            try {
+                subtitleNetwork.execute(() -> {
+                    try {
+                        SubtitleDelivery.Prepared prepared = subtitleDelivery.prepare(source, original, peer, current);
+                        main.post(() -> {
+                            if (!current.getAsBoolean() || !"luma".equals(selectedTarget)) { reject(callback, "SOURCE_CHANGED", "The selected video changed."); return; }
+                            if (callback != null) callback.success(object("preparedId", prepared.id, "format", prepared.format,
+                                    "encoding", prepared.encoding, "cueCount", prepared.cueCount));
+                        });
+                    } catch (SubtitleDelivery.DeliveryException error) {
+                        NativeBackend.BackendException failure = NativeBackend.fail(subtitleFailure(error.code));
+                        main.post(() -> reject(callback, failure.code, failure.getMessage()));
+                    }
+                });
+            } catch (RejectedExecutionException ignored) { throw NativeBackend.fail("BUSY"); }
+        } catch (NativeBackend.BackendException error) { reject(callback, error.code, error.getMessage()); }
+        catch (SubtitleDelivery.DeliveryException error) {
+            NativeBackend.BackendException failure = NativeBackend.fail(subtitleFailure(error.code)); reject(callback, failure.code, failure.getMessage());
+        }
     }
     private boolean enqueue(NetworkAction action, Callback callback) {
         return enqueue(action, callback, false);
@@ -807,6 +895,7 @@ public final class ConnectionService extends Service {
             Object index = subtitleIndex(item.opt("index"));
             if (index instanceof Integer && !indices.contains((Integer) index)) index = JSONObject.NULL;
             if (!catalog.containsKey(link)) catalog.put(link, object("url", link, "language", clean(item.optString("language"), 64), "label", clean(item.optString("label"), 200), "index", index));
+            if (index instanceof Integer && item.has("preparedId")) put(catalog.get(link), "preparedId", preparedSubtitleId(item));
         }
         Set<String> seen = new HashSet<>();
         if (bindings != null) for (int i = 0; i < bindings.length(); i++) {
@@ -816,6 +905,8 @@ public final class ConnectionService extends Service {
             Object index = subtitleIndex(item.opt("index"));
             if (index instanceof Integer && !indices.contains((Integer) index)) throw NativeBackend.fail("INVALID_SUBTITLE");
             put(catalog.get(link), "index", index);
+            catalog.get(link).remove("preparedId");
+            if (index instanceof Integer && item.has("preparedId")) put(catalog.get(link), "preparedId", preparedSubtitleId(item));
         }
         JSONArray entries = new JSONArray(); Set<Integer> bound = new HashSet<>();
         for (JSONObject item : catalog.values()) {
@@ -831,6 +922,11 @@ public final class ConnectionService extends Service {
         if (normalized.toString().getBytes(StandardCharsets.UTF_8).length > 192 * 1024) throw NativeBackend.fail("INVALID_SUBTITLE");
         return normalized;
     }
+    private static String preparedSubtitleId(JSONObject item) throws NativeBackend.BackendException {
+        Object id = item.opt("preparedId");
+        if (!(id instanceof String) || !((String) id).matches("[A-Za-z0-9_-]{16,128}")) throw NativeBackend.fail("INVALID_SUBTITLE");
+        return (String) id;
+    }
     private void observeSubtitles(JSONObject observed) {
         JSONObject remote = state.optJSONObject("remote"), playback = state.optJSONObject("playback");
         if (remote == null || playback == null || !matches(remote, playback)) return;
@@ -842,6 +938,7 @@ public final class ConnectionService extends Service {
         synchronized (stateLock) {
             if ("KODI_AUTH".equals(failure.code) || "KODI_CONFIG".equals(failure.code)
                     || "NO_VIDEO".equals(failure.code) || "SOURCE_CHANGED".equals(failure.code)) {
+                clearSubtitleDelivery();
                 state.remove("playback");
             } else if ("KODI_UNAVAILABLE".equals(failure.code) || "KODI_RESPONSE".equals(failure.code)) {
                 JSONObject playback = state.optJSONObject("playback");
@@ -873,6 +970,7 @@ public final class ConnectionService extends Service {
     /** A fresh service may attach controls to video already playing on Kodi.
      * A remembered source or an in-progress handoff always keeps its own scope. */
     private void adoptObservedPlayback(JSONObject current) {
+        observeSubtitleSource(current);
         synchronized (stateLock) {
             JSONObject connection = state.optJSONObject("connection");
             if (authorizedToken != null || state.optJSONObject("remote") != null || connection == null
@@ -1118,6 +1216,9 @@ public final class ConnectionService extends Service {
         return PendingIntent.getService(this, requestCode, intent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
     }
     @Override public void onDestroy() {
+        clearSubtitleDelivery();
+        if (subtitleDelivery != null) subtitleDelivery.close();
+        subtitleNetwork.shutdownNow();
         cancelQueuedVolume();
         cancelNotificationFlush();
         destroyed = true; generation++; revokeTokens(); main.removeCallbacksAndMessages(null); listeners.clear();

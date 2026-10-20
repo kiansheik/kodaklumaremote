@@ -91,3 +91,17 @@ test('accepts an extensionless HTML subtitle endpoint as declared WebVTT', () =>
   assert.equal(result.tracks[0].contentType,'text/vtt');
   assert.equal(result.tracks[0].url,'https://player.example/api/subtitles?url=private');
 });
+
+test('additional text subtitle formats require the native normalization opt-in', () => {
+  const formats = [
+    ['srt', 'application/x-subrip'], ['ass', 'text/x-ass'], ['ssa', 'text/x-ssa'],
+    ['ttml', 'application/ttml+xml'], ['dfxp', 'application/ttml+xml'],
+  ];
+  const tracks = formats.map(([extension]) => element({ src: `/captions.${extension}`, kind: 'subtitles', srclang: 'pt-BR' }));
+  const player = video({ currentSrc: 'https://media.example/movie.mp4' }, { tracks });
+  assert.deepEqual(extractMedia(player).tracks, [], 'ordinary Cast capture remains WebVTT-only');
+  const normalized = extractMedia(player, { allowTextSubtitles: true }).tracks;
+  assert.deepEqual(normalized.map(track => track.contentType), formats.map(([, type]) => type));
+  assert.deepEqual(normalized.map(track => track.url), formats.map(([extension]) => `https://player.example/captions.${extension}`));
+  assert.deepEqual(normalized.map(track => track.id), [1, 2, 3, 4, 5]);
+});
