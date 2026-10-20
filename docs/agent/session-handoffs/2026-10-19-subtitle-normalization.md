@@ -61,7 +61,7 @@ The first Android TTML check exposed that Android Expat did not retain the wrapp
 fixed validation error through Throwable.getCause. The parser now retains that
 error explicitly and inspects legacy SAX nesting; exact expected captions and
 unsupported-profile rejection were preserved. The isolated TCP fixture also
-needed the already-existing GETPASSWORDCONFIG handshake. Final rerun required.
+needed the already-existing GETPASSWORDCONFIG handshake. The final rerun passed.
 An initial unprivileged Node run could not open localhost; only its stalled
 processes were terminated, and all201 checks passed with fixture access.
 
@@ -97,3 +97,23 @@ All201 Node,89 relevant browser,24 JVM parser,10 JVM transport and47 Android
 fixture checks passed. The final emulator service check genuinely closed the
 Activity and locked the screen; this does not certify Motorola firmware behavior.
 No household power, volume or seek controls were used during these fixtures.
+
+## Published release and phone observation
+
+0.4.5/code14 is public from source
+`584ad80bad7593714cb93c4482a8958b9b28ca7b`. Production signed committed-source
+build/lintVital and16KiB alignment passed. APK9,666,716bytes, SHA-256
+`88febb047cd356a3cddda6b62579826ed7b37212f16740b8ea0b7504e2bb85f8`.
+Pages commit`6bb54527a726a58887466c9365c9b1f72038ad02` built with no error.
+Public feed/APK GET200; exact prepared metadata, bytes, hash and signer verified.
+Install/update page: https://kiansheik.io/kodaklumaremote/
+
+Installed signed update on the connected Samsung with `adb install -r`, without
+resetting settings. Package reports0.4.5/code14; saved projector connection
+returned immediately. The remote observed existing receiver playback around
+19:39/103:24. Its service had recovered a generic Kodi video without the old
+captured catalog; Subtitles therefore showed no matching choices after this
+process-restarting upgrade. Closed the sheet and left playback untouched.
+No fresh cast, subtitle Add/Set, seek, pause, volume or power request was issued
+on household devices in this turn. The next fresh cast will supply its catalog
+and use the new preparation flow. Actual visible subtitle output remains pending.

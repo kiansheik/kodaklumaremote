@@ -27,7 +27,7 @@ Distribution: [signed releases and optional updates](../releasing.md),
 Dual receiver: [Philips MSX and LUMA selection](msx-receiver.md),
 [implementation handoff](session-handoffs/2026-10-18-dual-receiver-msx.md).
 Native phone implementation: [Matter pairing and hardware remote](session-handoffs/2026-10-18-native-matter-phone.md).
-Subtitle update: [0.4.5 phone normalization and SPA addresses](session-handoffs/2026-10-19-subtitle-normalization.md).
+Current published release: [0.4.5 phone normalization and SPA addresses](session-handoffs/2026-10-19-subtitle-normalization.md).
 Prior published release: [0.4.4 frameXTV capture domain fix](session-handoffs/2026-10-19-capture-domain.md).
 Current repair: [video-first startup, manual subtitles and coalesced volume](session-handoffs/2026-10-19-video-first-volume.md).
 Capture hotfix: [current frameXTV domain and native capture regression](session-handoffs/2026-10-19-capture-domain.md).

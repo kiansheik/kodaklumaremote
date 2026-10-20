@@ -432,3 +432,11 @@
   Android47 passed, including actual Android TTML/charsets, trusted tickets,
   SPA/draft navigation, closed-Activity locked-screen/service and dual target
   regressions. Final debug/test build and lintDebug passed. Release0.4.5 follows.
+- 2026-10-19 deployed0.4.5/code14 from584ad80. Signed committed-source build,
+  lintVital and16KiB alignment passed. Pages6bb5452 built; public feed/APK GET200,
+  exact metadata/hash/production signer verified (9,666,716bytes, SHA-256
+  `88febb047cd356a3cddda6b62579826ed7b37212f16740b8ea0b7504e2bb85f8`).
+  Samsung signed upgrade preserved setup and reconnected to existing playing
+  Kodi video. No prior captured catalog survived the process restart; subtitle
+  sheet was inspected/closed without changing playback. No fresh cast or
+  household media/power/volume command was sent. Visible captions need retest.

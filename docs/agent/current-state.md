@@ -659,3 +659,15 @@ Android runtime caught and corrected Expat validation-error wrapping; exact
 Unicode/timing expectations remain. Native serving is bounded and source-scoped;
 queued old-source preparation is invalidated by a separately captured generation.
 Production signing/publication and physical acceptance follow.
+
+Release0.4.5/code14 is public from
+`584ad80bad7593714cb93c4482a8958b9b28ca7b`; signed committed-source build/lintVital
+and16KiB alignment passed. APK9,666,716bytes, SHA-256
+`88febb047cd356a3cddda6b62579826ed7b37212f16740b8ea0b7504e2bb85f8`.
+Pages`6bb54527a726a58887466c9365c9b1f72038ad02` built/no error; public feed/APK
+GET200, exact metadata/hash/production signer verified. Signed Samsung upgrade
+preserved saved setup and immediately reconnected. Existing Kodi playback was
+observed around19:39/103:24 with generic recovered metadata and no captured
+catalog after the service restart. Closed its empty subtitle sheet and left
+playback untouched; no fresh cast/receiver mutation was issued. A new cast is
+needed to supply the catalog and physically verify normalized subtitle rendering.
