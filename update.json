@@ -1,12 +1,12 @@
 {
   "schemaVersion": 1,
   "packageName": "dev.framextv.lumaremote",
-  "versionName": "0.4.5",
-  "versionCode": 14,
+  "versionName": "0.4.6",
+  "versionCode": 16,
   "minSdk": 24,
-  "apkUrl": "https://github.com/kiansheik/kodaklumaremote/releases/download/v0.4.5/luma-remote-0.4.5.apk",
-  "sha256": "88febb047cd356a3cddda6b62579826ed7b37212f16740b8ea0b7504e2bb85f8",
-  "sizeBytes": 9666716,
-  "releasedAt": "2026-10-20T00:03:19.313Z",
-  "notes": "Subtitles are now downloaded and normalized on your phone before Kodi receives them. Supported text formats include SRT, WebVTT, ASS/SSA and media-time TTML/DFXP, with Unicode and common legacy Portuguese encodings converted to UTF-8 SRT.\n\nChoose a language after the video starts. The app checks that the complete file was served and Kodi selected its track; a download or format error keeps the video playing and lets you try another language. Prepared subtitles stay available while the current video remains active.\n\nThe Browse address bar now follows navigation within the website while preserving text you are editing.\n"
+  "apkUrl": "https://github.com/kiansheik/kodaklumaremote/releases/download/v0.4.6/luma-remote-0.4.6.apk",
+  "sha256": "90349bb058c110ebd5e8798a17681be1b105c4a19d13647289d4c131e7afd790",
+  "sizeBytes": 9757226,
+  "releasedAt": "2026-10-20T18:49:08.207Z",
+  "notes": "LUMA Remote 0.4.6\n\nAdds a direct phone-hosted Philips TV receiver with stream playback, Portuguese-first subtitle selection, playback controls, and a movie/series/episode browser.\n\nThe new Library keeps watched movie/series metadata and per-episode progress privately on your phone, available offline without saving media files. Choose Resume, Start over or a known next episode on Philips or the LUMA/Kodi projector. Sources are resolved again when selected; media links are not stored in viewing history.\n\nAdds receiver shortcuts, a separate TV power-on action, remote page reload, and optional developer diagnostics. The TV page supports directional keys and pointer-style remote input with a hidden page cursor.\n\nOn the tested Philips 43PFG6910/78, HLS picture, sound and Portuguese captions are user-confirmed. Catalog browsing, cross-device resume and the latest physical-remote navigation changes pass local checks but still need end-to-end testing on that TV. Last-source startup is configured; standby wake and automatic browser restoration are not yet verified. The phone must keep hosting the receiver.\n"
 }
