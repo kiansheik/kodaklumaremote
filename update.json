@@ -1,12 +1,12 @@
 {
   "schemaVersion": 1,
   "packageName": "dev.framextv.lumaremote",
-  "versionName": "0.4.4",
-  "versionCode": 13,
+  "versionName": "0.4.5",
+  "versionCode": 14,
   "minSdk": 24,
-  "apkUrl": "https://github.com/kiansheik/kodaklumaremote/releases/download/v0.4.4/luma-remote-0.4.4.apk",
-  "sha256": "2b8ed48a21d05d170c99075f66f5f505b80a1df1ba2758735ef923d38f380c42",
-  "sizeBytes": 9648904,
-  "releasedAt": "2026-10-19T23:34:46.010Z",
-  "notes": "Fix Cast rejecting frameXTV’s current HTTPS address. The original framextv.xyz link now redirects to framextv.cc; both addresses are supported, and Browse starts at the current address.\n\nCapture loading errors are reported separately from unsupported website addresses. Video-first startup, manual subtitles and the volume cooldown from0.4.3 are retained.\n"
+  "apkUrl": "https://github.com/kiansheik/kodaklumaremote/releases/download/v0.4.5/luma-remote-0.4.5.apk",
+  "sha256": "88febb047cd356a3cddda6b62579826ed7b37212f16740b8ea0b7504e2bb85f8",
+  "sizeBytes": 9666716,
+  "releasedAt": "2026-10-20T00:03:19.313Z",
+  "notes": "Subtitles are now downloaded and normalized on your phone before Kodi receives them. Supported text formats include SRT, WebVTT, ASS/SSA and media-time TTML/DFXP, with Unicode and common legacy Portuguese encodings converted to UTF-8 SRT.\n\nChoose a language after the video starts. The app checks that the complete file was served and Kodi selected its track; a download or format error keeps the video playing and lets you try another language. Prepared subtitles stay available while the current video remains active.\n\nThe Browse address bar now follows navigation within the website while preserving text you are editing.\n"
 }
