@@ -1,0 +1,9 @@
+LUMA Remote 0.4.7
+
+Adds Back 30 seconds and a playback scrubber directly to the main remote for both LUMA/Kodi and Philips TV playback.
+
+Adds a catalog-verified Next episode control to the main remote, Android notification and lock-screen media controls. The control appears only when the phone has cached metadata proving the exact successor; it resolves that episode again instead of reusing an old stream URL.
+
+Improves SRT and WebVTT compatibility with subtitle files containing a very small number of malformed cues. The phone still downloads, normalizes and temporarily hosts the selected subtitle for the receiver, while rejecting empty or materially malformed tracks.
+
+Current provider sampling covered five homepage titles and 12 English/Portuguese subtitle bodies. One title exposed no tracks; the reproduced failing track contained 273 valid cues followed by one reversed timestamp. All 12 sampled bodies normalize with this release. Visible subtitle rendering and the new system controls still need acceptance testing on the physical phone and receivers.

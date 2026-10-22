@@ -198,10 +198,21 @@ Pages deploys only reviewed site files plus validated stable-release metadata.
 Keep the user's existing production signing key local; check its public
 fingerprint. Upload assets to a draft before publishing to prevent deployment
 racing incomplete uploads. No signing key or password is uploaded to Actions.
-The user's follow-up explicitly prefers plain Pages plus a Makefile deploy.
-`make deploy-gh-pages` therefore publishes only the validated static payload to
-`gh-pages` using a fast-forward push; Pages serves that branch root. No custom
-Actions workflow remains. The release publisher invokes that same deployer.
+The user's latest follow-up prefers one guarded Make command for the complete
+release. `make deploy-gh-pages` now auto-prepares the next patch/code version,
+checks, production-signs, commits/pushes, publishes and deploys its validated
+static payload. `make deploy-page` retains the original page-only fast-forward
+deployment. Neither path force-pushes or uploads signing material, and the
+release publisher still invokes the same scoped page deployer.
+Auto-stage bounded allowlisted new text files needed by a release, but leave
+unrelated untracked files untouched. Reject sensitive-looking paths/content,
+symlinks, unsupported types and oversized additions unless the maintainer has
+explicitly reviewed and staged them.
+Store repeated local signing inputs only in Git-ignored `.luma-release.json`,
+created by `make configure-release` with mode 0600. Parse it as data rather than
+sourcing shell code, reject symlinks/broad permissions/unknown fields, and let
+explicit environment variables override it. Never derive it from another
+repository automatically.
 
 Check the fixed HTTPS update feed on foreground opens, throttled five minutes;
 manual Settings checking bypasses that limit. Later suppresses the same version

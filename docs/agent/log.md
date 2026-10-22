@@ -1,5 +1,44 @@
 # Work log
 
+- 2026-10-22 one-command release staging: the release target now automatically
+  stages bounded allowlisted new source, test, documentation and release-note
+  text files. It leaves unrelated files such as `headers.txt` untouched and
+  rejects symlinks, unsupported/binary files, sensitive-looking names/content or
+  oversized batches. The exact files from the user's blocked 0.4.7 attempt are
+  accepted; 13 focused tests and all 249 Node tests pass. No release was run.
+  [Handoff](session-handoffs/2026-10-22-release-auto-stage.md).
+
+- 2026-10-22 local release configuration: `make deploy-gh-pages` now loads a
+  mode-0600, Git-ignored `.luma-release.json` and starts one-time interactive
+  configuration when signing inputs are absent. `make configure-release` may be
+  run explicitly; environment values override saved settings. JSON parsing keeps
+  shell metacharacters literal, and symlinks, broad permissions, relative paths
+  and unknown settings fail closed. All 12 focused config/release/Pages tests
+  and all 249 Node tests pass. [Handoff](session-handoffs/2026-10-22-local-release-config.md).
+
+- 2026-10-22 0.4.7 release preparation: increased Android to version 0.4.7/code
+  17, added release notes and completed a real Gradle debug APK build. The
+  artifact metadata is correct, but its Android debug certificate cannot update
+  the production app. The local production certificate was identified and
+  matched against the checked-in pin; using its keystore/credential from a
+  sibling project requires explicit authorization, so production signing and all
+  commit/push/publication/deployment steps remain paused. The Make target now
+  owns guarded auto-version/check/sign/commit/push/publish/page deployment, while
+  `make deploy-page` remains page-only; 10 focused release tests and all 246 Node
+  tests pass. [Handoff](session-handoffs/2026-10-22-release-0.4.7-preparation.md).
+
+- 2026-10-22 unreleased remote/subtitle repair: added main scrub, back 30 and an
+  exact catalog-proven next episode; projected next through notification and
+  standard MediaSession skip-next with revision/source guards. Current homepage
+  sampling found 0/42/64/51/72 subtitle tracks across five titles and one concrete
+  whole-file rejection: 273 valid cues plus one reversed final cue. Bounded
+  isolated-cue salvage now reports that discard; all 12 EN/PT/PT-BR samples pass.
+  Phone-hosted normalized SRT delivery already existed for Kodi/Philips. Node 243,
+  JVM 25+10 and all 81 mobile browser scenarios pass; changed Java manually
+  compiles against Android 35. No Gradle/APK/emulator/physical acceptance.
+  [Profile](subtitle-provider-profile.md),
+  [handoff](session-handoffs/2026-10-22-remote-controls-subtitle-profile.md).
+
 - 2026-10-20 physical picture/sound acceptance: the user requested a replay
   because they had been away from the TV. The existing app replayed the LAN
   sample and reported Playing0:03/0:52; it was left uninterrupted. The user then

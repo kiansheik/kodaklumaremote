@@ -1,6 +1,7 @@
 node_modules/
 artifacts/
 .local/
+/.luma-release.json
 test-results/
 playwright-report/
 dist/

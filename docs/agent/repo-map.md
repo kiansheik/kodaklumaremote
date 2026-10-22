@@ -120,6 +120,10 @@
   Explicit unavailable-ticket proof retires known bindings; unknown writes remain guarded.
 - `src/mobile/{index.html,app.js,capture.js}`: no-scroll combined phone remote,
   native RPC adapters, same-origin declared source/track capture and matched pause.
+  The main remote exposes scrub, back 30 and catalog-proven next episode. The same
+  exact successor is projected to notification/MediaSession skip-next; system
+  activation returns through the app's guarded catalog selection rather than
+  guessing or reusing an old stream URL.
   Native capture accepts the current HTTPS `framextv.cc` and legacy `.xyz`
   exact origins. Packaged UI fixtures exercise capture across that page change,
   not only mocked capture metadata. The native opt-in captures declared SRT,
@@ -142,6 +146,8 @@
   fetch work does not block Kodi controls. Up to128 tracks/16MiB stay available
   for the active source; disconnect/config/source/service teardown revokes them.
   Public DNS addresses are checked per redirect, not pinned to the HTTP socket.
+  Timed SRT/VTT may discard at most 10 cues and 2 percent of a track, retaining the
+  discard count; larger malformed fractions still fail the whole preparation.
   JVM runners cover parser/transport; Android subtitle fixtures cover runtime
   XML/charsets and trusted-ticket versus captured-LAN boundaries.
 - `src/msx/`, `MsxServer.java`: TV-owned standalone-browser/MSX player/subtitle renderer and
@@ -228,8 +234,14 @@
 - `UpdateManager.java`, `UpdateApkProvider.java`: optional foreground update
   offers from fixed Pages metadata, verified GitHub release downloads and one
   temporary read-only APK grant to Android's installer. No background auto-install.
-- `site/`, `Makefile`, `scripts/deploy-gh-pages.mjs`: scoped static install page
-  and direct `gh-pages` branch deployment using `make deploy-gh-pages`.
+- `site/`, `Makefile`, `scripts/{release-next-android,release-config,
+  configure-android-release,deploy-gh-pages}.mjs`:
+  guarded next-patch Android release through `make deploy-gh-pages`, plus scoped
+  page-only fast-forward deployment through `make deploy-page`. One-time
+  `make configure-release` creates a mode-0600, Git-ignored JSON config so
+  repeated releases do not require signing-variable exports. The release target
+  auto-stages bounded allowlisted new text files, ignores unrelated untracked
+  files and rejects sensitive-looking/unsupported additions.
   `scripts/{generate-update,build-pages,build-android-release,
   publish-android-release}.mjs` prepare/verify local signed releases and publish.
   `android/release-certificate.sha256` is a public fingerprint, never a key.

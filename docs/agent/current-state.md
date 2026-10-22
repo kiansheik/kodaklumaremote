@@ -1,5 +1,47 @@
 # Current state
 
+## Unreleased: main/system next, scrub/back and malformed-cue tolerance
+
+Android is now versioned as the 0.4.7/code 17 candidate with checked-in release
+notes. The full Gradle debug APK build passes and produces a correctly versioned
+artifact, but that debug certificate cannot update an installed production app.
+The user completed the private local production-signing configuration. No
+commit, push, release, Pages deployment or phone installation has occurred yet.
+`make deploy-gh-pages` is now the guarded complete-release entry point: it
+auto-increments the next patch/code, checks and signs before committing, pushes
+the exact source, publishes, and deploys the validated update page. Bounded,
+allowlisted new text source/test/docs files auto-stage; unrelated untracked files
+remain untouched, while sensitive-looking or unsupported additions fail closed.
+It never extracts credentials from other repositories.
+One-time `make configure-release` saves the required SDK/tool/signing values in
+Git-ignored `.luma-release.json` with mode 0600; subsequent releases load it
+automatically, while explicit environment variables retain precedence.
+`make deploy-page` preserves page-only resynchronization.
+
+The main phone remote now has a visible playback scrubber, source-guarded back
+30 seconds and a catalog-proven next-episode button. The exact current content
+identity and cached successor survive service restoration. Android MediaSession
+advertises standard skip-next and both notification surfaces include Next episode
+when an exact successor is known. The system action carries the current media
+revision, opens the app and reuses the existing guarded catalog-resolution/cast
+flow; it never synthesizes an episode number or directly replays a URL.
+
+A current homepage/API profile sampled five titles and 12 EN/PT/PT-BR bodies.
+Four titles exposed 42/64/51/72 tracks; one exposed none. Eleven bodies already
+normalized. The failing Simpsons English track had 273 valid cues followed by
+one reversed timestamp. Timed-text normalization now discards only a bounded
+minority (maximum 10 and 2 percent), reports the discard count and preserves
+strict failure for materially malformed files. All 12 sampled bodies now normalize.
+Phone-hosted receiver-pinned SRT delivery already existed for Kodi and Philips;
+the reproduced blocker was whole-file rejection, not absence of hosting.
+
+Validation: Node 249, JVM normalizer 25, JVM delivery 10 and all 81 relevant
+mobile browser scenarios pass. Changed production Java compiles manually against
+Android 35, and the full Gradle debug APK build passes for 0.4.7/code 17. No
+production-signed APK, emulator or physical-device acceptance is claimed. See the
+[profile](subtitle-provider-profile.md) and
+[handoff](session-handoffs/2026-10-22-remote-controls-subtitle-profile.md).
+
 ## Published0.4.6: Philips player and offline viewing library
 
 The user confirmed actual Avatar S1E1 HLS picture, sound and Portuguese captions,

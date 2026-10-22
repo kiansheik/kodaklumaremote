@@ -98,14 +98,14 @@ const errors = {
 const state = {
   native: false, busy: false, handoff: false, configured: false, connected: false,
   host: '', name: '', playback: null, activeMedia: null, pendingMedia: null,
-  tracks: [], catalog: [], selectedIndex: null, subtitlesEnabled: false, apps: [],
+  tracks: [], catalog: [], selectedIndex: null, subtitlesEnabled: false, nextEpisode: null, apps: [],
   appPage: 0, subtitlePage: 0, sheet: null, sourceGeneration: 0, sourceChanged: false, autoStart: false, setupError: null,
   jobToken: null, flowController: null, setupFlow: false, volume: null, skipNextLaunch: false, subtitleFlow: false, subtitleError: null,
   settings: { hasReceiver: false, hasKodi: false, autoConnect: true },
   target: 'luma', pendingTarget: 'luma',
   tvSetup: 'remote', tvEntry: 'browser', tvBrowserManual: false, matterShareTimer: null,
   matter: { available: false, paired: false, connected: false, pairing: false, capabilities: {}, volume: null, inputs: [] },
-  philips: { connected: false, host: '', name: 'Philips TV', startupUrl: '', awaitingApproval: false, pendingHost: '', playback: null, activeMedia: null, tracks: [], catalog: [], selectedIndex: null, subtitlesEnabled: false, volume: null, subtitlePage: 0 },
+  philips: { connected: false, host: '', name: 'Philips TV', startupUrl: '', awaitingApproval: false, pendingHost: '', playback: null, activeMedia: null, tracks: [], catalog: [], selectedIndex: null, subtitlesEnabled: false, nextEpisode: null, volume: null, subtitlePage: 0 },
 };
 const pending = new Map();
 let requestId = 0;
@@ -119,6 +119,7 @@ let changingTarget = false;
 let pendingVolume = null;
 let volumeTimer = null;
 let volumeFlight = false;
+let scrubPosition = null;
 let historySelection = 0;
 let historyController = null;
 let libraryItems = [], libraryDetail = null, librarySelected = null, libraryNext = null;
@@ -211,6 +212,12 @@ function renderRemote() {
     $('#playback-status').textContent = label + timing;
   }
   $('#play-toggle').textContent = snapshot?.playing === false ? 'Resume' : 'Pause';
+  const duration = Number.isFinite(snapshot?.durationSeconds) && snapshot.durationSeconds > 0 ? Math.floor(snapshot.durationSeconds) : 0;
+  const observed = Number.isFinite(snapshot?.positionSeconds) ? Math.max(0, Math.min(duration || snapshot.positionSeconds, Math.floor(snapshot.positionSeconds))) : 0;
+  const position = scrubPosition == null ? observed : Math.max(0, Math.min(duration || scrubPosition, scrubPosition));
+  $('#seek-range').max = String(Math.max(1, duration));
+  $('#seek-range').value = String(position);
+  $('#seek-time').textContent = `${clock(position)} / ${clock(duration)}`;
   const value = remoteVolume();
   $('#volume-level').textContent = value ? state.target === 'philips' ? `${Math.round(value.current / value.max * 100)}%` : `${value.current} / ${value.max}` : '—';
   $('#volume-range').max = String(value?.max || 1);
@@ -293,10 +300,11 @@ function msxState(value) {
   if (snapshot && typeof snapshot.active === 'boolean') {
     const sourceUrl = snapshot.sourceUrl || snapshot.source;
     if (remote.activeMedia && snapshot.active && sourceUrl && sourceUrl !== remote.activeMedia.url) {
-      remote.activeMedia = null; remote.catalog = []; remote.tracks = [];
+      remote.activeMedia = null; remote.catalog = []; remote.tracks = []; remote.nextEpisode = null;
     }
     remote.playback = { ...snapshot, receiverDebug: receiverDebug(snapshot.receiverDebug), sourceUrl, playing: typeof snapshot.playing === 'boolean' ? snapshot.playing : snapshot.paused !== true };
-    if (snapshot.active && !remote.activeMedia && typeof sourceUrl === 'string') remote.activeMedia = { url: sourceUrl, title: title(snapshot.title) };
+    if (snapshot.active && !remote.activeMedia && typeof sourceUrl === 'string') remote.activeMedia = { url: sourceUrl, title: title(snapshot.title), ...mediaMetadata(snapshot) };
+    if (Object.hasOwn(snapshot, 'nextEpisode')) remote.nextEpisode = nextEpisodeSelection(snapshot.nextEpisode, remote.activeMedia);
     if (Array.isArray(snapshot.tracks)) {
       remote.tracks = snapshot.tracks.slice(0, 128).filter(track => Number.isInteger(track?.index)).map(track => ({ index: track.index, language: safeText(track.language, 64), label: safeText(track.label, 200) }));
       if (!remote.catalog.length) remote.catalog = remote.tracks;
@@ -332,6 +340,7 @@ function msxState(value) {
 async function selectTarget(target) {
   if (!['luma', 'philips'].includes(target) || target === state.target || state.busy || state.handoff) return;
   clearPendingVolume();
+  scrubPosition = null;
   changingTarget = true;
   try { await command('app.selectTarget', { target }, '', result => {
     state.target = target;
@@ -349,6 +358,7 @@ function restoreSelectedTarget(target) {
   if (state.busy || state.handoff) { deferredNativeTarget = target; return false; }
   if (target === state.target) { deferredNativeTarget = null; return false; }
   state.target = target;
+  scrubPosition = null;
   closeSheet();
   $('#subtitle-search').value = '';
   renderTracks();
@@ -515,16 +525,11 @@ function sheet(name) {
   $('#sheet-message').hidden = true;
   $('#sheet').hidden = false;
   for (const panel of document.querySelectorAll('.sheet-panel')) panel.hidden = panel.id !== `panel-${name}`;
-  $('#sheet-title').textContent = { settings: 'Configuration', reset: 'Forget saved setup', power: state.target === 'philips' ? 'Turn off the TV?' : 'Turn off the projector?', more: 'More controls', typing: 'Type on the projector', apps: 'Your apps', subtitles: 'Subtitles', seek: 'Go to time', inputs: 'TV inputs', 'matter-share': 'Add another phone', handoff: state.setupFlow ? 'Set up Kodi' : 'Start casting' }[name];
+  $('#sheet-title').textContent = { settings: 'Configuration', reset: 'Forget saved setup', power: state.target === 'philips' ? 'Turn off the TV?' : 'Turn off the projector?', more: 'More controls', typing: 'Type text', apps: 'Apps', subtitles: 'Subtitles', inputs: 'TV inputs', 'matter-share': 'Add another phone', handoff: state.setupFlow ? 'Set up Kodi' : 'Start casting' }[name];
   if (name === 'history') $('#sheet-title').textContent = 'Library';
   $('#close-sheet').focus();
   if (name === 'power') $('#cancel-power').focus();
   if (name === 'typing') $('#remote-text').focus();
-  if (name === 'seek') {
-    $('#seek-range').max = String(Math.max(1, receiver().playback?.durationSeconds || 1));
-    $('#seek-range').value = String(receiver().playback?.positionSeconds || 0);
-    $('#seek-time').textContent = clock($('#seek-range').value);
-  }
   renderControls();
 }
 function renderControls() {
@@ -687,6 +692,9 @@ function renderControls() {
     button.textContent = tv ? 'Forget Philips TV pairing' : { kodi: 'Forget Kodi login', receiver: 'Forget projector', all: 'Forget all saved settings' }[button.dataset.reset];
   }
   $('#play-toggle').disabled = !active;
+  const canSeek = active && !!remote.playback?.durationSeconds && remote.playback?.canSeek !== false;
+  $('#back-30').disabled = !canSeek || (remote.playback?.positionSeconds || 0) <= 0;
+  $('#next-episode').disabled = !active || !remote.nextEpisode;
   $('#refresh-playback').disabled = !kodi;
   $('#show-subtitles').disabled = !active;
   $('#show-more').disabled = !free || (tv ? !tvConnected() : !state.connected && !state.configured);
@@ -699,8 +707,7 @@ function renderControls() {
   $('#turn-on-tv').hidden = !tv || !matter.paired || matter.capabilities.powerOn !== true;
   $('#turn-on-tv').disabled = !free;
   $('#stop-video').disabled = !active;
-  $('#seek-video').disabled = !active || !remote.playback?.durationSeconds || remote.playback?.canSeek === false;
-  $('#seek-range').disabled = $('#seek-video').disabled;
+  $('#seek-range').disabled = !canSeek;
   $('#remote-text').disabled = !luma;
   $('#send-text').disabled = !luma || !$('#remote-text').value.trim();
   $('#clear-text').disabled = !free || !$('#remote-text').value;
@@ -729,6 +736,7 @@ function playback(snapshot, target = 'luma') {
     remote.activeMedia = null;
     remote.tracks = [];
     remote.catalog = [];
+    remote.nextEpisode = null;
   }
   remote.playback = snapshot;
   renderControls();
@@ -777,14 +785,16 @@ function restoredRemote(value, observedPlayback) {
         ...(Number.isInteger(track.index) && track.preparedId ? { preparedId: track.preparedId } : {}) });
     }
   }
+  const media = { url: url.href, contentType: safeText(value.media.contentType, 100), title: title(value.media.title), ...mediaMetadata(value.media) };
   return {
     // A service-restored remote is not a newly captured source. Never restore
     // its capture/job tokens or feed it to the handoff coordinator.
-    media: { url: url.href, contentType: safeText(value.media.contentType, 100), title: title(value.media.title), ...mediaMetadata(value.media) },
+    media,
     tracks,
     catalog,
     selectedIndex: Number.isInteger(value.selectedIndex) && indices.has(value.selectedIndex) ? value.selectedIndex : null,
     subtitlesEnabled: value.subtitlesEnabled === true,
+    nextEpisode: nextEpisodeSelection(value.nextEpisode, media),
   };
 }
 function connectionState(snapshot, { initial = false } = {}) {
@@ -800,7 +810,7 @@ function connectionState(snapshot, { initial = false } = {}) {
     if (typeof connection.configured === 'boolean') state.configured = connection.configured;
     if (typeof connection.host === 'string' && privateHost(connection.host)) {
       if (state.host && state.host !== connection.host) {
-        state.activeMedia = null; state.tracks = []; state.catalog = []; state.selectedIndex = null;
+        state.activeMedia = null; state.tracks = []; state.catalog = []; state.selectedIndex = null; state.nextEpisode = null;
         $('#media-title').textContent = 'Ready to cast';
         playback({ active: false });
         renderTracks();
@@ -823,6 +833,7 @@ function connectionState(snapshot, { initial = false } = {}) {
       state.catalog = remote.catalog;
       state.selectedIndex = remote.selectedIndex;
       state.subtitlesEnabled = remote.subtitlesEnabled;
+      state.nextEpisode = remote.nextEpisode;
       $('#media-title').textContent = remote.media.title;
       renderTracks();
     }
@@ -927,7 +938,7 @@ const coordinator = createHandoffCoordinator({
     // completion. Receiver playback remains successful if local pausing fails.
     const resumeApplied = await resumeMedia(selected, 'luma', options.signal);
     if (options.signal.aborted || state.pendingMedia !== selected) throw fixedError('SOURCE_CHANGED');
-    state.resumeNotice = resumeApplied ? '' : 'Video is playing, but the saved position could not be restored. Use Go to time to continue.';
+    state.resumeNotice = resumeApplied ? '' : 'Video is playing, but the saved position could not be restored. Use the playback scrubber to continue.';
     await rpc('app.handoffReady', { sourceToken: token, remote, resumeApplied }, { timeoutMs: 2000 }).catch(() => {});
   } },
   onStatus({ step, message: text }) {
@@ -1031,7 +1042,7 @@ async function startMsxCasting() {
     state.pendingMedia = null;
     await rpc('app.handoffReady', { target: 'philips', sourceToken: jobToken, resumeApplied }, { timeoutMs: 2000 }).catch(() => {});
     closeSheet(); page('remote');
-    message(resumeApplied ? 'Ready on Philips TV. You can use the remote.' : 'Video is playing, but the saved position could not be restored. Use Go to time to continue.', !resumeApplied);
+    message(resumeApplied ? 'Ready on Philips TV. You can use the remote.' : 'Video is playing, but the saved position could not be restored. Use the playback scrubber to continue.', !resumeApplied);
   } catch (error) {
     cancelNative(jobToken);
     if (id !== flowId) return;
@@ -1051,7 +1062,7 @@ async function startMsxCasting() {
       if (id !== flowId || generation !== state.sourceGeneration) return;
       await rpc('app.handoffReady', { target: 'philips', sourceToken: jobToken, resumeApplied }, { timeoutMs: 2000 }).catch(() => {});
       closeSheet(); page('remote');
-      message(!resumeApplied ? 'Video is playing, but the saved position could not be restored. Use Go to time to continue.' : state.philips.subtitlesEnabled ? 'Video is playing on Philips TV.' : 'Video is playing. Choose subtitles in the remote to retry them.', !resumeApplied);
+      message(!resumeApplied ? 'Video is playing, but the saved position could not be restored. Use the playback scrubber to continue.' : state.philips.subtitlesEnabled ? 'Video is playing on Philips TV.' : 'Video is playing. Choose subtitles in the remote to retry them.', !resumeApplied);
     } else {
       // A delivered command may finish after the phone's timeout. Do not offer a
       // second Open while its result is unknown; refresh observes the first one.
@@ -1070,6 +1081,11 @@ window.LumaApp = Object.freeze({
   onOpenRemote() {
     if (!state.handoff) closeSheet();
     page('remote');
+  },
+  onPlayNext() {
+    if (!state.handoff) closeSheet();
+    page('remote');
+    void playNextEpisode();
   },
   onCapturedMedia(media) {
     if (!media || typeof media.url !== 'string') { message('No supported video was found. Open its player and try Cast again.', true); return; }
@@ -1156,7 +1172,7 @@ function renderTracks() {
 }
 function remoteDescriptor() {
   return {
-    media: { url: state.activeMedia.url, contentType: state.activeMedia.contentType, title: state.activeMedia.title },
+    media: { url: state.activeMedia.url, contentType: state.activeMedia.contentType, title: state.activeMedia.title, ...mediaMetadata(state.activeMedia) },
     tracks: state.tracks.map(track => ({ index: track.index, language: track.language, label: track.label })),
     catalog: state.catalog.map(track => ({ url: track.url, language: track.language, label: track.label, index: track.index, ...(track.preparedId ? { preparedId: track.preparedId } : {}) })),
     selectedIndex: state.selectedIndex,
@@ -1555,6 +1571,12 @@ function episodeSelection(identity, season, episode, progress = null) {
   if (identity.kind === 'movie') return {...identity,progress};
   return Number.isInteger(season) && season >= 0 && season <= 9999 && Number.isInteger(episode) && episode > 0 && episode <= 9999 ? {...identity,season,episode,progress} : null;
 }
+function nextEpisodeSelection(value, media) {
+  const current = contentDescriptor(media?.content);
+  if (!current || current.kind !== 'tv' || !value || value.kind !== 'tv' || value.id !== current.contentId) return null;
+  const next = episodeSelection({kind:'tv',id:value.id}, value.season, value.episode);
+  return next && (next.season > current.season || next.season === current.season && next.episode > current.episode) ? next : null;
+}
 function selectionLabel(selection) { return selection?.kind === 'tv' ? `S${selection.season} E${selection.episode}` : 'Movie'; }
 function renderLibraryControls() {
   const free = state.native && !state.busy && !state.handoff;
@@ -1674,6 +1696,23 @@ async function playLibrarySelection(selection, resume) {
     historyController = null; state.busy = false; $('#history-detail-status').textContent = errors[error.code] || 'This title could not load. Try another title.'; renderControls();
   }
 }
+async function playNextEpisode() {
+  const remote = receiver(), selection = remote.nextEpisode;
+  if (!selection || state.busy || state.handoff) {
+    if (!selection) message('No catalog-confirmed next episode is available yet.', true);
+    return;
+  }
+  const target = state.target, source = remote.activeMedia?.url;
+  state.busy = true; renderControls(); message(`Finding ${selectionLabel(selection)}…`);
+  try {
+    const media = await rpc('app.chooseCatalog', {kind:'tv',id:selection.id,season:selection.season,episode:selection.episode,resume:true}, {timeoutMs:150000});
+    if (state.target !== target || receiver().activeMedia?.url !== source) throw fixedError('SOURCE_CHANGED');
+    if (!media || typeof media.url !== 'string' || typeof media.sourceToken !== 'string') throw fixedError('INVALID_MEDIA');
+    state.busy = false; remote.nextEpisode = null; window.LumaApp.onCapturedMedia(media);
+  } catch (error) {
+    state.busy = false; message(errors[error.code] || 'The next episode could not load. Current playback is unchanged.', true); renderControls();
+  }
+}
 $('#show-history').addEventListener('click', openLibrary);
 $('#open-library').addEventListener('click', openLibrary);
 $('#history-search-form').addEventListener('submit', event => { event.preventDefault(); void loadLibrary(); });
@@ -1702,6 +1741,7 @@ $('#receiver-form').addEventListener('submit', async event => {
       state.activeMedia = null;
       state.tracks = [];
       state.catalog = [];
+      state.nextEpisode = null;
       state.playback = null;
       $('#media-title').textContent = 'Ready to cast';
       $('#playback-status').textContent = 'Choose a video in Browse.';
@@ -1835,6 +1875,18 @@ $('#play-toggle').addEventListener('click', () => {
   const action = state.playback?.playing === false ? 'resume' : 'pause';
   void command(`kodi.${action}`, remoteParams(), action === 'pause' ? 'Pause requested.' : 'Resume requested.', async () => playback(await rpc('kodi.status', remoteParams())));
 });
+async function seekTo(position) {
+  const remote = receiver(), duration = remote.playback?.durationSeconds;
+  if (!Number.isFinite(position) || !Number.isFinite(duration) || duration <= 0) return;
+  const seconds = Math.max(0, Math.min(Math.floor(duration), Math.floor(position)));
+  scrubPosition = seconds; renderRemote();
+  if (state.target === 'philips') await command('msx.seek', msxParams({ seconds }), 'Seek requested. Check playback on the TV.', msxState);
+  else await command('kodi.seek', remoteParams({ position: seconds }), 'Seek requested. Check playback on the projector.', async () => playback(await rpc('kodi.status', remoteParams())));
+  scrubPosition = null;
+  renderControls();
+}
+$('#back-30').addEventListener('click', () => void seekTo(Math.max(0, (receiver().playback?.positionSeconds || 0) - 30)));
+$('#next-episode').addEventListener('click', () => void playNextEpisode());
 $('#refresh-playback').addEventListener('click', () => state.target === 'philips' ? command('msx.status', {}, 'Playback refreshed.', msxState) : command('kodi.status', remoteParams(), 'Playback refreshed.', playback));
 $('#refresh-volume').addEventListener('click', () => state.target === 'philips' ? state.matter.connected ? command('matter.status', {}, 'Volume refreshed.', matterState) : command('msx.status', {}, 'Volume refreshed.', msxState) : command('luma.status', {}, 'Volume refreshed.', volume));
 function setVolume(value) {
@@ -1933,8 +1985,8 @@ $('#text-form').addEventListener('submit', async event => {
   if (await command('luma.text', { text }, 'Text sent. Check the selected field on the projector.')) $('#remote-text').value = '';
   renderControls();
 });
-$('#seek-range').addEventListener('input', () => { $('#seek-time').textContent = clock($('#seek-range').value); });
-$('#seek-video').addEventListener('click', () => state.target === 'philips' ? command('msx.seek', msxParams({ seconds: Number($('#seek-range').value) }), 'Seek requested. Check playback on the TV.', msxState) : command('kodi.seek', remoteParams({ position: Number($('#seek-range').value) }), 'Seek requested. Check playback on the projector.', async () => playback(await rpc('kodi.status', remoteParams()))));
+$('#seek-range').addEventListener('input', () => { scrubPosition = Number($('#seek-range').value); renderRemote(); });
+$('#seek-range').addEventListener('change', () => void seekTo(Number($('#seek-range').value)));
 for (const kind of ['apps', 'subtitles']) {
   $(`#${kind === 'apps' ? 'app' : 'subtitle'}-search`).addEventListener('input', () => { (kind === 'apps' ? state : receiver())[kind === 'apps' ? 'appPage' : 'subtitlePage'] = 0; kind === 'apps' ? renderApps() : renderTracks(); });
   for (const [direction, delta] of [['previous', -1], ['next', 1]]) $(`#${kind}-${direction}`).addEventListener('click', () => { (kind === 'apps' ? state : receiver())[kind === 'apps' ? 'appPage' : 'subtitlePage'] += delta; kind === 'apps' ? renderApps() : renderTracks(); });

@@ -188,6 +188,44 @@ public final class LibraryStore implements AutoCloseable {
             catch (RuntimeException failed) { available = false; throw fail("LIBRARY_UNAVAILABLE"); }
         }
     }
+    /** Returns a next episode only when cached catalog metadata proves the exact
+     * current episode and its successor. It never guesses across missing data. */
+    public JSONObject nextEpisode(JSONObject params) throws LibraryException {
+        fields(params, "kind", "id", "season", "episode");
+        if (!"tv".equals(kind(params.opt("kind")))) throw fail("LIBRARY_INVALID_INPUT");
+        String id = id(params.opt("id"));
+        int currentSeason = integer(params, "season", 0, 9999, -1), currentEpisode = integer(params, "episode", 1, 9999, -1);
+        synchronized (lock) {
+            if (closed || database == null) throw fail("LIBRARY_UNAVAILABLE");
+            try (Cursor title = database.rawQuery("SELECT metadata FROM titles WHERE kind='tv' AND id=?", new String[] {id})) {
+                if (!title.moveToFirst()) throw fail("LIBRARY_NOT_FOUND");
+                JSONObject cached = json(title.getString(0));
+                TreeMap<Integer, JSONObject> declared = new TreeMap<>();
+                JSONArray seasons = cached == null ? null : cached.optJSONArray("seasons");
+                if (seasons != null) for (int i = 0; i < seasons.length(); i++) {
+                    JSONObject season = seasons.optJSONObject(i); if (season != null) declared.put(season.optInt("number"), copy(season));
+                }
+                Map<Integer, TreeMap<Integer, JSONObject>> episodes = new TreeMap<>(); Set<Integer> complete = new HashSet<>();
+                try (Cursor rows = database.rawQuery("SELECT number,metadata FROM seasons WHERE id=? ORDER BY number", new String[] {id})) {
+                    while (rows.moveToNext()) {
+                        int season = rows.getInt(0); JSONObject data = json(rows.getString(1)); JSONArray values = data == null ? null : data.optJSONArray("episodes");
+                        if (values == null) continue;
+                        complete.add(season); TreeMap<Integer, JSONObject> known = episodes.computeIfAbsent(season, ignored -> new TreeMap<>());
+                        for (int i = 0; i < values.length(); i++) { JSONObject episode = values.optJSONObject(i); if (episode != null) known.put(episode.optInt("number"), copy(episode)); }
+                    }
+                }
+                JSONObject next = knownNext(id, currentSeason, currentEpisode, declared, episodes, complete);
+                TreeMap<Integer, JSONObject> current = episodes.get(currentSeason);
+                boolean lookupComplete = cached != null && complete.contains(currentSeason) && current != null && current.containsKey(currentEpisode);
+                if (lookupComplete && current.higherKey(currentEpisode) == null) {
+                    Integer following = declared.containsKey(currentSeason) ? declared.higherKey(currentSeason) : null;
+                    lookupComplete = following == null || complete.contains(following);
+                }
+                return object("version", 1, "lookupComplete", lookupComplete, "nextEpisode", next == null ? JSONObject.NULL : next);
+            } catch (LibraryException failed) { throw failed; }
+            catch (RuntimeException failed) { available = false; throw fail("LIBRARY_UNAVAILABLE"); }
+        }
+    }
     private JSONObject title(Cursor row) {
         String kind = row.getString(0), id = row.getString(1); JSONObject meta = json(row.getString(3));
         JSONObject latest = oneProgress("kind=? AND id=?", new String[] {kind, id}), summary = progress(latest);

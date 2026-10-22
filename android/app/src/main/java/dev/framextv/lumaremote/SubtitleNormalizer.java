@@ -28,6 +28,7 @@ import org.xml.sax.helpers.DefaultHandler;
 public final class SubtitleNormalizer {
     public static final int MAX_BYTES = 2 * 1024 * 1024;
     public static final int MAX_CUES = 20000;
+    private static final int MAX_DISCARDED_CUES = 10, MAX_DISCARDED_PERCENT = 2;
     private static final long MAX_TIME = 999L * 3600000 + 59 * 60000 + 59999;
     private static final Pattern CHARSET = Pattern.compile("(?i)(?:^|;)\\s*charset\\s*=\\s*[\"']?([^\\s;\"']+)");
     private static final Pattern XML_ENCODING = Pattern.compile("(?i)^\\s*<\\?xml[^>]*\\bencoding\\s*=\\s*[\"']([^\"']+)[\"']");
@@ -49,9 +50,9 @@ public final class SubtitleNormalizer {
         public final byte[] srt;
         public final String format;
         public final String encoding;
-        public final int cueCount;
-        Result(byte[] srt, String format, String encoding, int cueCount) {
-            this.srt = srt; this.format = format; this.encoding = encoding; this.cueCount = cueCount;
+        public final int cueCount, discardedCueCount;
+        Result(byte[] srt, String format, String encoding, int cueCount, int discardedCueCount) {
+            this.srt = srt; this.format = format; this.encoding = encoding; this.cueCount = cueCount; this.discardedCueCount = discardedCueCount;
         }
     }
 
@@ -66,6 +67,12 @@ public final class SubtitleNormalizer {
         Cue(long start, long end, String text) { this.start = start; this.end = end; this.text = text; }
     }
 
+    private static final class TimedText {
+        final List<Cue> cues;
+        final int discarded;
+        TimedText(List<Cue> cues, int discarded) { this.cues = cues; this.discarded = discarded; }
+    }
+
     public static Result normalize(byte[] body, String contentType) throws NormalizeException {
         if (body == null || body.length == 0) throw failure("SUBTITLE_INVALID");
         if (body.length > MAX_BYTES) throw failure("SUBTITLE_TOO_LARGE");
@@ -78,17 +85,17 @@ public final class SubtitleNormalizer {
         if (lower.startsWith("#extm3u") || lower.startsWith("{") || lower.startsWith("[") &&
                 !lower.matches("(?s)^\\[(script info|v4\\+? styles|events)\\].*")) throw failure("SUBTITLE_FORMAT");
         if (lower.matches("(?s)^<(?:!doctype\\s+html\\b|html\\b|head\\b|body\\b).*")) throw failure("SUBTITLE_FORMAT");
-        List<Cue> cues;
+        List<Cue> cues; int discarded = 0;
         String format;
         if (leading.matches("(?s)^WEBVTT(?:[ \\t\\n].*)?$")) {
-            format = "vtt"; cues = timedText(text, true);
+            format = "vtt"; TimedText parsed = timedText(text, true); cues = parsed.cues; discarded = parsed.discarded;
         } else if (lower.matches("(?s)^\\[(script info|v4\\+? styles|events)\\].*")) {
             format = lower.contains("[v4 styles]") && !lower.contains("[v4+ styles]") ? "ssa" : "ass";
             cues = ass(text);
         } else if (leading.startsWith("<")) {
             format = "ttml"; cues = ttml(text);
         } else if (text.contains("-->")) {
-            format = "srt"; cues = timedText(text, false);
+            format = "srt"; TimedText parsed = timedText(text, false); cues = parsed.cues; discarded = parsed.discarded;
         } else throw failure("SUBTITLE_FORMAT");
         if (cues.isEmpty()) throw failure("SUBTITLE_INVALID");
         cues.sort(Comparator.comparingLong(cue -> cue.start));
@@ -101,7 +108,7 @@ public final class SubtitleNormalizer {
         }
         byte[] bytes = output.toString().getBytes(StandardCharsets.UTF_8);
         if (bytes.length > MAX_BYTES) throw failure("SUBTITLE_TOO_LARGE");
-        return new Result(bytes, format, decoded.encoding, cues.size());
+        return new Result(bytes, format, decoded.encoding, cues.size(), discarded);
     }
 
     private static Decoded decode(byte[] body, String contentType) throws NormalizeException {
@@ -159,10 +166,10 @@ public final class SubtitleNormalizer {
         }
     }
 
-    private static List<Cue> timedText(String text, boolean vtt) throws NormalizeException {
+    private static TimedText timedText(String text, boolean vtt) throws NormalizeException {
         String[] lines = text.split("\n", -1);
         List<Cue> cues = new ArrayList<>();
-        int i = 0;
+        int i = 0, discarded = 0;
         if (vtt) {
             while (i < lines.length && lines[i].trim().isEmpty()) i++;
             i++;
@@ -178,22 +185,29 @@ public final class SubtitleNormalizer {
                 while (i < lines.length && !lines[i].trim().isEmpty()) i++;
                 continue;
             }
-            String timing = lines[i++].trim();
-            if (!timing.contains("-->")) {
-                if (i == lines.length) throw failure("SUBTITLE_INVALID");
-                timing = lines[i++].trim(); // Optional SRT number / WebVTT cue identifier.
+            int first = i;
+            while (i < lines.length && !lines[i].trim().isEmpty()) i++;
+            int endOfBlock = i;
+            try {
+                int timingLine = lines[first].contains("-->") ? first : first + 1;
+                if (timingLine >= endOfBlock) throw failure("SUBTITLE_INVALID");
+                Matcher match = TIMING.matcher(lines[timingLine].trim());
+                if (!match.matches()) throw failure("SUBTITLE_INVALID");
+                long start = clock(match.group(1)), end = clock(match.group(2));
+                StringBuilder body = new StringBuilder();
+                for (int line = timingLine + 1; line < endOfBlock; line++) {
+                    if (body.length() > 0) body.append('\n');
+                    body.append(lines[line]);
+                }
+                add(cues, start, end, plain(body.toString()));
+            } catch (NormalizeException invalid) {
+                if ("SUBTITLE_TOO_LARGE".equals(invalid.code)) throw invalid;
+                discarded++;
             }
-            Matcher match = TIMING.matcher(timing);
-            if (!match.matches()) throw failure("SUBTITLE_INVALID");
-            long start = clock(match.group(1)), end = clock(match.group(2));
-            StringBuilder body = new StringBuilder();
-            while (i < lines.length && !lines[i].trim().isEmpty()) {
-                if (body.length() > 0) body.append('\n');
-                body.append(lines[i++]);
-            }
-            add(cues, start, end, plain(body.toString()));
         }
-        return cues;
+        int total = cues.size() + discarded;
+        if (discarded > MAX_DISCARDED_CUES || (long) discarded * 100 > (long) total * MAX_DISCARDED_PERCENT) throw failure("SUBTITLE_INVALID");
+        return new TimedText(cues, discarded);
     }
 
     private static List<Cue> ass(String text) throws NormalizeException {

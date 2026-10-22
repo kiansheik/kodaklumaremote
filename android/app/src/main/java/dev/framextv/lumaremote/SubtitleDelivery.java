@@ -43,9 +43,9 @@ public final class SubtitleDelivery implements AutoCloseable {
     }
     public static final class Prepared {
         public final String id, url, format, encoding;
-        public final int cueCount;
+        public final int cueCount, discardedCueCount;
         private Prepared(String id, String url, SubtitleNormalizer.Result normalized) {
-            this.id = id; this.url = url; format = normalized.format; encoding = normalized.encoding; cueCount = normalized.cueCount;
+            this.id = id; this.url = url; format = normalized.format; encoding = normalized.encoding; cueCount = normalized.cueCount; discardedCueCount = normalized.discardedCueCount;
         }
     }
     private static final int MAX_BYTES = 2 * 1024 * 1024, MAX_ENTRIES = 128, MAX_CACHE_BYTES = 16 * 1024 * 1024, MAX_HEADER = 8192, MAX_REQUESTS = 16;

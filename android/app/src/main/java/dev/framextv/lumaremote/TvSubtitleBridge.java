@@ -35,9 +35,9 @@ public final class TvSubtitleBridge implements AutoCloseable {
     }
     public static final class Prepared {
         public final String id, format, encoding;
-        public final int cueCount;
+        public final int cueCount, discardedCueCount;
         private Prepared(String id, SubtitleNormalizer.Result normalized) {
-            this.id = id; format = normalized.format; encoding = normalized.encoding; cueCount = normalized.cueCount;
+            this.id = id; format = normalized.format; encoding = normalized.encoding; cueCount = normalized.cueCount; discardedCueCount = normalized.discardedCueCount;
         }
     }
     private static final int MAX_BYTES = 2 * 1024 * 1024, MAX_CACHE = 16 * 1024 * 1024, MAX_SLOTS = 128, TIMEOUT = 8000;

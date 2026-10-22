@@ -64,6 +64,7 @@ public final class MainActivity extends Activity {
             connectionService.addListener(serviceListener);
             if (autoConnectEnabled && foregroundStarted) connectionService.restoreReceivers();
             event("onConnectionState", connectionService.snapshot());
+            deliverPendingNext();
             scheduleAutoConnect(0);
         }
         @Override public void onServiceDisconnected(ComponentName name) {
@@ -80,6 +81,8 @@ public final class MainActivity extends Activity {
     private String lastNavigationUrl;
     private JSONObject capturedMedia;
     private boolean localReady;
+    private boolean pendingPlayNext;
+    private String pendingPlayNextRevision;
     private boolean browserVisible;
     private volatile boolean destroyed;
     private final Runnable autoConnect = () -> {
@@ -117,6 +120,8 @@ public final class MainActivity extends Activity {
 
     @Override public void onCreate(Bundle saved) {
         super.onCreate(saved);
+        pendingPlayNext = ConnectionService.ACTION_PLAY_NEXT.equals(getIntent().getAction());
+        if (pendingPlayNext) pendingPlayNextRevision = getIntent().getStringExtra("revision");
         if ((getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
             autoConnectEnabled = !getIntent().getBooleanExtra("dev.framextv.lumaremote.TEST_NO_AUTO_CONNECT", false);
         }
@@ -329,6 +334,13 @@ public final class MainActivity extends Activity {
             event("onOpenRemote", null);
             return;
         }
+        if (ConnectionService.ACTION_PLAY_NEXT.equals(intent.getAction())) {
+            showBrowser(false);
+            pendingPlayNext = true;
+            pendingPlayNextRevision = intent.getStringExtra("revision");
+            deliverPendingNext();
+            return;
+        }
         String url = sharedUrl(intent);
         if (url != null) navigate(url);
     }
@@ -461,6 +473,7 @@ public final class MainActivity extends Activity {
                 result.put("browserUrl", browser.getUrl());
                 if (capturedMedia != null) result.put("source", capturedMedia);
                 reply(id, result, null, null);
+                main.post(this::deliverPendingNext);
             } else if (method.equals("app.scanMatterCode")) {
                 if (pendingMatterScan != null) { reply(id, null, "MATTER_BUSY", "A scan is already open."); return; }
                 pendingMatterScan = id;
@@ -603,6 +616,14 @@ public final class MainActivity extends Activity {
         if (!localReady || destroyed) return;
         String value = data == null ? "null" : data.toString();
         controls.evaluateJavascript("window.LumaApp&&typeof window.LumaApp." + method + "==='function'&&window.LumaApp." + method + "(" + value + ")", null);
+    }
+
+    private void deliverPendingNext() {
+        if (!pendingPlayNext || !localReady || destroyed || connectionService == null) return;
+        pendingPlayNext = false;
+        if (!connectionService.nextLaunchCurrent(pendingPlayNextRevision)) { pendingPlayNextRevision = null; return; }
+        pendingPlayNextRevision = null;
+        event("onPlayNext", null);
     }
 
     @Override public void onBackPressed() {

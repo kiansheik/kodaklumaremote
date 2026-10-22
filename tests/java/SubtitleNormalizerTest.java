@@ -24,6 +24,7 @@ public final class SubtitleNormalizerTest {
         invalidEncoding();
         invalidResponses();
         malformedCuesAreNotHidden();
+        isolatedMalformedCueIsDiscarded();
         invalidTiming();
         oversizedInput();
         oversizedOutput();
@@ -141,6 +142,15 @@ public final class SubtitleNormalizerTest {
         expect("SUBTITLE_INVALID", "[Events]\nFormat: Start, End, Text\nDialogue: 0:00:01.00,0:00:02.00,Good\nDialogue: wrong,0:00:03.00,Bad", null);
         expect("SUBTITLE_INVALID", "WEBVTT\n\nNOTE no captions", null);
         expect("SUBTITLE_INVALID", "1\n00:00:01,000 --> 00:00:03,000\n<i></i>\n", null); passed++;
+    }
+
+    private static void isolatedMalformedCueIsDiscarded() throws Exception {
+        StringBuilder input = new StringBuilder("WEBVTT\n\n");
+        for (int i = 0; i < 273; i++) input.append("00:00:01.000 --> 00:00:02.000\nGood ").append(i).append("\n\n");
+        input.append("00:23:06.900 --> 00:00:00.000\nMalformed provider cue\n");
+        SubtitleNormalizer.Result result = normalize(input.toString(), "text/vtt");
+        require(result.cueCount == 273 && result.discardedCueCount == 1, "one isolated malformed provider cue is discarded and reported");
+        passed++;
     }
 
     private static void invalidTiming() throws Exception {

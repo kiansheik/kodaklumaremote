@@ -63,6 +63,7 @@ async function openApp(page, initialSnapshot = null) {
         case 'app.settings.rescan': return receiver.rescanAutoConnect ? { connected: true, name: 'Other LUMA', devices: [{ host: '192.168.1.51', name: 'Other LUMA', port: 8121 }] } : { connection: { connected: false, configured: false }, devices: [{ host: '192.168.1.51', name: 'Other LUMA', port: 8121 }] };
         case 'app.settings.reset': return { connection: { connected: params.scope === 'kodi', configured: false }, settings: { hasReceiver: params.scope === 'kodi', hasKodi: params.scope === 'receiver', autoConnect: true } };
         case 'app.beginHandoff': receiver.activeJob = `job-${++receiver.job}`; return { sourceToken: receiver.activeJob };
+        case 'app.chooseCatalog': return window.__catalogMedia || null;
         case 'app.cancelHandoff': if (params.sourceToken === receiver.activeJob) receiver.activeJob = null; return { accepted: true };
         case 'app.capture': if (window.__captureMedia) window.LumaApp.onCapturedMedia(window.__captureMedia); return { accepted: true };
         case 'device.discover': return { devices: [{ host: '192.168.1.50', name: 'Test LUMA', port: 8121 }] };
@@ -313,13 +314,9 @@ test('manual playback stays bound to the active receiver source while browsing a
   await page.getByRole('button', { name: 'English', exact: true }).click();
   await expect(page.getByRole('button', { name: 'English', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await page.getByRole('button', { name: 'Done', exact: true }).click();
-  await page.getByRole('button', { name: 'More', exact: true }).click();
-  await page.getByRole('button', { name: 'Go to time', exact: true }).click();
-  await page.getByLabel('Playback position').focus();
-  await page.keyboard.press('Home');
-  await page.keyboard.press('ArrowRight');
+  await page.getByLabel('Playback position').evaluate(element => { element.value = '1'; element.dispatchEvent(new Event('input', {bubbles:true})); });
   expect(await page.evaluate(() => window.__calls.some(call => call.method === 'kodi.seek'))).toBe(false);
-  await page.getByRole('button', { name: 'Go to position', exact: true }).click();
+  await page.getByLabel('Playback position').evaluate(element => element.dispatchEvent(new Event('change', {bubbles:true})));
   const calls = await page.evaluate(() => window.__calls);
   const pause = calls.find(call => call.method === 'kodi.pause');
   expect(pause.params).toEqual({ expectedSourceUrl: media.url });
@@ -328,6 +325,23 @@ test('manual playback stays bound to the active receiver source while browsing a
   expect(calls.filter(call => call.method === 'luma.key' && call.params.key === 'enter')).toHaveLength(0);
   expect(calls.find(call => call.method === 'kodi.seek').params).toEqual({ expectedSourceUrl: media.url, position: 1 });
   expect(calls.filter(call => call.method === 'kodi.setSubtitle').at(-1).params).toEqual({ expectedSourceUrl: media.url, index: 0 });
+});
+
+test('main remote exposes back 30, scrub and catalog-proven next episode controls', async ({ page }) => {
+  const content = {key:'framextv:tv:284833:1:1',kind:'tv',contentId:'284833',season:1,episode:1,watchUrl:'https://framextv.cc/watch/284833/1/1',title:'Household episode'};
+  const nextMedia = {...media,url:'https://media.example.org/next.m3u8',sourceToken:'capture-next',content:{...content,key:'framextv:tv:284833:1:2',episode:2,watchUrl:'https://framextv.cc/watch/284833/1/2'}};
+  await openApp(page, {
+    connection:{connected:true,configured:true,host:'192.168.1.50',name:'Test LUMA'}, settings:{hasReceiver:true,hasKodi:true,autoConnect:true},
+    playback:{active:true,playing:true,sourceUrl:media.url,positionSeconds:75,durationSeconds:600,canSeek:true},
+    remote:{media:{...media,content},tracks:[],catalog:[],selectedIndex:null,subtitlesEnabled:false,nextEpisode:{kind:'tv',id:'284833',season:1,episode:2}},
+  });
+  await page.evaluate(value => { window.__catalogMedia = value; }, nextMedia);
+  await expect(page.getByRole('button', {name:'Back 30 seconds'})).toBeEnabled();
+  await expect(page.getByRole('button', {name:'Next episode',exact:true})).toBeEnabled();
+  await page.getByRole('button', {name:'Back 30 seconds'}).click();
+  await expect.poll(() => page.evaluate(() => window.__calls.find(call => call.method === 'kodi.seek')?.params.position)).toBe(45);
+  await page.getByRole('button', {name:'Next episode',exact:true}).click();
+  await expect.poll(() => page.evaluate(() => window.__calls.find(call => call.method === 'app.chooseCatalog')?.params)).toEqual({kind:'tv',id:'284833',season:1,episode:2,resume:true});
 });
 
 test('apps paginate as text and failed typing keeps its draft while clearing a lost projector connection', async ({ page }) => {

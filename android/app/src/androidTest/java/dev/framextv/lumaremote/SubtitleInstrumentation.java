@@ -92,6 +92,13 @@ public final class SubtitleInstrumentation {
                 try { SubtitleNormalizer.normalize(new byte[SubtitleNormalizer.MAX_BYTES + 1], null); throw new AssertionError("Oversized input was accepted"); }
                 catch (SubtitleNormalizer.NormalizeException error) { require("SUBTITLE_TOO_LARGE".equals(error.code), "Wrong size rejection"); }
             });
+            check("Android salvages a subtitle with one isolated malformed provider cue", () -> {
+                StringBuilder input = new StringBuilder("WEBVTT\n\n");
+                for (int i = 0; i < 273; i++) input.append("00:00:01.000 --> 00:00:02.000\nGood ").append(i).append("\n\n");
+                input.append("00:23:06.900 --> 00:00:00.000\nMalformed provider cue\n");
+                SubtitleNormalizer.Result normalized = normalize(input.toString(), "text/vtt");
+                require(normalized.cueCount == 273 && normalized.discardedCueCount == 1, "Isolated malformed cue was not bounded and reported");
+            });
             backend = new NativeBackend(runner.getTargetContext()); backend.setSourceGuard(token -> "current".equals(token));
             int port = Integer.parseInt(args.getString("kodiPort"));
             String prepared = "http://10.0.2.2:" + port + "/prepared/first.srt";

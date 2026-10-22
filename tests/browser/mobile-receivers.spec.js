@@ -922,7 +922,8 @@ test('Philips setup, approval and remote panels fit a narrow phone without scrol
   await page.locator('#show-more').click();
   await fits(page);
   await expect(page.getByRole('button', { name: 'Type text', exact: true })).toBeHidden();
-  await page.getByRole('button', { name: 'Go to time', exact: true }).click();
+  await page.locator('#close-sheet').click();
+  await expect(page.getByLabel('Playback position')).toBeVisible();
   await fits(page);
 });
 

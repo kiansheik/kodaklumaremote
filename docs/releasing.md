@@ -7,17 +7,58 @@ and `update.json` beneath that URL. GitHub Releases hosts the APK itself.
 Pages deploys only the small `site/` page and validated release metadata, never
 the source wiki, private settings, local analysis or signing material.
 
-## Deploy the page
+## One-command release and deployment
 
 ```sh
 make deploy-gh-pages
 ```
 
-This builds the plain HTML/CSS/JavaScript page with the latest published release's
-validated `update.json` and pushes only those files to `gh-pages`. It uses your
-existing Git/GitHub CLI login, leaves the main checkout alone and never force
-pushes. GitHub Pages serves the branch root over HTTPS. No custom Actions
-workflow or signing key is needed to update the page.
+On its first interactive release, the command starts the one-time local setup if
+needed. You can also run it directly:
+
+```sh
+make configure-release
+```
+
+Setup writes `.luma-release.json` with mode `0600`. The exact file is ignored by
+Git and stores absolute SDK, JDK, Gradle and production-keystore paths plus the
+key alias and passwords. It is rejected if it is a symlink, has broader file
+permissions, contains unknown settings or uses relative paths. Values supplied
+explicitly in the process environment take precedence over saved values.
+
+After that setup, `make deploy-gh-pages` is the guarded end-to-end release
+command with no repeated signing exports. It refreshes `origin/main` and the
+latest stable release, then:
+
+1. increments the patch version and Android `versionCode` exactly once, unless
+   that next version is already prepared for a retry;
+2. uses `release-notes/<next-version>.txt`, or creates it from the optional
+   `RELEASE_NOTES` environment variable;
+3. stages tracked changes, bounded reviewed text additions, the version and
+   notes, runs `npm run check`, and builds/verifies the production-signed APK;
+4. commits and pushes the exact release source when needed;
+5. publishes the GitHub release and deploys its validated feed/page to
+   `gh-pages` without a force push.
+
+The command automatically stages new allowlisted text source, test,
+documentation and release-note files, bounded to 256 files, 1 MiB each and
+4 MiB total. Sensitive-looking names/content, symlinks, binary/unsupported types
+and larger additions fail closed and require explicit review/staging. Unrelated
+untracked files stay untouched. It also refuses a non-`main`, behind/diverged,
+malformed-version or unverified-signing state. If the current release has no new
+non-documentation source changes, the command only resynchronizes its page
+instead of creating an empty new APK release.
+
+To deploy only the latest stable release's plain HTML/CSS/JavaScript install page
+and validated `update.json`, use:
+
+```sh
+make deploy-page
+```
+
+Both paths use the existing Git/GitHub CLI login. Pages serves only the seven
+reviewed static files from the branch root over HTTPS. No custom Actions workflow
+or signing key is uploaded.
 
 ## Prepare a release locally
 
@@ -26,8 +67,13 @@ checked into `android/release-certificate.sha256`. The key/passwords stay local;
 no signing key is uploaded to GitHub Actions. Changing the signing certificate
 breaks normal Android updates and requires a deliberate migration.
 
+The one-command target normally owns version increments, checks, source commit,
+build and publication, loading the ignored local config automatically. The
+lower-level commands and environment variables remain available for diagnosis,
+CI or a deliberately manual release:
+
 1. Increase Android `versionCode` and `versionName` in `android/app/build.gradle`.
-2. Write `release-notes/<version>.txt` (plain text, at most2,000 characters).
+2. Write `release-notes/<version>.txt` (plain text, at most 2,000 characters).
 3. Run relevant Node/browser/native checks and commit the source.
 4. Set local SDK/JDK/Gradle and signing environment variables. Passwords use
    hidden input, not command arguments:
@@ -67,10 +113,13 @@ page for that exact version. If a
 network failure leaves a draft, inspect that draft before retrying; do not
 overwrite a public release's APK or metadata under the same version.
 
-To retry a page deployment or publish page-only edits, use `make deploy-gh-pages`.
+To retry only a page deployment or publish page-only edits, use `make deploy-page`.
 The deployer checks the stable release's package/repository/tag/asset/size/digest
 metadata before publishing the page and update feed. Verify the page and APK
 download after publication.
+
+If publication fails after the draft release is created, inspect that draft
+before retrying. Keep the already prepared version; do not increment again.
 
 ## Phone update behavior
 

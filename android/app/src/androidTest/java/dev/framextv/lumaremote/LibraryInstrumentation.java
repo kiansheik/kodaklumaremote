@@ -118,6 +118,8 @@ public final class LibraryInstrumentation {
                         library.record(record("tv", "42", 1, 2, 1000, 1000, 2000, 2000, "luma"));
                         JSONObject detail = awaitMetadata(library, "42", 3), next = detail.getJSONObject("nextEpisode");
                         require(next.getInt("season") == 3 && next.getInt("episode") == 4 && episodeProgress(detail, 3, 4).getBoolean("completed"), "Known following selection was guessed or wrongly labeled unwatched");
+                        JSONObject exact = library.nextEpisode(object("kind", "tv", "id", "42", "season", 1, "episode", 1)).getJSONObject("nextEpisode");
+                        require(exact.getInt("season") == 1 && exact.getInt("episode") == 2, "Exact current episode did not resolve its catalog-proven successor");
                         require("Cached title".equals(detail.getString("title")) && detail.getString("overview").equals("Cached synopsis"), "Cached metadata was not projected or cleaned");
                         Thread.sleep(50); int calls = metadata.calls.get();
                         for (int i = 0; i < 5; i++) { library.list(object("query", "Cached")); library.details(select("tv", "42")); }
