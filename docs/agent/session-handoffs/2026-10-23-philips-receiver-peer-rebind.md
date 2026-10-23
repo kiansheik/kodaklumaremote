@@ -29,7 +29,9 @@ phone's correct `192.168.68…` address.
 ## Commands run
 
 - Android app and AndroidTest Java compilation with offline Gradle.
-- Guarded release/deployment and physical phone installation are the next steps.
+- Focused Philips receiver and Speed dial browser tests.
+- Guarded 0.4.18 release/deployment: Node 247/247, browser 162/162.
+- Wireless ADB in-place installation, package-version verification and cold launch.
 
 ## What worked
 
@@ -40,6 +42,8 @@ phone's correct `192.168.68…` address.
 - Live phone logcat identified every current failure as `PEER_REJECTED`.
 - A bounded explicit migration now adopts the actual private browser peer, and
   a dedicated Speed dial UI action has focused browser coverage.
+- 0.4.18/code 28 was published from `8a84bbf`; the signed 9,821,602-byte APK
+  (`276c2793…bf37`) was installed and cold-launched on the Samsung.
 
 ## What failed
 

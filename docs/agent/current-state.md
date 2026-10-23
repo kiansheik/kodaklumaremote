@@ -32,7 +32,7 @@
   It was installed in place and cold-launched on the Samsung. A fresh real-TV
   retry after installation is still required.
 
-## Philips no-pointer directional receiver candidate
+## Released 0.4.18: actual-peer migration, no-pointer navigation and Speed dial
 
 - The phone-hosted receiver reached through the GitHub speed dial no longer
   requests Pointer Lock or maps hover position directly to a control. Tiny
@@ -53,6 +53,13 @@
   Philips Internet-browser activity through saved JointSPACE permission, even
   if receiver state is already connected; acceptance still does not prove the
   TV visibly opened it. The focused UI test passes.
+- Guarded release verification passed Node 247/247 and browser 162/162; Android
+  app and AndroidTest compilation passed. Release 0.4.18/code 28 was published
+  from `8a84bbf`; its signed 9,821,602-byte APK has SHA-256
+  `276c27937666ab5c68c4d02b93f98ee77b1535a4021dd1f7b3f73bc5a6afbf37`.
+  The exact APK installed in place on the Samsung and cold-launched. The bounded
+  peer migration, physical Speed dial launch and directional strokes remain
+  real-Philips acceptance checks.
 
 ## Released 0.4.14: Philips typing rebind and one-speed-dial setup
 
