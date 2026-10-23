@@ -1,0 +1,7 @@
+LUMA Remote 0.4.18
+
+Fixes the remaining Philips REQUEST_REJECTED response when the TV's actual browser connection address differs from its Matter-resolved address. Phone-IP autofill now opens a short explicit migration window, allowing the real private-LAN connection to update the saved peer while preserving the previously approved receiver identity.
+
+Also includes no-pointer directional navigation: small remote movements become Up, Down, Left, or Right focus steps and OK activates the focused control.
+
+Adds a Speed dial button directly below the Philips remote. It requests the TV Internet browser even when the receiver is already connected, using the saved Philips browser permission.

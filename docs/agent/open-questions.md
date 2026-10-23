@@ -163,7 +163,12 @@ historical, not the current readiness state.
     listener was reachable at `192.168.68…`, but its saved approval still named
     the TV's former peer. The 0.4.16 candidate transfers that existing approval
     only to the current private Matter-authenticated TV before phone-IP autofill
-    and persists it; this is compiled but not physically accepted. This does not yet
+    and persists it. Live logs then proved the actual TV browser connection still
+    differed and was rejected as `PEER_REJECTED`; 0.4.18 instead gives an explicit
+    autofill action a 60-second window to adopt the real private connection peer.
+    This is compiled but not physically accepted. The remote also has a dedicated
+    **Speed dial** browser-activity request, whose accepted response still does
+    not prove visible launch. This does not yet
     prove that phone controls can foreground Internet or select the speed dial.
 12. Can the physically confirmed DIAL route launch another supported receiver?
     Exact-TV multicast discovery supplied an `Application-URL`; Netflix state

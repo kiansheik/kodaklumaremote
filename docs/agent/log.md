@@ -1095,3 +1095,9 @@
   hover targeting in the phone-hosted receiver reached from the GitHub speed
   dial. Four accumulated pixels now emit one dominant-axis arrow step with a
   160 ms bound; OK retains focused activation. Focused browser tests pass 11/11.
+- 2026-10-23 live rejection diagnosis and 0.4.18 candidate: phone logcat records
+  repeated HTTP403 `PEER_REJECTED`; the TV browser's actual private peer differs
+  from Matter's resolved address. Explicit phone-IP autofill now arms a bounded
+  60-second migration that adopts the real `/tv/connect.html` peer and preserves
+  the approved receiver identity. Added a tested Philips **Speed dial** remote
+  button that forces the saved browser activity request even while connected.

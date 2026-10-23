@@ -644,6 +644,9 @@ public final class MsxInstrumentation {
             server.rebindApprovedPeer(originalPeer);
             require(server.hasSavedReceiver() && origin.equals(server.start().getString("startupUrl")) && server.status().getInt("port") == stablePort, "Approved receiver or startup address did not persist");
             require(home.equals(request(origin + "/msx/start.json", null, 200).getString("parameter").substring("content:".length())), "Persistent token changed");
+            server.rebindApprovedPeer(movedPeer);
+            require(rawStatus(origin, "GET /tv/connect.html HTTP/1.1\r\nHost: " + new URL(origin).getAuthority() + "\r\nConnection: close\r\n\r\n") == 302, "Connection-peer migration did not redirect");
+            require(originalPeer.equals(server.status().getString("host")) && server.hasSavedReceiver(), "Actual connection peer did not replace stale Matter address");
             server.reset(); server.start(); request(home, null, 404);
             mediaRequest(diagnosticSampleUrl, "GET", "bytes=0-0", null, 404);
             require(!server.hasSavedReceiver(), "Reset retained approved receiver");

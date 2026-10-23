@@ -872,6 +872,8 @@ function renderControls() {
   $('#tv-remote').hidden = !tv || matter.capabilities.navigation === true;
   $('#tv-remote-hint').textContent = remote.connected ? 'TV receiver is ready. Playback controls apply to this TV.' : 'Open the TV receiver from TV connection setup.';
   $('#show-tv-setup').disabled = !free;
+  $('#open-speed-dial').hidden = !tv;
+  $('#open-speed-dial').disabled = !free || !remote.textPermissionSaved;
   $('#browse-hint').textContent = `Find a video, then tap Cast in the browser toolbar. ${tv ? 'Philips TV' : 'Your projector'} plays it.`;
   const hardwareVolume = tv && matter.connected && matter.volume;
   $('.volume-row').setAttribute('aria-label', tv ? hardwareVolume ? 'TV speaker volume' : 'TV player volume' : 'Projector volume');
@@ -1623,7 +1625,16 @@ async function openTvReceiver() {
     }
   });
 }
+async function openSpeedDial() {
+  if (state.target !== 'philips' || state.busy || state.handoff) return;
+  await tvTextCommand('msx.launchBrowser', {}, result => {
+    if (result?.permissionRequired) { state.tvSetup = 'remote'; page('devices'); message('Enable TV browser control first.', true); renderControls(); return; }
+    if (result?.accepted !== true || result.pageLoadVerified !== false) throw fixedError('TEXT_REJECTED');
+    message('Speed dial requested. Select the saved LUMA tile if the TV does not open it automatically.');
+  }, true);
+}
 $('#open-tv-receiver').addEventListener('click', () => void openTvReceiver());
+$('#open-speed-dial').addEventListener('click', () => void openSpeedDial());
 $('#turn-on-tv').addEventListener('click', () => {
   if (state.target !== 'philips' || state.busy || state.handoff || !state.matter.paired || state.matter.capabilities.powerOn !== true) return;
   void command(async () => {
@@ -1644,7 +1655,7 @@ $('#turn-on-tv').addEventListener('click', () => {
   }, {}, 'TV accepted the turn-on request. Check its screen.', matterState);
 });
 $('#msx-refresh').addEventListener('click', () => command('msx.status', {}, '', msxState));
-function tvTextCommand(method, params, consume) {
+function tvTextCommand(method, params, consume, forceLaunch = false) {
   if (state.target !== 'philips' || state.busy || state.handoff) return Promise.resolve(false);
   const remote = state.philips;
   remote.textOperation = method;
@@ -1653,7 +1664,7 @@ function tvTextCommand(method, params, consume) {
   return command(async () => {
     try {
       if (method === 'msx.launchBrowser') {
-        if (remote.connected) {
+        if (remote.connected && !forceLaunch) {
           msxState(await rpc('msx.status', {}, { timeoutMs: 5000 }));
           if (remote.connected) return { reused: true };
         }

@@ -21,8 +21,10 @@ phone's correct `192.168.68…` address.
 - `ConnectionService.java`: perform that rebind immediately before native
   phone-IP autofill.
 - `MsxInstrumentation.java`: cover public-address rejection, identity retention,
-  session clearing and persistence across server restart.
-- `release-notes/0.4.16.txt` and agent documentation.
+  session clearing, persistence and actual connection-peer migration.
+- `src/mobile/index.html` and `src/mobile/app.js`: add a dedicated Philips
+  **Speed dial** browser-activity action.
+- `release-notes/0.4.16.txt`, `release-notes/0.4.18.txt` and agent documentation.
 
 ## Commands run
 
@@ -35,12 +37,17 @@ phone's correct `192.168.68…` address.
   body proved the white page was receiver admission rejection, not a dead
   listener.
 - Android app and instrumentation sources compile successfully.
+- Live phone logcat identified every current failure as `PEER_REJECTED`.
+- A bounded explicit migration now adopts the actual private browser peer, and
+  a dedicated Speed dial UI action has focused browser coverage.
 
 ## What failed
 
 - The earlier launcher suggested the wrong `192.168.1…` subnet.
 - Even with the correct phone address, the saved receiver approval was pinned to
   the TV's former network address and returned `REQUEST_REJECTED`.
+- Rebinding only to Matter's resolved address was insufficient because the TV
+  browser's observed private peer differed from it.
 
 ## Remaining questions
 

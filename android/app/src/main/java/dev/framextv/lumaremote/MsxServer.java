@@ -108,6 +108,7 @@ public final class MsxServer implements AutoCloseable {
     private String host = "", token, approvedHost, approvedClient, pendingHost, pendingClient, sessionId;
     private int port;
     private long pairingUntil, lastSeen, lastState, sequence;
+    private long peerRebindUntil;
     private long connections, tlsRequests, bootstrapRequests, bootstrapAccepted, lastRequestAt;
     // Accepted counts are object-lifetime totals; lastState remains current-session only.
     private long helloAccepted, pollAccepted, stateAccepted, lastHelloAt, lastPollAt;
@@ -245,10 +246,13 @@ public final class MsxServer implements AutoCloseable {
     public JSONObject rebindApprovedPeer(String matterHost) throws MsxException {
         if (!privateAddress(matterHost)) throw new MsxException("MSX_PAIRING");
         synchronized (lock) {
-            if (approvedClient.isEmpty() || approvedHost.equals(matterHost)) return snapshot();
-            clearSession(); pendingHost = pendingClient = null;
-            approvedHost = matterHost;
-            preferences.edit().putString("peer", approvedHost).commit();
+            if (approvedClient.isEmpty()) return snapshot();
+            peerRebindUntil = SystemClock.elapsedRealtime() + 60000;
+            if (!approvedHost.equals(matterHost)) {
+                clearSession(); pendingHost = pendingClient = null;
+                approvedHost = matterHost;
+                preferences.edit().putString("peer", approvedHost).commit();
+            }
             return snapshot();
         }
     }
@@ -256,7 +260,7 @@ public final class MsxServer implements AutoCloseable {
     /** Reset setup, not TV playback. A new capability prevents old pages controlling this phone. */
     public JSONObject reset() {
         synchronized (lock) {
-            stopLocked(); token = secret(); approvedHost = approvedClient = "";
+            stopLocked(); token = secret(); approvedHost = approvedClient = ""; peerRebindUntil = 0;
             preferences.edit().clear().putString("capability", token).putInt("port", port).commit();
             return snapshot();
         }
@@ -1013,7 +1017,13 @@ public final class MsxServer implements AutoCloseable {
     private void admitBootstrap(String peer, Request request) throws HttpFailure {
         bootstrapRequests++;
         requireBootstrapOrigin(request.headers.get("origin"));
-        if (!approvedHost.isEmpty()) { if (!approvedHost.equals(peer)) throw new HttpFailure(403, "PEER_REJECTED"); }
+        if (!approvedHost.isEmpty()) {
+            if (!approvedHost.equals(peer)) {
+                if (SystemClock.elapsedRealtime() > peerRebindUntil) throw new HttpFailure(403, "PEER_REJECTED");
+                clearSession(); pendingHost = pendingClient = null; approvedHost = peer; peerRebindUntil = 0;
+                preferences.edit().putString("peer", approvedHost).commit();
+            } else peerRebindUntil = 0;
+        }
         else {
             if (!pairingOpen()) throw new HttpFailure(403, "PAIRING_EXPIRED");
             if (pendingHost != null && !pendingHost.equals(peer)) throw new HttpFailure(403, "PEER_REJECTED");

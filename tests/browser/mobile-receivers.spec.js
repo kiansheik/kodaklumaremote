@@ -221,6 +221,14 @@ test('Home and Back flank Up in the first D-pad row with original key routing an
   expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'luma.key').map(call => call.params))).toEqual([{ key: 'home' }, { key: 'back' }]);
 });
 
+test('Philips remote exposes one Speed dial button through the saved browser permission', async ({ page }) => {
+  await openApp(page, { selectedTarget: 'philips', textState: { textPermissionSaved: true, typingAvailable: true } });
+  await expect(page.locator('#open-speed-dial')).toBeVisible();
+  await page.locator('#open-speed-dial').click();
+  await expect.poll(() => page.evaluate(() => window.__calls.filter(call => call.method === 'msx.launchBrowser').length)).toBe(1);
+  await expect(page.locator('#message')).toContainText('Speed dial requested');
+});
+
 test('unavailable Philips receiver becomes setup and never attempts a failing browser launch', async ({ page }) => {
   const matter = { available: true, paired: true, connected: true, capabilities: { navigation: true } };
   await openApp(page, { selectedTarget: 'philips', tvConnected: false, textState: { matter } });

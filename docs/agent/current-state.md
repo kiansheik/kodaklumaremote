@@ -42,6 +42,17 @@
 - The focused receiver browser suite passes 11/11. Because this page is bundled
   into the phone listener, deployment requires the 0.4.17 phone build rather
   than a GitHub Pages-only change.
+- Live phone logs after 0.4.16 identified the remaining white-page response as
+  `PEER_REJECTED`, not a host/origin/path failure: the TV browser connected from
+  a private address different from Matter's resolution. The 0.4.18 candidate
+  therefore arms a 60-second migration window only after explicit phone-IP
+  autofill; the actual private peer reaching `/tv/connect.html` in that window
+  replaces the saved address while retaining the approved receiver identity.
+  Normal mismatched peers remain rejected outside that window.
+- The Philips remote now exposes **Speed dial**. It always requests the native
+  Philips Internet-browser activity through saved JointSPACE permission, even
+  if receiver state is already connected; acceptance still does not prove the
+  TV visibly opened it. The focused UI test passes.
 
 ## Released 0.4.14: Philips typing rebind and one-speed-dial setup
 
