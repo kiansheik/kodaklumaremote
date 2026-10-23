@@ -1112,3 +1112,13 @@
   request proved a browser-client identity mismatch. The 0.4.20 candidate holds
   that replacement for explicit **Allow TV** instead of returning JSON403, then
   saves peer and client together. Android and AndroidTest sources compile.
+- 2026-10-23 Philips scrub stability and restart follow-up: live 0.4.20 phone
+  capture reproduced controls blinking during backward seek. A dedicated
+  optimistic seek queue now avoids app-wide busy redraws and coalesces repeated
+  drags to the latest target. The first 0.4.21 restart then exposed exact saved
+  TV bootstrap being rejected after the short-lived session expired; exact-peer
+  bootstrap now survives restart while peer migration remains identity-gated.
+  Receiver instrumentation passes 8/8; the 0.4.22 release gate passes Node
+  247/247 and browser 163/163. Published commit `6ee4a17`; the exact signed APK
+  is installed on the Samsung. Phone lock and absence of a fresh TV request left
+  the final physical no-strobe/reconnect confirmation pending.

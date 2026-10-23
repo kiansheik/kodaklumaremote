@@ -1,5 +1,33 @@
 # Current state
 
+## Released 0.4.22: stable Philips scrubbing and restart reconnect
+
+- A live phone capture on 0.4.20 reproduced the reported blinking while a
+  Philips video was scrubbed backward. Seek used the generic command path,
+  which marked the entire app busy and redrew/disabled the remote until each
+  TV acknowledgement returned. Repeated drags could also be rejected by that
+  global busy guard.
+- Philips seeking now has a source-guarded, optimistic queue independent of
+  global app busy state. It sends the current target and coalesces all further
+  drags to the latest unsent target, so the controls remain stable and usable
+  while the TV answers. A browser regression holds the first seek response and
+  proves that only the current and latest positions are sent.
+- The first 0.4.21 install exposed a separate restart regression: an already
+  approved TV at the exact saved peer was incorrectly required to have a new
+  pairing window before `/msx/start.json` could reload. Bootstrap now admits
+  that exact peer, continues to stage a different private peer for identity
+  proof, and requires an open setup window only for a genuinely unpaired TV.
+  The isolated receiver fixture passes 8/8, including saved approval surviving
+  restart and explicit reset revoking it.
+- The release gate passed Node 247/247 and browser 163/163. LUMA Remote
+  0.4.22/code 32 was published from `6ee4a17803e234050f15820f2378a3f3ca79804e`.
+  Its 9,822,082-byte APK has SHA-256
+  `d21683525250e34cd83b7f96d82f4d303e0ab0aee34b424c8cf490fde769007b` and
+  is installed in place on the Samsung. The foreground service is running, but
+  the locked phone prevented a post-install screen capture and the TV made no
+  fresh receiver request during the observation window. One real backward
+  scrub and automatic reconnect after unlock remain physical acceptance checks.
+
 ## Philips authenticated connection-peer migration candidate
 
 - Post-0.4.18 physical logging still showed HTTP403 `PEER_REJECTED`. The log
