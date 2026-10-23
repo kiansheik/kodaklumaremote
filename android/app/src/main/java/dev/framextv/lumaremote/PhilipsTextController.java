@@ -167,7 +167,7 @@ public final class PhilipsTextController implements AutoCloseable {
     }
     /** An accepted browser request is not proof that the TV loaded the receiver. */
     public JSONObject launchBrowser(String host, String startupUrl) throws TextException {
-        final String url = browserSetupUrl(startupUrl);
+        final String url = launcherUrl(startupUrl);
         final long revision = begin(); TextException failure = null;
         try {
             JSONObject saved; synchronized (lock) { saved = credentials == null ? null : copy(credentials); }
@@ -234,6 +234,27 @@ public final class PhilipsTextController implements AutoCloseable {
     }
     static String browserSetupUrl(String startupUrl) throws TextException {
         return "http://" + startupAuthority(startupUrl) + "/msx/connect.html";
+    }
+    /**
+     * Fixed GitHub Pages address the TV can keep as a speed dial. It remembers each
+     * phone that opens it (the fragment never reaches a server) and forwards to
+     * {@link #browserSetupUrl}; phone addresses can change and several phones can serve.
+     */
+    static final String LAUNCHER = "https://kiansheik.io/kodaklumaremote/tv.html";
+    static String launcherUrl(String startupUrl) throws TextException {
+        String name = android.os.Build.MODEL == null ? "" : android.os.Build.MODEL.replaceAll("[^A-Za-z0-9 ._-]", "").trim();
+        if (name.length() > 30) name = name.substring(0, 30);
+        return LAUNCHER + "#phone=" + startupAuthority(startupUrl) + (name.isEmpty() ? "" : "&name=" + name.replace(' ', '+').replace("+", "%20"));
+    }
+    static boolean fixedLauncherUrl(String value) {
+        if (value == null || !value.startsWith(LAUNCHER + "#phone=")) return false;
+        String rest = value.substring((LAUNCHER + "#phone=").length());
+        String authority = rest.split("&", 2)[0];
+        try { return value.equals(launcherUrlFor(authority, rest.contains("&") ? rest.substring(rest.indexOf('&')) : "")) && startupAuthority("http://" + authority).equals(authority); }
+        catch (TextException invalid) { return false; }
+    }
+    private static String launcherUrlFor(String authority, String suffix) {
+        return suffix.isEmpty() || suffix.matches("&name=[A-Za-z0-9%._-]{1,90}") ? LAUNCHER + "#phone=" + authority + suffix : "";
     }
     static boolean fixedBrowserSetupUrl(String value) {
         if (value == null) return false;
@@ -324,7 +345,7 @@ public final class PhilipsTextController implements AutoCloseable {
         public synchronized void close() { closed = true; HttpsURLConnection connection = active; if (connection != null) connection.disconnect(); }
         public JSONObject request(String path, JSONObject body, String user, String password, boolean jsonRequired, long deadline) throws TextException {
             if (!java.util.Arrays.asList("system", "pair/request", "pair/grant", "input/key", "activities/browser").contains(path)) throw new TextException("TEXT_INVALID_INPUT");
-            if ("activities/browser".equals(path) && (body == null || body.length() != 1 || !(body.opt("url") instanceof String) || !fixedBrowserSetupUrl(body.optString("url")))) throw new TextException("TEXT_INVALID_INPUT");
+            if ("activities/browser".equals(path) && (body == null || body.length() != 1 || !(body.opt("url") instanceof String) || !(fixedBrowserSetupUrl(body.optString("url")) || fixedLauncherUrl(body.optString("url"))))) throw new TextException("TEXT_INVALID_INPUT");
             byte[] bytes = body == null ? null : body.toString().getBytes(StandardCharsets.UTF_8);
             for (int attempt = 0; attempt < 2; attempt++) {
                 HttpsURLConnection connection = null; Timer timer = new Timer("Philips request deadline", true); boolean writing = false;

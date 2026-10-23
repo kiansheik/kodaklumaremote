@@ -34,7 +34,32 @@ metadata add-on for canonical identity and kept no history of its own.
   `library.push` was rejected (LWW).
 - Gamma/brightness via Media3 effects: **no visible difference** when changed
   mid-playback (cause not investigated; effects list applied via
-  `setVideoEffects`). Treat picture adjustment as unverified.
+  `setVideoEffects`).
+
+## Brightness compatibility (2026-10-23)
+
+Two follow-up colour-matrix implementations moved adjusted playback to a
+TextureView. Both `View.setLayerType(HARDWARE, paint)` and
+`TextureView.setLayerPaint` made every nonzero brightness value black on the
+physical Android 9/Amlogic projector. The receiver now always leaves decoding on
+its single compatible SurfaceView and places a non-interactive black/white tint
+in `PlayerView.getOverlayFrameLayout()`; negative values dim and positive values
+blend toward white.
+
+An API 36 emulator decoded and paused a real H.264 frame while centre-crop luma
+moved monotonically at −60%, −10%, 0%, +10% and +60%, with the frame visible in
+all five captures. That validates app composition but not the projector vendor
+compositor. Signed receiver 0.3.2/code 16 containing the overlay was installed
+on the physical projector and returned healthy/idle with brightness 0; the final
+active-video physical check remains outstanding.
+
+The user subsequently confirmed the overlay result is "perfect" on active
+projector video. The control is now bounded to −30…+30% in 2% steps. The phone's
+native `app.picturePreferences` store keys movies by movie ID and series by
+series ID, restores the value after guarded casts to either LUMA or Philips, and
+uses neutral brightness for a title with no saved value. The signed receiver
+0.3.2/code 16 containing the ±30% validation was installed at
+2026-10-23T13:03:09.817Z and returned healthy with brightness 0.
 
 ## Phone migration contract
 

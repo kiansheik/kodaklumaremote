@@ -114,6 +114,11 @@ public final class MsxServer implements AutoCloseable {
     private int lastStatus;
     private String lastReason = "NONE", lastOrigin = "", lastClientError = "NONE";
     private JSONObject playback = new JSONObject();
+    /** Latest scrub preview for the TV overlay; the page long-polls it by revision. */
+    private long scrubRevision;
+    private JSONObject scrubState = object("active", false);
+    static final long SCRUB_WAIT_MS = 20000;
+    private static final byte[] PROBE_GIF = android.util.Base64.decode("R0lGODlhAQABAAAAACH5BAEAAAAALAAAAAABAAEAAAIBAAA=", android.util.Base64.DEFAULT);
     private JSONObject lastCommand = new JSONObject();
     private boolean approved;
     private String sampleToken;
@@ -213,9 +218,11 @@ public final class MsxServer implements AutoCloseable {
             if (socket == null) throw new MsxException("MSX_NETWORK");
             listener = socket; port = socket.getLocalPort(); preferences.edit().putInt("port", port).commit();
             if (approvedClient.isEmpty()) pairingUntil = SystemClock.elapsedRealtime() + PAIRING_MS;
-            workers = new ThreadPoolExecutor(2, 4, 20, TimeUnit.SECONDS, new ArrayBlockingQueue<>(8), runnable -> {
+            // Four live workers: the scrub long poll holds one, so polls and state still run in parallel.
+            workers = new ThreadPoolExecutor(4, 4, 20, TimeUnit.SECONDS, new ArrayBlockingQueue<>(8), runnable -> {
                 Thread thread = new Thread(runnable, "MSX request"); thread.setDaemon(true); return thread;
             });
+            workers.allowCoreThreadTimeOut(true);
             final ServerSocket owned = socket; final ThreadPoolExecutor ownedWorkers = workers;
             Thread accept = new Thread(() -> accept(owned, ownedWorkers), "MSX listener"); accept.setDaemon(true); accept.start();
             return snapshot();
@@ -392,6 +399,17 @@ public final class MsxServer implements AutoCloseable {
             return true;
         }
     }
+    /** Starts a catalog title on the approved TV exactly as its own Library would (auto-play next episode). */
+    public JSONObject playCatalog(JSONObject selection) throws LibraryException {
+        synchronized (lock) {
+            final Library captured = library; final String peer = approvedHost, session = sessionId;
+            if (captured == null) throw new LibraryException("LIBRARY_UNAVAILABLE");
+            if (!approved || session == null || !libraryCurrent(peer, session)) throw new LibraryException("MSX_NOT_CONNECTED");
+            libraryGrant = null;
+            return catalogBridge.play(selection, () -> library == captured && libraryCurrent(peer, session), libraryDriver(captured, peer, session));
+        }
+    }
+    public JSONObject catalogStatus(String jobId) throws LibraryException { return catalogBridge.status(jobId); }
     private boolean libraryCurrent(String peer, String session) {
         synchronized (lock) {
             return listener != null && !listener.isClosed() && approved && peer.equals(approvedHost) && session.equals(sessionId)
@@ -497,6 +515,11 @@ public final class MsxServer implements AutoCloseable {
             String path = target.getRawPath(); Map<String, String> query = query(target.getRawQuery());
             String requestedHost = request.headers.get("host");
             synchronized (lock) { if (!((host + ":" + port).equals(requestedHost))) throw new HttpFailure(403, "HOST_REJECTED"); }
+            if ("/msx/probe.gif".equals(path) && "GET".equals(request.method)) {
+                // Lets a TV page served by another phone check this phone is here before moving to it.
+                if (target.getRawQuery() != null && !target.getRawQuery().matches("t=[0-9]{1,16}")) throw new HttpFailure(400);
+                respond(accepted, 200, "image/gif", PROBE_GIF, false); return;
+            }
             if ("/msx/connect.html".equals(path) && "GET".equals(request.method)) {
                 if (target.getRawQuery() != null) throw new HttpFailure(400);
                 String receiver;
@@ -579,6 +602,24 @@ public final class MsxServer implements AutoCloseable {
             String origin = request.headers.get("origin");
             synchronized (lock) { if (origin != null && !origin.equals(origin())) throw new HttpFailure(403, "ORIGIN_REJECTED"); }
             JSONObject body = request.body.length == 0 ? new JSONObject() : parseObject(request.body);
+            if ("scrub".equals(relative) && "GET".equals(request.method)) {
+                JSONObject response;
+                synchronized (lock) {
+                    requireSession(peer, query.get("client"), query.get("sessionId"), true);
+                    String raw = query.get("after"); long after;
+                    try { if (raw == null || !raw.matches("[0-9]{1,16}")) throw new NumberFormatException(); after = Long.parseLong(raw); }
+                    catch (NumberFormatException invalid) { throw new HttpFailure(400); }
+                    long deadline = SystemClock.elapsedRealtime() + SCRUB_WAIT_MS;
+                    String session = sessionId;
+                    // Held until the phone moves the scrub (or a restart lowers the revision).
+                    while (scrubRevision == after && session.equals(sessionId) && SystemClock.elapsedRealtime() < deadline) {
+                        try { lock.wait(Math.max(1, deadline - SystemClock.elapsedRealtime())); }
+                        catch (InterruptedException stopped) { Thread.currentThread().interrupt(); break; }
+                    }
+                    response = copy(scrubState); put(response, "revision", scrubRevision);
+                }
+                respond(accepted, 200, "application/json", response.toString().getBytes(StandardCharsets.UTF_8), false); return;
+            }
             if ("library".equals(relative) && "POST".equals(request.method)) {
                 if (target.getRawQuery() != null || body.length() != 4 || !(body.opt("client") instanceof String)
                         || !(body.opt("sessionId") instanceof String) || !(body.opt("action") instanceof String)
@@ -711,6 +752,19 @@ public final class MsxServer implements AutoCloseable {
     static JSONObject validateCommand(String method, JSONObject params) throws MsxException {
         return validateCommand(method, params, null);
     }
+
+    /** Phone scrub position (and nearest frame) for the TV overlay; inactive hides it. */
+    public void scrub(boolean active, double position, double duration, byte[] jpeg) {
+        synchronized (lock) {
+            JSONObject next = object("active", active);
+            if (active) {
+                put(next, "positionSeconds", Math.max(0, position)); put(next, "durationSeconds", Math.max(0, duration));
+                put(next, "image", jpeg == null ? JSONObject.NULL : "data:image/jpeg;base64," + android.util.Base64.encodeToString(jpeg, android.util.Base64.NO_WRAP));
+            }
+            scrubState = next; scrubRevision++;
+            lock.notifyAll();
+        }
+    }
     private static JSONObject validateCommand(String method, JSONObject params, String ownedSource) throws MsxException {
         JSONObject safe = new JSONObject();
         if ("ping".equals(method) || "reload".equals(method)) {
@@ -736,7 +790,28 @@ public final class MsxServer implements AutoCloseable {
             }
             put(safe, "subtitles", subtitles); put(safe, "preferredLanguage", language(params.optString("preferredLanguage", "pt-BR"))); return safe;
         }
+        if ("display".equals(method)) {
+            // Caption size and picture, matching LUMA Receiver's display settings.
+            if (params.length() == 0) throw new MsxException("INVALID_INPUT");
+            for (Iterator<String> names = params.keys(); names.hasNext();) {
+                String name = names.next();
+                if ("subtitleScale".equals(name)) put(safe, name, number(params.opt(name), 0.5, 2.5));
+                else if ("brightness".equals(name)) put(safe, name, number(params.opt(name), 0.7, 1.3));
+                else if ("contrast".equals(name)) put(safe, name, number(params.opt(name), 0.5, 1.5));
+                else if ("expectedSourceUrl".equals(name)) put(safe, name, mediaUrl(params.opt(name), ownedSource));
+                else throw new MsxException("INVALID_INPUT");
+            }
+            return safe;
+        }
+        if ("notice".equals(method)) {
+            Object text = params.opt("text");
+            if (!(text instanceof String) || ((String) text).length() > 200 || ((String) text).matches("(?s).*[\\x00-\\x1f\\x7f].*")) throw new MsxException("INVALID_INPUT");
+            put(safe, "text", text);
+            if (params.has("seconds")) put(safe, "seconds", number(params.opt("seconds"), 1, 60));
+            return safe;
+        }
         if (params.has("expectedSourceUrl")) put(safe, "expectedSourceUrl", mediaUrl(params.opt("expectedSourceUrl"), ownedSource));
+        if ("rate".equals(method)) { put(safe, "value", number(params.opt("value"), 0.5, 2)); return safe; }
         if ("play".equals(method) || "pause".equals(method) || "stop".equals(method)) return safe;
         if ("playPause".equals(method)) { if (!(params.opt("play") instanceof Boolean)) throw new MsxException("INVALID_INPUT"); put(safe, "play", params.opt("play")); return safe; }
         if ("seek".equals(method)) { put(safe, "seconds", number(params.opt("seconds"), 0, 17280000)); return safe; }
@@ -757,7 +832,12 @@ public final class MsxServer implements AutoCloseable {
         if (active || !source.isEmpty()) source = mediaUrl(source, ownedSource);
         JSONObject safe = object("active", active, "source", source, "title", label(state.optString("title", ""), 256),
                 "paused", state.optBoolean("paused", true), "positionSeconds", number(state.opt("positionSeconds"), 0, 17280000),
-                "durationSeconds", number(state.opt("durationSeconds"), 0, 17280000), "canSeek", state.optBoolean("canSeek", false));
+                "durationSeconds", number(state.opt("durationSeconds"), 0, 17280000), "canSeek", state.optBoolean("canSeek", false),
+                "ended", state.optBoolean("ended", false) && !source.isEmpty());
+        if (state.has("rate")) put(safe, "rate", number(state.opt("rate"), 0.25, 4));
+        JSONObject display = state.optJSONObject("display");
+        if (display != null) put(safe, "display", object("subtitleScale", number(display.opt("subtitleScale"), 0.5, 2.5),
+                "brightness", number(display.opt("brightness"), 0.7, 1.3), "contrast", number(display.opt("contrast"), 0.5, 1.5)));
         JSONObject volume = state.optJSONObject("volume");
         if (volume != null) put(safe, "volume", object("current", number(volume.opt("current"), 0, 100), "max", 100));
         JSONArray tracks = state.optJSONArray("tracks"); if (tracks == null) tracks = new JSONArray(); if (tracks.length() > 128) throw new MsxException("INVALID_INPUT");

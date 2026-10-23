@@ -1,13 +1,13 @@
 LUMA Remote 0.4.12
 
-Scrubbing is rebuilt. Touch the bar and a large preview appears at once; fast drags move 1:1, and holding slowly for a moment switches to finer control (1/3, then 1/10). Thumbnails are generated in the background from the moment you cast, middle first and then ever finer down to one every 3 seconds, kept for 48 hours and shared with other phones through the projector. The projector shows the same preview from its own copy. Fixes the crash when holding the scrub bar.
+Scrubbing is rebuilt. Touch the bar and a large preview appears at once; fast drags move 1:1 and holding slowly gives finer control. Thumbnails are made in the background from the moment you cast, shared with other phones through the projector, and shown on the TV or projector too. Fixes the crash when holding the scrub bar.
 
-Undo and Redo arrows beside the bar jump between the places you scrubbed from, per episode, and survive restarting the app. The refresh button is gone; playback stays current on its own.
+Undo and Redo arrows beside the bar jump between the places you scrubbed from and survive restarting the app.
 
-Saved positions now resume correctly on LUMA Receiver.
+Resume is faster and restores your saved position, and each movie or series turns its last subtitle language back on. Library episodes no longer fail when they list many subtitle languages.
 
-LUMA Receiver can continue a series on its own: Next episode now works even after an episode has finished or when the phone reconnects later, and an optional Auto-play next episode switch plays the following episode in the subtitle language you last turned on (trying another file in that language if one fails). After three episodes without anyone touching a remote it stops, and the app shows which episode you last actually interacted with.
+Next episode works even after an episode has finished, and an optional Auto-play next episode switch continues the series in your subtitle language. After three episodes without anyone touching a remote it stops and shows which episode you last watched.
 
-The Remote tab has a cleaner layout: what is playing, the seek bar and play controls sit together in one card, then volume and navigation, with Subtitles, Auto-play and More along the bottom. It is ready sooner after opening the app, and shows the connect screen in its place until a projector is connected and paired.
+More has Brightness, Move to the other screen, and Play on both screens (kept in step automatically). Brightness now keeps LUMA video on the projector's compatible playback surface instead of blanking the picture, adjusts gradually in 2% steps from −30% to +30%, and remembers one setting for each movie or complete series. Philips TV now matches LUMA: the same subtitle style and size, a scrub preview on the TV, Next after an episode ends, and Auto-play.
 
-Resume and replays start faster: a title played in the last few hours skips the catalog lookup when its stream still answers.
+The Remote tab has a cleaner layout, is ready sooner after opening, and shows the connect screen until a projector is connected and paired.

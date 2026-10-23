@@ -11,14 +11,13 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 
 /**
- * Recently resolved catalog sources, so Resume and replays skip the catalog's
- * details/stream/subtitles lookups. On-device cache only; an entry expires after
- * six hours and is checked with a one-byte request before it is reused.
- * Worker threads only.
+ * Resolved catalog sources, so Resume and replays skip the catalog's
+ * details/stream/subtitles lookups. On-device cache only, newest titles kept;
+ * every entry is checked with a one-byte request before reuse, and a source
+ * that no longer answers falls back to a fresh lookup. Worker threads only.
  */
 final class ResolvedSources {
-    static final long TTL_MS = 6 * 60 * 60 * 1000L;
-    static final int MAX_ENTRIES = 30;
+    static final int MAX_ENTRIES = 60;
     private final File file;
 
     ResolvedSources(File directory) { file = new File(directory, "resolved-sources.json"); }
@@ -38,9 +37,8 @@ final class ResolvedSources {
         for (int i = 0; i < entries.length(); i++) {
             JSONObject entry = entries.optJSONObject(i);
             if (entry == null || !key.equals(entry.optString("key"))) continue;
-            long at = entry.optLong("at");
             JSONObject media = entry.optJSONObject("media");
-            return at <= now && now - at < TTL_MS && media != null ? copy(media) : null;
+            return media != null ? copy(media) : null;
         }
         return null;
     }
@@ -52,7 +50,7 @@ final class ResolvedSources {
             JSONArray entries = read();
             for (int i = 0; i < entries.length() && kept.length() < MAX_ENTRIES; i++) {
                 JSONObject entry = entries.optJSONObject(i);
-                if (entry != null && !key.equals(entry.optString("key")) && now - entry.optLong("at") < TTL_MS) kept.put(entry);
+                if (entry != null && !key.equals(entry.optString("key"))) kept.put(entry);
             }
             write(kept);
         } catch (Exception ignored) { /* the cache is an optimization only */ }

@@ -6,7 +6,7 @@
   var renderRemote = function () {}, onLibraryStatus = function () {};
   var notice = document.getElementById('notice'), noticeTimer, plugin = null, channel;
   var base = location.href.split('?')[0].split('#')[0].replace(/[^/]*$/, '');
-  var firstClientFailure = null;
+  var firstClientFailure = null, channelState = 'starting';
   var lastPlaybackError = null, lastMediaErrorCode = null;
   var revision = '__LUMA_RECEIVER_REVISION__', pingCount = 0, lastUptime = 0, lastSubtitleError = null, inputCount = 0, lastInput = 'none', pointerMoveCount = 0, pointerLockError = 'none';
   revision = /^[a-f0-9]{64}$/.test(revision) ? revision : null;
@@ -39,9 +39,10 @@
     firstClientFailure = code;
     Promise.resolve().then(function () { return request('GET', 'diagnostic?code=' + code); }).catch(function () {});
   }
-  function show(message) {
-    notice.textContent = message; notice.hidden = false; clearTimeout(noticeTimer);
-    noticeTimer = setTimeout(function () { notice.hidden = true; }, 5000);
+  function show(message, seconds) {
+    notice.textContent = message; notice.hidden = !message; clearTimeout(noticeTimer);
+    var duration = typeof seconds === 'number' && isFinite(seconds) ? Math.max(1, Math.min(60, seconds)) * 1000 : 5000;
+    noticeTimer = setTimeout(function () { notice.hidden = true; }, duration);
   }
   if (!core || typeof Promise !== 'function') { status.textContent = window.parent === window ? 'This TV browser is unsupported. Update your TV software and try again.' : 'This TV browser is unsupported. Update Media Station X and try again.'; return; }
   function request(method, path, data, textMode, timeoutMs) {
@@ -58,10 +59,36 @@
       xhr.send(data ? JSON.stringify(data) : null);
     });
   }
+  // Same presentation settings as LUMA Receiver, kept on this TV.
+  var display = {subtitleScale: 1, brightness: 1, contrast: 1};
+  function clampSetting(value, low, high, fallback) { return typeof value === 'number' && isFinite(value) ? Math.max(low, Math.min(high, Math.round(value * 100) / 100)) : fallback; }
+  function applyDisplay() {
+    var filter = display.brightness === 1 && display.contrast === 1 ? '' : 'brightness(' + display.brightness + ') contrast(' + display.contrast + ')';
+    try {
+      caption.style.fontSize = (4.3 * display.subtitleScale).toFixed(2) + 'vh';
+      video.style.filter = filter; video.style.webkitFilter = filter;
+    } catch (_) { /* presentation only */ }
+  }
+  try {
+    var savedDisplay = JSON.parse(localStorage.getItem('luma-display') || '{}');
+    display = {subtitleScale: clampSetting(savedDisplay.subtitleScale, 0.5, 2.5, 1), brightness: clampSetting(savedDisplay.brightness, 0.7, 1.3, 1), contrast: clampSetting(savedDisplay.contrast, 0.5, 1.5, 1)};
+  } catch (_) {}
+  applyDisplay();
+  var captionText = document.getElementById('caption-text') || caption;
   var player = core.createPlayer({
     video: video, Hls: window.Hls,
     fetchText: function (url) { return request('GET', url, null, true); },
-    onCaption: function (text) { caption.textContent = text; },
+    onCaption: function (text) { captionText.textContent = text; },
+    onDisplay: function (params) {
+      display = {
+        subtitleScale: clampSetting(params.subtitleScale, 0.5, 2.5, display.subtitleScale),
+        brightness: clampSetting(params.brightness, 0.7, 1.3, display.brightness),
+        contrast: clampSetting(params.contrast, 0.5, 1.5, display.contrast)
+      };
+      try { localStorage.setItem('luma-display', JSON.stringify(display)); } catch (_) {}
+      applyDisplay();
+    },
+    onNotice: function (params) { show(String(params.text || '').slice(0, 200), params.seconds); },
     onState: function (state) {
       waiting.style.display = state.active ? 'none' : 'flex';
       var recoverable = !!state.source && !state.active && (state.error === 'PLAYBACK_REJECTED' || state.error === 'PLAYBACK_TIMEOUT');
@@ -83,7 +110,7 @@
     }
   });
   var playbackState = player.state;
-  player.state = function () { var state = playbackState(); state.receiverDebug = receiverDebug(); return state; };
+  player.state = function () { var state = playbackState(); state.receiverDebug = receiverDebug(); state.display = {subtitleScale: display.subtitleScale, brightness: display.brightness, contrast: display.contrast}; return state; };
   startPlayback.addEventListener('click', function () {
     if (localStarting || startPlayback.hidden) return;
     var recoveringSource = player.state().source;
@@ -98,7 +125,9 @@
     });
   });
   function clientId() {
-    var value;
+    var value, given = /(?:^#|&)client=([a-zA-Z0-9_-]{16,100})(?:&|$)/.exec(location.hash);
+    // The launcher keeps one TV identity for every phone address, so approvals survive address changes.
+    if (given) { try { localStorage.setItem('luma-msx-client', given[1]); } catch (_) {} return given[1]; }
     try { value = localStorage.getItem('luma-msx-client'); } catch (_) {}
     if (!/^[a-zA-Z0-9_-]{16,100}$/.test(value || '')) {
       value = 'tv-';
@@ -121,6 +150,7 @@
     if (method === 'ping') pingCount = Math.min(1000000000, pingCount + 1);
     else if (method === 'set-label') show('LUMA debug channel ready');
   }, onReload: function () { channel.stop(); location.reload(); }, onError: clientFailure, onStatus: function (state) {
+    channelState = state;
     onLibraryStatus(state === 'connected');
     if (state === 'approval') status.textContent = 'Approve this TV in LUMA Remote on your phone.';
     else if (state === 'approved') status.textContent = 'TV allowed. Sending receiver status to your phone…';
@@ -135,6 +165,87 @@
     }
   }});
   channel.start();
+
+  // Several phones can serve this page and their addresses change. The launcher
+  // passes the other phones it knows; if this phone stays away while nothing is
+  // playing, move to one that answers (an http page may load another phone's image).
+  (function phoneFailover() {
+    var KEY = 'luma-phones', own = location.host, offlineSince = 0, probing = false, others = [];
+    function valid(value) {
+      var match = /^(\d{1,3})\.(\d{1,3})\.\d{1,3}\.\d{1,3}:(\d{4,5})$/.exec(value || '');
+      return !!match && (+match[1] === 10 || +match[1] === 172 && +match[2] >= 16 && +match[2] <= 31 || +match[1] === 192 && +match[2] === 168) && +match[3] >= 1024 && +match[3] <= 65535;
+    }
+    try { others = JSON.parse(localStorage.getItem(KEY) || '[]'); } catch (_) {}
+    if (!(others instanceof Array)) others = [];
+    var given = /(?:^#|&)phones=([^&]*)/.exec(location.hash);
+    if (given) given[1].split(',').forEach(function (value) { if (others.indexOf(value) < 0) others.unshift(value); });
+    others = others.filter(function (value) { return valid(value) && value !== own; }).slice(0, 8);
+    try { localStorage.setItem(KEY, JSON.stringify(others)); } catch (_) {}
+    if (!others.length) return;
+    function probe(address, done) {
+      var image = new Image(), finished = false;
+      function finish(alive) { if (!finished) { finished = true; done(alive); } }
+      image.onload = function () { finish(true); }; image.onerror = function () { finish(false); };
+      setTimeout(function () { finish(false); }, 3000);
+      image.src = 'http://' + address + '/msx/probe.gif?t=' + Date.now();
+    }
+    setInterval(function () {
+      if (channelState !== 'offline') { offlineSince = 0; return; }
+      if (!offlineSince) offlineSince = Date.now();
+      var playing = false;
+      try { playing = player.state().active; } catch (_) {}
+      if (probing || playing || Date.now() - offlineSince < 20000) return;
+      probing = true;
+      probe(own, function (ownAlive) {
+        if (ownAlive) { probing = false; offlineSince = Date.now(); return; }
+        var remaining = others.length, moved = false;
+        status.textContent = 'Your phone is unavailable. Looking for another phone with LUMA Remote…';
+        others.forEach(function (address) {
+          probe(address, function (alive) {
+            remaining -= 1;
+            if (alive && !moved) {
+              moved = true;
+              var rest = others.filter(function (value) { return value !== address; }).concat([own]);
+              location.replace('http://' + address + '/msx/connect.html#phones=' + rest.join(',') + '&client=' + receiverClient);
+            }
+            if (!remaining && !moved) { probing = false; offlineSince = Date.now() - 5000; }
+          });
+        });
+      });
+    }, 5000);
+  }());
+
+  // Scrub mirror: its own long poll, so the preview follows the phone's finger
+  // instead of waiting behind playback commands. Same overlay as LUMA Receiver.
+  (function scrubMirror() {
+    var overlay = document.getElementById('scrub'), image = document.getElementById('scrub-image');
+    var time = document.getElementById('scrub-time'), fill = document.getElementById('scrub-fill');
+    if (!overlay) return;
+    var after = 0, failures = 0;
+    function format(seconds) {
+      var value = Math.floor(Math.max(0, seconds || 0)), hours = Math.floor(value / 3600), minutes = Math.floor(value / 60) % 60;
+      return (hours ? hours + ':' + ('0' + minutes).slice(-2) : minutes) + ':' + ('0' + value % 60).slice(-2);
+    }
+    function render(data) {
+      overlay.hidden = data.active !== true;
+      if (overlay.hidden) return;
+      if (typeof data.image === 'string' && data.image.indexOf('data:image/jpeg;base64,') === 0) { image.src = data.image; image.hidden = false; }
+      var position = typeof data.positionSeconds === 'number' ? data.positionSeconds : 0, duration = typeof data.durationSeconds === 'number' ? data.durationSeconds : 0;
+      time.textContent = format(position) + ' / ' + format(duration);
+      fill.style.width = (duration > 0 ? Math.max(0, Math.min(100, position / duration * 100)) : 0) + '%';
+    }
+    function loop() {
+      var session = channel.state();
+      if (!session.approved || !session.sessionId) { setTimeout(loop, 1000); return; }
+      request('GET', 'scrub?client=' + encodeURIComponent(receiverClient) + '&sessionId=' + encodeURIComponent(session.sessionId) + '&after=' + after, null, false, 25000).then(function (data) {
+        failures = 0;
+        // A restarted phone starts counting again; follow its revision either way.
+        if (data && typeof data.revision === 'number' && isFinite(data.revision) && data.revision >= 0) { after = data.revision; render(data); }
+        loop();
+      }, function () { failures += 1; overlay.hidden = true; setTimeout(loop, Math.min(10000, 500 * failures)); });
+    }
+    loop();
+  }());
 
   (function setupRemoteControls() {
     var panel = document.getElementById('tv-controls');
@@ -462,6 +573,9 @@
       if (activeElement === libraryQuery && /^(Backspace|BrowserBack|Escape)$/.test(key || '') && !library.hidden) { event.preventDefault(); librarySearch.hidden = true; libraryQuery.blur(); focus(document.getElementById('tv-library-search')); return; }
       if (activeElement && (/^(INPUT|TEXTAREA)$/.test(activeElement.tagName) || activeElement.isContentEditable)) return;
       if (key === 'Backspace' || key === 'BrowserBack' || key === 'Escape') {
+        // Back over an on-screen notice (such as the next-episode countdown) dismisses it;
+        // the phone sees the input and cancels auto-play, as on LUMA Receiver.
+        if (panel.hidden && !notice.hidden) { event.preventDefault(); recordInput('key-back'); notice.hidden = true; return; }
         if (panel.hidden) return;
         event.preventDefault(); recordInput('key-back');
         if (key === 'Escape' && (pointerLocked() || capturePending || hadLock)) captureDeclined = true;

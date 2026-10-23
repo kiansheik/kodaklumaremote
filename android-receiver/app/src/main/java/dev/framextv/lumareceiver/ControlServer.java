@@ -141,6 +141,13 @@ final class ControlServer {
                 double position = MediaRequest.seconds(params.opt("position"));
                 return ReceiverApp.onMain(() -> { playback.expect(params); playback.seek(position); return accepted(); });
             }
+            case "player.rate": {
+                // Small speed nudges keep two screens in step without a visible seek.
+                Object raw = params.opt("value");
+                if (!(raw instanceof Number) || ((Number) raw).doubleValue() < 0.5 || ((Number) raw).doubleValue() > 2) throw new ApiException("INVALID_INPUT");
+                float rate = ((Number) raw).floatValue();
+                return ReceiverApp.onMain(() -> { playback.expect(params); playback.setRate(rate); return accepted(); });
+            }
             case "player.subtitles":
                 return ReceiverApp.onMain(() -> { if (playback.title() != null) playback.expect(params); return playback.tracks(C.TRACK_TYPE_TEXT); });
             case "player.audioTracks":
@@ -162,9 +169,12 @@ final class ControlServer {
             case "player.setAudioTrack":
                 return ReceiverApp.onMain(() -> { playback.expect(params); playback.selectTrack(C.TRACK_TYPE_AUDIO, params.opt("index")); return accepted(); });
             case "display.get": return app.display.toJson();
-            case "display.set":
+            case "display.set": return ReceiverApp.onMain(() -> {
+                if (params.has("expectedSourceUrl") || params.has("expectedContentKey")) playback.expect(params);
                 app.display.update(params);
-                return ReceiverApp.onMain(() -> { playback.applyDisplay(); return app.display.toJson(); });
+                playback.applyDisplay();
+                return app.display.toJson();
+            });
             case "volume.get": return volume();
             case "volume.set": {
                 AudioManager audio = (AudioManager) app.getSystemService(Context.AUDIO_SERVICE);

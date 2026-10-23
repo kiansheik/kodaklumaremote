@@ -1,4 +1,5 @@
 import { createHandoffCoordinator } from '../handoff/coordinator.mjs';
+import { syncStep } from '../handoff/sync.mjs';
 
 const $ = selector => document.querySelector(selector);
 const DEFAULT_SITE = 'https://framextv.cc/watch/284833/1/1';
@@ -182,7 +183,7 @@ let historySelection = 0;
 let historyController = null;
 let libraryItems = [], libraryDetail = null, librarySelected = null, libraryNext = null;
 let libraryLoading = false, libraryOffset = 0, libraryLimit = 50, libraryHasMore = false, libraryQuery = '';
-const VOLUME_COOLDOWN_MS = 2000;
+const VOLUME_COOLDOWN_MS = 1000;
 // Frames are local lookups now; only coalesce bursts within one display frame.
 const SCRUB_PREVIEW_DELAY_MS = 16;
 const SEEK_HISTORY_LIMIT = 20;
@@ -226,11 +227,19 @@ function scrubPreviewDataUri(value) {
 }
 // Mirrors the phone's scrub preview onto the projector so either screen shows
 // the same position and frame. Latest-wins: at most one request in flight.
-const scrubMirror = { active: false, inFlight: false, next: null };
+const scrubMirror = { active: false, inFlight: false, next: null, method: 'receiver.scrub' };
+// Declared before any render: the remote renders during startup.
+const SCREEN_NAMES = { luma: 'LUMA', philips: 'Philips TV' };
+const SYNC_TICK_MS = 1500, SYNC_SETTLE_MS = 3000;
+const sync = { on: false, leader: 'luma', follower: 'philips', rate: 1, settleUntil: 0, timer: null, offset: null, ticking: false };
+let autoNextWanted = null;
+let captionPreferences = {}, picturePreferences = {};
 function mirrorScrub(update) {
-  // A clear is always delivered once a mirror started, even after switching to the TV.
+  // A clear is always delivered to the screen that showed the mirror, even after switching targets.
   if (!update.active && !scrubMirror.active) return;
-  if (update.active && (state.target !== 'luma' || !state.configured)) return;
+  if (update.active && !(state.target === 'philips' ? state.philips.connected : state.configured)) return;
+  if (update.active && scrubMirror.active && scrubMirror.method !== (state.target === 'philips' ? 'msx.scrub' : 'receiver.scrub')) return;
+  if (update.active && !scrubMirror.active) scrubMirror.method = state.target === 'philips' ? 'msx.scrub' : 'receiver.scrub';
   scrubMirror.active = update.active;
   scrubMirror.next = update;
   if (scrubMirror.inFlight) return;
@@ -239,7 +248,7 @@ function mirrorScrub(update) {
     scrubMirror.next = null;
     if (!payload) { scrubMirror.inFlight = false; return; }
     scrubMirror.inFlight = true;
-    void rpc('receiver.scrub', payload, { timeoutMs: 3000 }).catch(() => {}).finally(send);
+    void rpc(scrubMirror.method, payload, { timeoutMs: 3000 }).catch(() => {}).finally(send);
   };
   send();
 }
@@ -407,7 +416,8 @@ function renderRemote() {
     const last = snapshot.lastInteraction;
     const asleep = snapshot.autoplayed && last?.content?.key && last.content.key !== snapshot.content?.key
       ? ` · auto-played (you were on ${title(last.content.title).replace(/^.* · /, '')} at ${clock(last.positionSeconds || 0)})` : snapshot.autoplayed ? ' · auto-played' : '';
-    $('#playback-status').textContent = label + timing + asleep;
+    const inStep = sync.on ? ` · in step with ${SCREEN_NAMES[otherScreen()]}${Number.isFinite(sync.offset) ? ` (${Math.abs(sync.offset) < 0.1 ? '±0.1' : `${sync.offset > 0 ? '+' : '−'}${Math.abs(sync.offset).toFixed(1)}`} s)` : ''}` : '';
+    $('#playback-status').textContent = label + timing + asleep + inStep;
   }
   $('#play-label').textContent = snapshot?.playing === false ? 'Resume' : 'Pause';
   $('#play-toggle').dataset.state = snapshot?.playing === false ? 'paused' : 'playing';
@@ -918,10 +928,13 @@ function renderControls() {
   $('#back-30').disabled = !canSeek || (remote.playback?.positionSeconds || 0) <= 0;
   // On LUMA the receiver finds and opens the next episode itself, even after one has ended.
   const lumaEpisode = !tv && state.configured && remote.playback?.content?.kind === 'tv';
-  $('#next-episode').disabled = tv ? !active || !remote.nextEpisode : !free || !lumaEpisode;
-  $('#auto-next-row').hidden = tv || !state.configured;
-  $('#auto-next').disabled = !free;
-  if (!tv && typeof remote.playback?.autoNext === 'boolean') $('#auto-next').checked = remote.playback.autoNext;
+  $('#next-episode').disabled = tv ? !(active || remote.playback?.ended) || !remote.nextEpisode : !free || !lumaEpisode;
+  $('#auto-next-row').hidden = tv ? !state.philips.connected : !state.configured;
+  $('#auto-next').disabled = tv ? !state.philips.connected : !state.configured;
+  const reportedAutoNext = remote.playback?.autoNext;
+  if (autoNextWanted && (autoNextWanted.target !== state.target || autoNextWanted.confirmed && reportedAutoNext === autoNextWanted.value)) autoNextWanted = null;
+  if (autoNextWanted) $('#auto-next').checked = autoNextWanted.value;
+  else if (typeof reportedAutoNext === 'boolean') $('#auto-next').checked = reportedAutoNext;
   $('#show-subtitles').disabled = !active;
   $('#show-more').disabled = !free || (tv ? !tvConnected() : !state.connected && !state.configured);
   $('#show-tv-inputs').hidden = !tv || !matter.capabilities.inputs;
@@ -933,6 +946,13 @@ function renderControls() {
   $('#turn-on-tv').hidden = !tv || !matter.paired || matter.capabilities.powerOn !== true;
   $('#turn-on-tv').disabled = !free;
   $('#stop-video').disabled = !active;
+  const bothScreens = screenReady('luma') && screenReady('philips'), movable = active && !!screenContent(state.target);
+  $('#move-playback').hidden = !bothScreens;
+  $('#move-playback').textContent = `Move to ${SCREEN_NAMES[otherScreen()]}`;
+  $('#move-playback').disabled = !free || !movable;
+  $('#sync-playback').hidden = !bothScreens && !sync.on;
+  $('#sync-playback').textContent = sync.on ? 'Stop playing in step' : 'Play on both screens';
+  $('#sync-playback').disabled = !free || !sync.on && !movable;
   $('#seek-range').disabled = !canSeek;
   renderSeekHistory();
   $('#remote-text').disabled = !luma;
@@ -1225,6 +1245,7 @@ async function startCasting() {
   state.handoff = true;
   const controller = new AbortController();
   state.flowController = controller;
+  let castDone = null;
   let jobToken;
   sheet('handoff');
   renderControls();
@@ -1239,6 +1260,7 @@ async function startCasting() {
     if (id === flowId) {
       state.pendingMedia = null;
       message(state.resumeNotice || 'Video is playing. Choose a language in Subtitles.', !!state.resumeNotice);
+      castDone = selected;
     }
   } catch (error) {
     cancelNative(jobToken);
@@ -1254,6 +1276,10 @@ async function startCasting() {
     message(text, error.code !== 'CANCELLED');
     $('#handoff-label').textContent = text;
   } finally { if (id === flowId) { state.handoff = false; state.flowController = null; applyDeferredTarget(); renderControls(); } }
+  if (castDone && id === flowId) {
+    await restoreBrightness('luma', castDone);
+    await restoreCaption('luma', castDone);
+  }
 }
 async function startMsxCasting() {
   if (state.target !== 'philips') { message('Select Philips to continue casting this video.', true); return; }
@@ -1262,6 +1288,7 @@ async function startMsxCasting() {
   const selected = state.pendingMedia;
   const generation = state.sourceGeneration;
   const id = ++flowId;
+  let castDone = null;
   const controller = new AbortController();
   state.flowController = controller;
   state.sourceChanged = false;
@@ -1293,6 +1320,7 @@ async function startMsxCasting() {
     await rpc('app.handoffReady', { target: 'philips', sourceToken: jobToken, resumeApplied }, { timeoutMs: 2000 }).catch(() => {});
     closeSheet(); page('remote');
     message(resumeApplied ? 'Ready on Philips TV. You can use the remote.' : 'Video is playing, but the saved position could not be restored. Use the playback scrubber to continue.', !resumeApplied);
+    castDone = selected;
   } catch (error) {
     cancelNative(jobToken);
     if (id !== flowId) return;
@@ -1324,6 +1352,10 @@ async function startMsxCasting() {
     }
   } finally {
     if (id === flowId) { state.handoff = false; state.flowController = null; applyDeferredTarget(); renderControls(); }
+  }
+  if (castDone && id === flowId) {
+    await restoreBrightness('philips', castDone);
+    await restoreCaption('philips', castDone);
   }
 }
 window.LumaApp = Object.freeze({
@@ -1443,6 +1475,7 @@ async function selectMsxSubtitle(index, enabled) {
     if (result?.accepted !== true || !Number.isSafeInteger(result.id) || result.id <= 0 || result.lastCommand?.id !== result.id || result.lastCommand?.method !== 'subtitle' || result.lastCommand?.ok !== true) throw fixedError('MSX_REJECTED');
     if (state.philips.playback?.sourceUrl !== source) throw fixedError('SOURCE_CHANGED');
     if (state.philips.subtitlesEnabled !== enabled || enabled && state.philips.selectedIndex !== index) throw fixedError('MSX_SUBTITLE');
+    rememberCaption(tv.activeMedia, enabled ? safeText(tv.catalog.find(track => track.index === index)?.language) : '');
     renderTracks();
   }, {}, enabled ? 'Subtitle selected. Check the TV.' : 'Subtitles turned off.');
 }
@@ -1476,6 +1509,7 @@ async function selectSubtitle(track) {
       state.catalog = result.catalog;
       state.selectedIndex = result.selectedIndex;
       state.subtitlesEnabled = result.selectedIndex !== null;
+      if (state.subtitlesEnabled) rememberCaption(media, safeText(track.language));
       renderTracks();
       await rpc('app.rememberRemote', remoteParams({ remote: remoteDescriptor() }));
     });
@@ -1973,6 +2007,115 @@ async function playNextEpisode() {
     state.busy = false; message(errors[error.code] || 'The next episode could not load. Current playback is unchanged.', true); renderControls();
   }
 }
+// ---- Two screens: move playback across, or keep both playing in step ----
+function otherScreen(target = state.target) { return target === 'philips' ? 'luma' : 'philips'; }
+function screenReady(target) { return target === 'philips' ? state.philips.connected : state.connected && state.configured; }
+function screenContent(target) { const remote = receiver(target); return contentDescriptor(remote.activeMedia?.content) || contentDescriptor(remote.playback?.content); }
+function screenPlaying(target) { const playback = receiver(target).playback; return !!playback?.active && (target === 'philips' ? playback.paused !== true : playback.playing !== false); }
+function screenParams(target, extra = {}) { return target === 'philips' ? msxParams(extra) : remoteParams(extra); }
+function setScreenPlaying(target, play) {
+  return target === 'philips' ? rpc('msx.playPause', msxParams({ play })).then(msxState)
+    : rpc(play ? 'receiver.resume' : 'receiver.pause', remoteParams());
+}
+function seekScreen(target, seconds) {
+  return target === 'philips' ? rpc('msx.seek', msxParams({ seconds })).then(msxState) : rpc('receiver.seek', remoteParams({ position: seconds }));
+}
+function rateScreen(target, value) { return rpc(target === 'philips' ? 'msx.rate' : 'receiver.rate', screenParams(target, { value }), { timeoutMs: 4000 }); }
+/** One timed sample: LUMA at the request midpoint, Philips at its last state report. */
+async function sampleScreen(target) {
+  const started = performance.now();
+  if (target === 'philips') {
+    const status = await rpc('msx.status', {}, { timeoutMs: 3000 });
+    const done = performance.now(); msxState(status);
+    const reported = status?.playback, age = status?.diagnostics?.lastStateMsAgo;
+    if (!reported || !Number.isFinite(age) || age < 0) throw fixedError('SYNC_UNAVAILABLE');
+    return { at: done - age - 20, position: reported.positionSeconds, playing: !!reported.active && reported.paused !== true, rate: reported.rate || 1, active: !!reported.active, ended: !!reported.ended };
+  }
+  const status = await rpc('receiver.status', remoteParams(), { timeoutMs: 3000 });
+  const done = performance.now(); playback(status);
+  if (done - started > 600) throw fixedError('SYNC_SLOW');
+  return { at: (started + done) / 2, position: status.positionSeconds, playing: status.playing === true, rate: status.rate || 1, active: !!status.active, ended: !!status.ended };
+}
+async function castTitleTo(target, content, position) {
+  const media = await rpc('app.chooseCatalog', { kind: content.kind, id: content.contentId, resume: true, ...(content.kind === 'tv' ? { season: content.season, episode: content.episode } : {}) }, { timeoutMs: 150000 });
+  if (!media || typeof media.url !== 'string' || typeof media.sourceToken !== 'string') throw fixedError('INVALID_MEDIA');
+  if (state.target !== target) await selectTarget(target);
+  if (state.target !== target) throw fixedError('SOURCE_CHANGED');
+  state.sourceGeneration++;
+  state.pendingMedia = { ...media, ...mediaMetadata({ ...media, resumeSeconds: Math.max(0, position) }), captureToken: media.sourceToken, title: title(media.title) };
+  state.pendingTarget = target; state.autoStart = true;
+  await startCasting();
+  return receiver(target).activeMedia?.url === media.url && !state.pendingMedia;
+}
+async function movePlayback() {
+  const from = state.target, to = otherScreen(from), content = screenContent(from), playbackNow = receiver(from).playback;
+  if (!content || !playbackNow?.active) { message('Only titles from Library or frameXTV can move between screens.', true); return; }
+  if (!screenReady(to)) { message(`Connect ${SCREEN_NAMES[to]} first.`, true); return; }
+  closeSheet(); stopSync();
+  const position = Math.max(0, playbackNow.positionSeconds || 0);
+  message(`Moving to ${SCREEN_NAMES[to]} at ${clock(position)}…`);
+  await setScreenPlaying(from, false).catch(() => {});
+  try {
+    if (!await castTitleTo(to, content, position)) throw fixedError('SOURCE_CHANGED');
+    await rpc(from === 'philips' ? 'msx.stop' : 'receiver.stop', screenParams(from)).catch(() => {});
+    message(`Moved to ${SCREEN_NAMES[to]}. ${SCREEN_NAMES[from]} has stopped.`);
+  } catch (error) {
+    message(`Could not move this video. It is paused on ${SCREEN_NAMES[from]}.`, true);
+  }
+}
+async function startSync() {
+  const from = state.target, to = otherScreen(from), content = screenContent(from), playbackNow = receiver(from).playback;
+  if (!content || !playbackNow?.active) { message('Only titles from Library or frameXTV can play on both screens.', true); return; }
+  if (!screenReady(to)) { message(`Connect ${SCREEN_NAMES[to]} first.`, true); return; }
+  closeSheet();
+  if (screenContent(to)?.key !== content.key || !receiver(to).playback?.active) {
+    message(`Starting on ${SCREEN_NAMES[to]} too…`);
+    try { if (!await castTitleTo(to, content, (playbackNow.positionSeconds || 0) + 3)) throw fixedError('SOURCE_CHANGED'); }
+    catch { message(`Could not start ${SCREEN_NAMES[to]}. ${SCREEN_NAMES[from]} keeps playing.`, true); return; }
+  }
+  Object.assign(sync, { on: true, rate: 1, settleUntil: 0, offset: null });
+  message('Both screens are playing. Keeping them in step…');
+  renderControls(); scheduleSync(0);
+}
+function stopSync(reason) {
+  if (!sync.on) return;
+  sync.on = false; clearTimeout(sync.timer); sync.timer = null;
+  if (sync.rate !== 1) void rateScreen(sync.follower, 1).catch(() => {});
+  sync.rate = 1; sync.offset = null;
+  if (reason) message(reason);
+  renderControls(); renderRemote();
+}
+function scheduleSync(delay = SYNC_TICK_MS) { clearTimeout(sync.timer); if (sync.on) sync.timer = setTimeout(() => void syncTick(), delay); }
+async function syncTick() {
+  if (!sync.on || sync.ticking) return;
+  sync.ticking = true;
+  try {
+    const leaderContent = screenContent(sync.leader), followerContent = screenContent(sync.follower);
+    if (!leaderContent || leaderContent.key !== followerContent?.key) { stopSync('The screens are playing different videos now, so sync stopped.'); return; }
+    const [leader, follower] = await Promise.all([sampleScreen(sync.leader), sampleScreen(sync.follower)]);
+    if (!sync.on) return;
+    if (leader.ended || follower.ended || !leader.active && !leader.ended) { stopSync('Playback finished on one screen, so sync stopped.'); return; }
+    const now = performance.now();
+    if (now < sync.settleUntil) return;
+    const step = syncStep(leader, follower, now, { currentRate: sync.rate, seekLatencySeconds: 0.6 });
+    sync.offset = step.offset;
+    if (step.action === 'play' || step.action === 'pause') await setScreenPlaying(sync.follower, step.action === 'play');
+    else if (step.action === 'seek') {
+      if (sync.rate !== 1) { await rateScreen(sync.follower, 1); sync.rate = 1; }
+      await seekScreen(sync.follower, step.position); sync.settleUntil = performance.now() + SYNC_SETTLE_MS;
+    } else if (step.action === 'rate') { await rateScreen(sync.follower, step.rate); sync.rate = step.rate; }
+  } catch { /* the next tick samples again */ }
+  finally { sync.ticking = false; scheduleSync(); renderRemote(); }
+}
+/** While both screens play together, a person's play/pause/seek applies to both at once. */
+function mirrorToPartner(action, value) {
+  if (!sync.on) return;
+  const partner = otherScreen();
+  if (action === 'seek') { sync.settleUntil = performance.now() + SYNC_SETTLE_MS; void seekScreen(partner, value).catch(() => {}); }
+  else if (action === 'play' || action === 'pause') void setScreenPlaying(partner, action === 'play').catch(() => {});
+}
+$('#move-playback').addEventListener('click', () => void movePlayback());
+$('#sync-playback').addEventListener('click', () => sync.on ? stopSync('Stopped keeping the screens in step. Both keep playing.') : void startSync());
 $('#show-history').addEventListener('click', openLibrary);
 $('#open-library').addEventListener('click', openLibrary);
 $('#history-search-form').addEventListener('submit', event => { event.preventDefault(); void loadLibrary(); });
@@ -2167,10 +2310,12 @@ $('#pair-form').addEventListener('submit', event => {
 $('#play-toggle').addEventListener('click', () => {
   if (state.target === 'philips') {
     const play = state.philips.playback?.playing === false;
+    mirrorToPartner(play ? 'play' : 'pause');
     void command('msx.playPause', msxParams({ play }), play ? 'Resume requested.' : 'Pause requested.', msxState);
     return;
   }
   const action = state.playback?.playing === false ? 'resume' : 'pause';
+  mirrorToPartner(action === 'resume' ? 'play' : 'pause');
   void command(`receiver.${action}`, remoteParams(), action === 'pause' ? 'Pause requested.' : 'Resume requested.', async () => playback(await rpc('receiver.status', remoteParams())));
 });
 async function seekTo(position) {
@@ -2178,6 +2323,7 @@ async function seekTo(position) {
   if (!Number.isFinite(position) || !Number.isFinite(duration) || duration <= 0) return false;
   const seconds = Math.max(0, Math.min(Math.floor(duration), Math.floor(position)));
   scrubPosition = seconds; renderRemote();
+  mirrorToPartner('seek', seconds);
   const accepted = state.target === 'philips'
     ? await command('msx.seek', msxParams({ seconds }), 'Seek requested. Check playback on the TV.', msxState)
     : await command('receiver.seek', remoteParams({ position: seconds }), 'Seek requested. Check playback on the projector.', async () => playback(await rpc('receiver.status', remoteParams())));
@@ -2191,12 +2337,19 @@ $('#next-episode').addEventListener('click', () => {
   const key = state.playback?.content?.key;
   void command('receiver.next', key ? { expectedContentKey: key } : {}, 'Loading the next episode on the projector…');
 });
-$('#auto-next').addEventListener('change', async () => {
-  const autoNext = $('#auto-next').checked;
-  // Optimistic, so re-rendering from the last status does not undo the tap.
-  if (state.playback) state.playback.autoNext = autoNext;
-  const saved = await command('receiver.settings', { autoNext }, autoNext ? 'Next episodes will play automatically.' : 'Auto-play is off.');
-  if (!saved && state.playback) { state.playback.autoNext = !autoNext; renderControls(); }
+// The switch moves at once; the receiver is told afterwards without disabling
+// any control, and status reports older than the tap cannot move it back.
+$('#auto-next').addEventListener('change', () => {
+  const autoNext = $('#auto-next').checked, target = state.target;
+  autoNextWanted = { target, value: autoNext, confirmed: false };
+  rpc(target === 'philips' ? 'msx.settings' : 'receiver.settings', { autoNext }).then(() => {
+    if (autoNextWanted?.value === autoNext && autoNextWanted.target === target) autoNextWanted.confirmed = true;
+    message(autoNext ? 'Next episodes will play automatically.' : 'Auto-play is off.');
+  }, () => {
+    if (autoNextWanted?.value !== autoNext || autoNextWanted.target !== target) return;
+    autoNextWanted = null; $('#auto-next').checked = !autoNext;
+    message('Auto-play could not be changed. Try again.', true);
+  });
 });
 $('#refresh-volume').addEventListener('click', () => state.target === 'philips' ? state.matter.connected ? command('matter.status', {}, 'Volume refreshed.', matterState) : command('msx.status', {}, 'Volume refreshed.', msxState) : command('luma.status', {}, 'Volume refreshed.', volume));
 function setVolume(value) {
@@ -2263,7 +2416,11 @@ function key(name) {
   });
 }
 document.querySelectorAll('[data-key]').forEach(button => button.addEventListener('click', () => key(button.dataset.key)));
-$('#show-more').addEventListener('click', () => sheet('more'));
+$('#show-more').addEventListener('click', () => {
+  sheet('more');
+  $('#picture-brightness').hidden = state.target === 'philips' ? !state.philips.connected : !state.configured;
+  readBrightness();
+});
 document.querySelectorAll('[data-panel]').forEach(button => button.addEventListener('click', () => {
   sheet(button.dataset.panel);
   if (button.dataset.panel === 'apps') void command('luma.apps', {}, 'Apps refreshed.', result => { state.apps = Array.isArray(result?.apps) ? result.apps.slice(0, 200) : []; state.appPage = 0; renderApps(); });
@@ -2280,15 +2437,54 @@ function renderSubtitleSize(display) {
 function stepSubtitleSize(direction) {
   const next = Math.max(0.5, Math.min(2.5, Math.round(((state.subtitleScale ?? 1) + direction * 0.1) * 10) / 10));
   renderSubtitleSize({ subtitleScale: next });
-  void rpc('receiver.display', { subtitleScale: next }, { timeoutMs: 4000 }).then(renderSubtitleSize).catch(error => message(error.message, true));
+  // Both receivers keep the size themselves; Philips reports it back in its playback state.
+  if (state.target === 'philips') void rpc('msx.display', { subtitleScale: next }, { timeoutMs: 8000 }).then(result => { msxState(result); renderSubtitleSize(state.philips.playback?.display); }).catch(error => message(error.message, true));
+  else void rpc('receiver.display', { subtitleScale: next }, { timeoutMs: 4000 }).then(renderSubtitleSize).catch(error => message(error.message, true));
 }
+// Picture brightness is a per-movie/per-series preference. LUMA takes an offset
+// and Philips a CSS factor around 1; both present the same −30…+30% control.
+const BRIGHTNESS_MIN = -0.3, BRIGHTNESS_MAX = 0.3, BRIGHTNESS_STEP = 0.02;
+let brightnessLevel = 0;
+function normalizedBrightness(level) {
+  if (!Number.isFinite(level)) return null;
+  return Math.max(BRIGHTNESS_MIN, Math.min(BRIGHTNESS_MAX, Math.round(level / BRIGHTNESS_STEP) * BRIGHTNESS_STEP));
+}
+function renderBrightness(level) {
+  const normalized = normalizedBrightness(level);
+  if (normalized == null) return;
+  brightnessLevel = normalized;
+  $('#brightness-value').textContent = `Brightness ${brightnessLevel > 0 ? '+' : ''}${Math.round(brightnessLevel * 100)}%`;
+  $('#brightness-down').disabled = brightnessLevel <= BRIGHTNESS_MIN;
+  $('#brightness-up').disabled = brightnessLevel >= BRIGHTNESS_MAX;
+}
+function readBrightness() {
+  if (state.target === 'philips') { renderBrightness((state.philips.playback?.display?.brightness ?? 1) - 1); return; }
+  if (state.configured) void rpc('receiver.display', {}, { timeoutMs: 4000 }).then(display => renderBrightness(Number(display?.brightness))).catch(() => {});
+}
+function stepBrightness(direction) {
+  const target = state.target, remote = receiver(target);
+  const media = remote.activeMedia || (remote.playback?.content ? { content: remote.playback.content } : null);
+  const next = normalizedBrightness(brightnessLevel + direction * BRIGHTNESS_STEP);
+  if (next == null) return;
+  renderBrightness(next);
+  const failed = error => message(error.message || 'Brightness could not be changed.', true);
+  if (target === 'philips') void rpc('msx.display', screenParams(target, { brightness: Math.round((1 + next) * 100) / 100 }), { timeoutMs: 8000 }).then(result => {
+    msxState(result); rememberBrightness(media, next); if (state.target === target) renderBrightness(next);
+  }).catch(failed);
+  else void rpc('receiver.display', screenParams(target, { brightness: next }), { timeoutMs: 4000 }).then(display => {
+    const confirmed = normalizedBrightness(Number(display?.brightness)) ?? next;
+    rememberBrightness(media, confirmed); if (state.target === target) renderBrightness(confirmed);
+  }).catch(failed);
+}
+$('#brightness-down').addEventListener('click', () => stepBrightness(-1));
+$('#brightness-up').addEventListener('click', () => stepBrightness(1));
 $('#subtitle-smaller').addEventListener('click', () => stepSubtitleSize(-1));
 $('#subtitle-larger').addEventListener('click', () => stepSubtitleSize(1));
 $('#show-subtitles').addEventListener('click', () => {
   sheet('subtitles');
   renderTracks();
-  $('#subtitle-size').hidden = state.target !== 'luma' || !state.configured;
-  if (state.target === 'philips') { void command('msx.status', {}, '', msxState); return; }
+  $('#subtitle-size').hidden = state.target === 'philips' ? !state.philips.connected : !state.configured;
+  if (state.target === 'philips') { renderSubtitleSize(state.philips.playback?.display); void command('msx.status', {}, '', msxState); return; }
   if (state.configured) void rpc('receiver.display', {}, { timeoutMs: 4000 }).then(renderSubtitleSize).catch(() => {});
   void command('receiver.getSubtitles', remoteParams(), '', result => {
     state.subtitlesEnabled = result.enabled === true;
@@ -2298,11 +2494,11 @@ $('#show-subtitles').addEventListener('click', () => {
   });
 });
 $('#subtitles-off').addEventListener('click', () => state.target === 'philips' ? selectMsxSubtitle(state.philips.selectedIndex ?? 0, false) : command('receiver.setSubtitle', remoteParams({ index: 'off' }), 'Subtitles turned off.', async () => {
-  state.subtitlesEnabled = false; state.selectedIndex = null; renderTracks();
+  state.subtitlesEnabled = false; state.selectedIndex = null; rememberCaption(state.activeMedia, ''); renderTracks();
   if (state.activeMedia && state.catalog.length) await rpc('app.rememberRemote', remoteParams({ remote: remoteDescriptor() }));
 }));
 $('#open-receiver').addEventListener('click', () => command('luma.launchReceiver', {}, 'LUMA Receiver launch sent. Check the projector.'));
-$('#stop-video').addEventListener('click', () => state.target === 'philips' ? command('msx.stop', msxParams(), 'Stop requested.', result => { msxState(result); closeSheet(); }) : command('receiver.stop', remoteParams(), 'Stop requested.', result => { playback(result?.active === false ? result : { active: false }); closeSheet(); }));
+$('#stop-video').addEventListener('click', () => (stopSync(), state.target) === 'philips' ? command('msx.stop', msxParams(), 'Stop requested.', result => { msxState(result); closeSheet(); }) : command('receiver.stop', remoteParams(), 'Stop requested.', result => { playback(result?.active === false ? result : { active: false }); closeSheet(); }));
 $('#remote-text').addEventListener('input', renderControls);
 $('#clear-text').addEventListener('click', () => { $('#remote-text').value = ''; renderControls(); $('#remote-text').focus(); });
 $('#text-form').addEventListener('submit', async event => {
@@ -2345,6 +2541,72 @@ function writeSeekHistory(history) {
   seekHistoryStore = history.all;
   void rpc('app.seekHistory', { value: history.all }, { timeoutMs: 3000 }).catch(() => { /* history is a convenience */ });
   renderSeekHistory(history);
+}
+// Picture and subtitle preferences use the title identity: every episode in a
+// series shares one key, while each movie has its own.
+function titlePreferenceKey(media) {
+  const content = contentDescriptor(media?.content);
+  return content ? `framextv:${content.kind}:${content.contentId}` : null;
+}
+function loadPicturePreferences(saved) {
+  if (saved && typeof saved === 'object' && !Array.isArray(saved)) picturePreferences = { ...saved, ...picturePreferences };
+}
+function rememberedBrightness(media) {
+  const key = titlePreferenceKey(media);
+  if (!key) return null;
+  return normalizedBrightness(Number(picturePreferences[key]?.brightness)) ?? 0;
+}
+function rememberBrightness(media, brightness) {
+  const key = titlePreferenceKey(media), value = normalizedBrightness(brightness);
+  if (!key || value == null) return;
+  picturePreferences[key] = { brightness: value, at: Date.now() };
+  const keys = Object.keys(picturePreferences).sort((a, b) => (picturePreferences[b].at || 0) - (picturePreferences[a].at || 0));
+  for (const stale of keys.slice(300)) delete picturePreferences[stale];
+  void rpc('app.picturePreferences', { value: picturePreferences }, { timeoutMs: 3000 }).catch(() => { /* a convenience only */ });
+}
+/** Restores 0 for a new title so it cannot inherit the previously watched title. */
+async function restoreBrightness(target, media) {
+  const content = contentDescriptor(media?.content), brightness = rememberedBrightness(media);
+  if (!content || brightness == null || screenContent(target)?.key !== content.key) return;
+  try {
+    if (target === 'philips') {
+      const result = await rpc('msx.display', { brightness: Math.round((1 + brightness) * 100) / 100, expectedSourceUrl: media.url }, { timeoutMs: 8000 });
+      msxState(result);
+    } else {
+      const display = await rpc('receiver.display', { brightness, expectedSourceUrl: media.url, expectedContentKey: content.key }, { timeoutMs: 4000 });
+      if (state.target === target) renderBrightness(Number(display?.brightness));
+    }
+  } catch { /* Playback succeeded; More can retry a presentation-only preference. */ }
+}
+// Subtitle language per movie or series ('' = turned off), restored after each
+// cast on either receiver. Stored natively like seek checkpoints.
+function loadCaptionPreferences(saved) {
+  if (saved && typeof saved === 'object' && !Array.isArray(saved)) captionPreferences = { ...saved, ...captionPreferences };
+}
+function captionTitleKey(media) {
+  return titlePreferenceKey(media);
+}
+function rememberCaption(media, language) {
+  const key = captionTitleKey(media);
+  if (!key || typeof language !== 'string') return;
+  captionPreferences[key] = { language: language.slice(0, 40), at: Date.now() };
+  const keys = Object.keys(captionPreferences).sort((a, b) => (captionPreferences[b].at || 0) - (captionPreferences[a].at || 0));
+  for (const stale of keys.slice(300)) delete captionPreferences[stale];
+  void rpc('app.captionPreferences', { value: captionPreferences }, { timeoutMs: 3000 }).catch(() => { /* a convenience only */ });
+}
+function rememberedCaption(media, catalog) {
+  const wanted = safeText(captionPreferences[captionTitleKey(media)]?.language).toLowerCase().replaceAll('_', '-');
+  if (!wanted) return null;
+  const base = wanted.split('-')[0], language = track => safeText(track.language).toLowerCase().replaceAll('_', '-');
+  return catalog.find(track => language(track) === wanted) || catalog.find(track => language(track).split('-')[0] === base) || null;
+}
+/** After a cast: turn on the language last used for this title, through the normal Subtitles path. */
+async function restoreCaption(target, media) {
+  const remote = receiver(target);
+  const track = state.target === target ? rememberedCaption(media, remote.catalog || []) : null;
+  if (!track || remote.subtitlesEnabled) return;
+  await selectSubtitle(track);
+  if (receiver(target).subtitlesEnabled) message(`Subtitles on: ${safeText(track.label) || safeText(track.language)} (last used for this title).`);
 }
 function renderSeekHistory(history = readSeekHistory()) {
   const usable = !$('#seek-range').disabled && !seekHistoryBusy;
@@ -2503,6 +2765,8 @@ void (async () => {
     message('Connect your projector to get started.');
     connectionState(result, { initial: true });
     loadSeekHistory(result?.seekHistory);
+    loadCaptionPreferences(result?.captionPreferences);
+    loadPicturePreferences(result?.picturePreferences);
     scheduleScrubWarmup();
     if (result?.source && !result?.remote) window.LumaApp.onCapturedMedia(result.source);
   } catch (error) { message(error.message, true); }

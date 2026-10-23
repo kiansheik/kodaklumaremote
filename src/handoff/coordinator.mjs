@@ -89,17 +89,20 @@ function observedContent(value) {
 function mediaSnapshot(input, maxTracks) {
   if (!input || typeof input !== 'object' || typeof input.contentType !== 'string'
       || !/^(?:video\/[a-z0-9!#$&^_.+-]+|application\/(?:vnd\.apple\.mpegurl|x-mpegurl|dash\+xml))$/iu.test(input.contentType)
-      || (input.tracks !== undefined && (!Array.isArray(input.tracks) || input.tracks.length > 128))) throw fail('INVALID_MEDIA');
+      || (input.tracks !== undefined && !Array.isArray(input.tracks))) throw fail('INVALID_MEDIA');
   const seen = new Set();
   const tracks = [];
-  for (const track of input.tracks || []) {
-    if (!track || typeof track !== 'object') throw fail('INVALID_MEDIA');
-    const url = sourceUrl(track.url ?? track.src);
+  // A full catalog (Library, auto-next) can list more languages than a page did, or
+  // one malformed link; neither may block the video itself. Keep the first usable ones.
+  for (const track of (input.tracks || []).slice(0, 256)) {
+    if (tracks.length >= maxTracks) break;
+    if (!track || typeof track !== 'object') continue;
+    let url;
+    try { url = sourceUrl(track.url ?? track.src); } catch { continue; }
     if (seen.has(url)) continue;
     seen.add(url);
     tracks.push({ url, contentType: 'text/vtt', language: safeText(track.language, 64), label: safeText(track.label, 200), active: track.active === true });
   }
-  if (tracks.length > maxTracks) throw fail('INVALID_MEDIA');
   const content = canonicalContent(input.content);
   // Passed through to Open so the receiver starts at the saved position instead of
   // starting at zero and relying on a seek that may arrive before the media is seekable.
@@ -148,7 +151,7 @@ export function createHandoffCoordinator({
     delivery: bounded(limits.deliveryMs, 10000, 10000),
     overall: bounded(limits.overallMs, 120000, 120000),
     poll: bounded(limits.pollMs, 350, 2000, 100),
-    tracks: Math.floor(bounded(limits.maxTracks, 64, 128)),
+    tracks: Math.floor(bounded(limits.maxTracks, 128, 128)),
   };
   // Metadata only, never media bytes. Reuses confirmed bindings on a retry of
   // the still-active source. Unknown existing external tracks are not inferred.

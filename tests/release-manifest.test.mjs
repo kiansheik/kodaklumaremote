@@ -73,7 +73,7 @@ test('Pages bundles only the reviewed site files and metadata, refusing unexpect
   try {
     const out = path.join(folder, 'pages');
     await buildPages({ manifest: manifest(), release: release(), out });
-    assert.deepEqual((await readdir(out)).sort(), ['.nojekyll', 'app.js', 'index.html', 'projector.svg', 'styles.css', 'update-manifest.js', 'update.json'].sort());
+    assert.deepEqual((await readdir(out)).sort(), ['.nojekyll', 'app.js', 'index.html', 'projector.svg', 'styles.css', 'tv.html', 'update-manifest.js', 'update.json'].sort());
     assert.deepEqual(JSON.parse(await readFile(path.join(out, 'update.json'), 'utf8')), manifest());
     await writeFile(path.join(out, 'private-note.txt'), 'must not publish');
     await assert.rejects(buildPages({ manifest: manifest(), release: release(), out }), /unexpected file/);

@@ -134,6 +134,8 @@
   native RPC adapters, same-origin declared source/track capture and matched pause.
   The main remote exposes scrub, back 30 and catalog-proven next episode. The same
   exact successor is projected to notification/MediaSession skip-next. A
+  native-backed title preference stores one −30…+30% brightness value per movie
+  or whole series and restores it with source/content guards after each cast. A
   notification tap returns through the app's guarded catalog selection, while a
   lock-screen MediaSession action resolves and opens it in the service without an
   Activity or unlock; neither path guesses or reuses an old stream URL. Scrub input requests the latest

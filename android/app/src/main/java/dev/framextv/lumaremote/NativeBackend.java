@@ -697,6 +697,12 @@ public final class NativeBackend {
             call("player.seek", guarded(params, object("position", value)), true);
             return object("accepted", true);
         }
+        if ("rate".equals(action)) {
+            Object raw = params.opt("value"); if (!(raw instanceof Number)) throw fail("INVALID_INPUT"); double value = ((Number) raw).doubleValue();
+            if (Double.isNaN(value) || value < 0.5 || value > 2) throw fail("INVALID_INPUT");
+            call("player.rate", guarded(params, object("value", value)), true);
+            return object("accepted", true);
+        }
         if ("pause".equals(action) || "resume".equals(action) || "stop".equals(action)) {
             call("player." + action, guarded(params, new JSONObject()), true);
             return object("accepted", true);
@@ -719,7 +725,7 @@ public final class NativeBackend {
             for (String key : new String[] {"brightness", "contrast", "gamma", "subtitleScale"}) if (params.opt(key) instanceof Number) changes.put(key, params.get(key));
             if ("box".equals(params.opt("subtitleStyle")) || "outline".equals(params.opt("subtitleStyle"))) changes.put("subtitleStyle", params.get("subtitleStyle"));
             if (Boolean.TRUE.equals(params.opt("reset"))) changes.put("reset", true);
-            return changes.length() == 0 ? call("display.get", new JSONObject(), false) : call("display.set", changes, true);
+            return changes.length() == 0 ? call("display.get", new JSONObject(), false) : call("display.set", guarded(params, changes), true);
         }
         if ("next".equals(action)) {
             JSONObject command = new JSONObject();

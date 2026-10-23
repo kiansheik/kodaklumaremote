@@ -106,7 +106,7 @@ public final class ConnectionService extends Service {
      * receiver.status describes playback, so its failures are observed; it is only exempt from the re-poll. */
     private static final java.util.Set<String> SIDE_CHANNEL = new java.util.HashSet<>(java.util.Arrays.asList(
         "receiver.configure", "receiver.pairBegin", "receiver.pairComplete", "receiver.scrub", "receiver.display", "receiver.libraryPull", "receiver.libraryPush",
-        "receiver.thumbsList", "receiver.thumbsGet", "receiver.thumbsPut", "receiver.settings"));
+        "receiver.thumbsList", "receiver.thumbsGet", "receiver.thumbsPut", "receiver.settings", "receiver.rate"));
     private static final long LIBRARY_SYNC_MS = 60_000;
     private volatile long generation;
     private volatile boolean destroyed;
@@ -487,6 +487,187 @@ public final class ConnectionService extends Service {
             reject(callback, code, "Scrub preview unavailable.");
         }
     }
+    private final java.util.concurrent.atomic.AtomicReference<JSONObject> pendingTelevisionScrub = new java.util.concurrent.atomic.AtomicReference<>();
+    /** Philips scrub overlay: latest position wins; the nearest local frame rides along to the TV page. */
+    private void mirrorTelevisionScrub(JSONObject args, Callback callback) {
+        try {
+            JSONObject command = NativeBackend.scrubCommand(args);
+            if (pendingTelevisionScrub.getAndSet(command) == null) scrubIo.execute(() -> {
+                JSONObject next;
+                while ((next = pendingTelevisionScrub.getAndSet(null)) != null) {
+                    boolean active = next.optBoolean("active");
+                    double position = next.optDouble("positionSeconds", 0);
+                    byte[] jpeg = null;
+                    if (active) {
+                        JSONObject playback = television.status().optJSONObject("playback");
+                        String source = playback == null ? "" : playback.optString("source");
+                        ThumbnailStrip.Frame frame = source.isEmpty() ? null : scrubPreviews.nearest(source, position);
+                        if (frame != null) jpeg = frame.jpeg;
+                    }
+                    television.scrub(active, position, next.optDouble("durationSeconds", 0), jpeg);
+                }
+            });
+            if (callback != null) callback.success(object("accepted", true));
+        } catch (Exception failure) {
+            String code = failure instanceof NativeBackend.BackendException ? ((NativeBackend.BackendException) failure).code : "INVALID_INPUT";
+            reject(callback, code, "Scrub preview unavailable.");
+        }
+    }
+
+    // ---- Philips auto-play: the same behaviour LUMA Receiver runs on the projector ----
+    static final long TV_UP_NEXT_MS = 10_000;
+    static final int TV_MAX_UNATTENDED = 3;
+    private boolean televisionUpNext, televisionAutoplayed;
+    private int televisionUnattended;
+    private String televisionEndedSource = "";
+    private long televisionInputs = -1;
+    private final Runnable televisionNext = this::startTelevisionNext;
+    private android.content.SharedPreferences televisionPreferences() { return getSharedPreferences("philips-playback", MODE_PRIVATE); }
+    boolean televisionAutoNext() { return televisionPreferences().getBoolean("autoNext", false); }
+    private void televisionSettings(JSONObject args, Callback callback) {
+        if (args.length() > 1 || args.length() == 1 && !(args.opt("autoNext") instanceof Boolean)) { reject(callback, "INVALID_INPUT", "Choose auto-play on or off."); return; }
+        if (args.has("autoNext")) {
+            televisionPreferences().edit().putBoolean("autoNext", args.optBoolean("autoNext")).apply();
+            if (!args.optBoolean("autoNext")) cancelTelevisionUpNext();
+            publish();
+        }
+        if (callback != null) callback.success(object("autoNext", televisionAutoNext()));
+    }
+    private void cancelTelevisionUpNext() {
+        if (!televisionUpNext) return;
+        televisionUpNext = false; main.removeCallbacks(televisionNext);
+        sendTelevisionNotice("Auto-play cancelled.", 3);
+    }
+    /** A command from a person: clears the unattended count and remembers where they were. */
+    private void noteTelevisionInteraction() {
+        televisionUnattended = 0; televisionAutoplayed = false;
+        cancelTelevisionUpNext();
+        JSONObject playback = television.status().optJSONObject("playback"), media;
+        synchronized (stateLock) { media = copy(televisionMedia); }
+        JSONObject content = validatedContent(media);
+        if (playback == null || content == null || !playback.optString("source").equals(media.optString("url"))) return;
+        JSONObject last = object("content", content, "positionSeconds", playback.optDouble("positionSeconds", 0), "at", System.currentTimeMillis());
+        televisionPreferences().edit().putString("lastInteraction", last.toString()).apply();
+    }
+    private JSONObject televisionLastInteraction() {
+        try { return new JSONObject(televisionPreferences().getString("lastInteraction", "{}")); } catch (Exception corrupt) { return new JSONObject(); }
+    }
+    private void sendTelevisionNotice(String text, int seconds) {
+        try { televisionNetwork.execute(() -> { try { television.command("notice", object("text", text, "seconds", seconds)); } catch (Exception ignored) { } }); }
+        catch (RejectedExecutionException busy) { /* notices are best effort */ }
+    }
+    private long televisionDisplayRestoredAt;
+    private void rememberTelevisionDisplay(JSONObject args) {
+        JSONObject saved;
+        try { saved = new JSONObject(televisionPreferences().getString("display", "{}")); } catch (Exception corrupt) { saved = new JSONObject(); }
+        for (String name : new String[] {"subtitleScale", "brightness", "contrast"}) if (args.opt(name) instanceof Number) put(saved, name, args.optDouble(name));
+        televisionPreferences().edit().putString("display", saved.toString()).apply();
+    }
+    /** Re-sends saved display settings when the TV page reports different ones (at most every 30 s). */
+    private void restoreTelevisionDisplay(JSONObject playback) {
+        JSONObject reported = playback.optJSONObject("display"), saved;
+        if (reported == null || SystemClock.elapsedRealtime() - televisionDisplayRestoredAt < 30_000) return;
+        try { saved = new JSONObject(televisionPreferences().getString("display", "{}")); } catch (Exception corrupt) { return; }
+        boolean differs = false;
+        for (java.util.Iterator<String> names = saved.keys(); names.hasNext();) {
+            String name = names.next();
+            if (Math.abs(saved.optDouble(name, 1) - reported.optDouble(name, 1)) > 0.001) differs = true;
+        }
+        if (!differs) return;
+        televisionDisplayRestoredAt = SystemClock.elapsedRealtime();
+        try { televisionNetwork.execute(() -> { try { television.command("display", saved); } catch (Exception ignored) { } }); }
+        catch (RejectedExecutionException busy) { /* tried again on a later refresh */ }
+    }
+    /** Main thread, on every TV state refresh. */
+    private void observeTelevisionPlayback(JSONObject playback) {
+        if (playback == null) return;
+        restoreTelevisionDisplay(playback);
+        JSONObject debug = playback.optJSONObject("receiverDebug");
+        long inputs = debug == null ? -1 : debug.optLong("inputCount", -1);
+        boolean pressed = inputs >= 0 && televisionInputs >= 0 && inputs != televisionInputs;
+        televisionInputs = inputs;
+        if (pressed) noteTelevisionInteraction();
+        String source = playback.optString("source");
+        if (!playback.optBoolean("ended")) { if (!source.equals(televisionEndedSource)) televisionEndedSource = ""; return; }
+        if (source.isEmpty() || source.equals(televisionEndedSource)) return;
+        televisionEndedSource = source;
+        JSONObject media;
+        synchronized (stateLock) { media = copy(televisionMedia); }
+        JSONObject content = validatedContent(media);
+        if (!televisionAutoNext() || content == null || !"tv".equals(content.optString("kind")) || !source.equals(media.optString("url"))) return;
+        if (televisionUnattended >= TV_MAX_UNATTENDED) { sendTelevisionNotice("Auto-play paused: no one has touched the remote for a while.", 8); return; }
+        televisionUpNext = true;
+        sendTelevisionNotice("Next episode in 10 seconds · press Back to cancel", 10);
+        main.postDelayed(televisionNext, TV_UP_NEXT_MS);
+        publish();
+    }
+    private void startTelevisionNext() {
+        if (!televisionUpNext || destroyed) return;
+        televisionUpNext = false;
+        JSONObject media, playback = television.status().optJSONObject("playback");
+        synchronized (stateLock) { media = copy(televisionMedia); }
+        JSONObject content = validatedContent(media), next = media == null ? null : media.optJSONObject("nextEpisode");
+        if (content == null || next == null || playback == null || !playback.optBoolean("ended")) {
+            if (content != null && next == null) sendTelevisionNotice("That was the last episode.", 6);
+            publish(); return;
+        }
+        // Keep the language that was on, else the one last used for this series.
+        String language = "";
+        JSONArray tracks = playback.optJSONArray("tracks");
+        int selected = playback.optInt("selectedIndex", -1);
+        for (int i = 0; tracks != null && playback.optBoolean("subtitlesEnabled") && i < tracks.length(); i++) {
+            JSONObject track = tracks.optJSONObject(i);
+            if (track != null && track.optInt("index", -2) == selected) language = track.optString("language");
+        }
+        if (language.isEmpty()) language = rememberedCaptionLanguage(content);
+        JSONObject selection = object("kind", "tv", "id", content.optString("contentId"), "season", next.optInt("season"), "episode", next.optInt("episode"), "resume", true);
+        final String wanted = language;
+        try {
+            JSONObject job = television.playCatalog(selection);
+            televisionAutoplayed = true; televisionUnattended++;
+            if (!wanted.isEmpty()) awaitTelevisionJob(job.optString("jobId"), wanted, SystemClock.elapsedRealtime() + 180_000);
+        } catch (MsxServer.LibraryException failure) { sendTelevisionNotice("Couldn't load the next episode.", 6); }
+        publish();
+    }
+    /** After an auto-played episode opens, turn on the same subtitle language. */
+    private void awaitTelevisionJob(String jobId, String language, long deadline) {
+        main.postDelayed(() -> {
+            if (destroyed) return;
+            String state;
+            try { state = television.catalogStatus(jobId).optString("state"); } catch (MsxServer.LibraryException gone) { return; }
+            if (!"ready".equals(state)) { if (!"error".equals(state) && !"cancelled".equals(state) && SystemClock.elapsedRealtime() < deadline) awaitTelevisionJob(jobId, language, deadline); return; }
+            JSONObject playback = television.status().optJSONObject("playback");
+            JSONArray tracks = playback == null ? null : playback.optJSONArray("tracks");
+            int index = captionIndex(tracks, language);
+            if (index < 0) return;
+            JSONObject args = object("index", index, "enabled", true, "expectedSourceUrl", playback.optString("source"));
+            try { televisionNetwork.execute(() -> { try { television.command("subtitle", args); } catch (Exception ignored) { } updateTelevisionStateLater(); }); }
+            catch (RejectedExecutionException busy) { /* the person can still choose subtitles */ }
+        }, 1000);
+    }
+    private void updateTelevisionStateLater() { main.post(() -> { if (!destroyed) { updateTelevisionState(); publish(); } }); }
+    /** Exact language first, then the same base language ("pt-BR" → "pt"). */
+    static int captionIndex(JSONArray tracks, String language) {
+        if (tracks == null || language == null || language.isEmpty()) return -1;
+        String wanted = language.toLowerCase(java.util.Locale.ROOT).replace('_', '-'), base = wanted.split("-", 2)[0];
+        for (int pass = 0; pass < 2; pass++) {
+            for (int i = 0; i < tracks.length(); i++) {
+                JSONObject track = tracks.optJSONObject(i);
+                String candidate = track == null ? "" : track.optString("language").toLowerCase(java.util.Locale.ROOT).replace('_', '-');
+                if (pass == 0 ? candidate.equals(wanted) : !candidate.isEmpty() && candidate.split("-", 2)[0].equals(base)) return track.optInt("index", -1);
+            }
+        }
+        return -1;
+    }
+    /** The phone page's per-title subtitle choice (shared with app.captionPreferences). */
+    private String rememberedCaptionLanguage(JSONObject content) {
+        try {
+            JSONObject all = new JSONObject(getSharedPreferences("caption-preferences", MODE_PRIVATE).getString("value", "{}"));
+            JSONObject entry = all.optJSONObject("framextv:" + content.optString("kind") + ":" + content.optString("contentId"));
+            return entry == null ? "" : entry.optString("language");
+        } catch (Exception corrupt) { return ""; }
+    }
+
     /** Bulk frames for the page's local cache so sweeps render instantly; disk reads happen off the main thread. */
     private void requestScrubBatch(JSONObject args, Callback callback) {
         try {
@@ -669,6 +850,8 @@ public final class ConnectionService extends Service {
                 if (callback != null) callback.success(snapshot());
                 return;
             }
+            if ("msx.scrub".equals(method)) { mirrorTelevisionScrub(args, callback); return; }
+            if ("msx.settings".equals(method)) { televisionSettings(args, callback); return; }
             if (method != null && method.startsWith("msx.")) { requestTelevision(method, args, callback); return; }
             if (method != null && method.startsWith("matter.")) { requestMatter(method, args, callback); return; }
             if ("watch.history".equals(method)) {
@@ -1064,9 +1247,14 @@ public final class ConnectionService extends Service {
         synchronized (stateLock) { retained = copy(televisionMedia); }
         JSONObject current = withTextState(television.status());
         JSONObject playback = current.optJSONObject("playback");
-        if (playback != null && playback.optBoolean("active") && retained != null && retained.optString("url").equals(playback.optString("source"))) {
+        if (playback != null && (playback.optBoolean("active") || playback.optBoolean("ended")) && retained != null && retained.optString("url").equals(playback.optString("source"))) {
             if (retained.optJSONObject("content") != null) put(playback, "content", retained.optJSONObject("content"));
             if (retained.has("nextEpisode")) put(playback, "nextEpisode", retained.opt("nextEpisode"));
+        }
+        if (playback != null) {
+            put(playback, "autoNext", televisionAutoNext()); put(playback, "upNext", televisionUpNext); put(playback, "autoplayed", televisionAutoplayed);
+            JSONObject last = televisionLastInteraction();
+            if (last.length() > 0) put(playback, "lastInteraction", last);
         }
         if (matter != null) put(current, "matter", matter.snapshot());
         return current;
@@ -1134,9 +1322,14 @@ public final class ConnectionService extends Service {
     private void requestTelevision(String method, JSONObject args, Callback callback) {
         if (java.util.Arrays.asList("msx.textPairRequest", "msx.textPairGrant", "msx.typeAddress", "msx.typeBrowserAddress", "msx.launchBrowser").contains(method)) { requestTelevisionText(method, args, callback); return; }
         if (!java.util.Arrays.asList("msx.start", "msx.status", "msx.confirm", "msx.open", "msx.sample", "msx.playPause",
-                "msx.seek", "msx.volume", "msx.subtitle", "msx.stop", "msx.disconnect", "msx.reset", "msx.debugPing", "msx.debugLabel", "msx.reloadReceiver").contains(method)) {
+                "msx.seek", "msx.volume", "msx.subtitle", "msx.stop", "msx.disconnect", "msx.reset", "msx.debugPing", "msx.debugLabel", "msx.reloadReceiver",
+                "msx.display", "msx.rate").contains(method)) {
             reject(callback, "INVALID_REQUEST", "Unknown television control."); return;
         }
+        // A person using the remote resets auto-play's unattended count, as on LUMA Receiver.
+        if (java.util.Arrays.asList("msx.open", "msx.playPause", "msx.seek", "msx.volume", "msx.subtitle", "msx.stop", "msx.display").contains(method)) noteTelevisionInteraction();
+        // The phone keeps the TV's display settings too, so a new page origin or cleared TV storage gets them back.
+        if ("msx.display".equals(method)) rememberTelevisionDisplay(args);
         final boolean debugControl = "msx.debugPing".equals(method) || "msx.debugLabel".equals(method) || "msx.reloadReceiver".equals(method);
         if (debugControl && (args.length() != 0 || !"philips".equals(selectedTarget))) {
             reject(callback, "INVALID_REQUEST", "Select Philips TV and use the fixed receiver control."); return;
@@ -1234,6 +1427,7 @@ public final class ConnectionService extends Service {
     private void updateTelevisionState() {
         JSONObject current = televisionSnapshot(), playback = current.optJSONObject("playback");
         if (watchHistory != null && playback != null && current.optBoolean("connected")) watchHistory.observe("philips", playback);
+        if (playback != null && current.optBoolean("connected")) observeTelevisionPlayback(playback);
         String source = playback != null && playback.optBoolean("active") ? playback.optString("source") : "";
         if (!source.equals(televisionSource)) {
             televisionSource = source;

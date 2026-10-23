@@ -10,9 +10,9 @@ signed with the same production certificate as the phone app.
 - Side-loads SRT/WebVTT subtitles and draws them in the house style: outlined
   text wrapped to the centre half of the screen on a rounded, nearly transparent
   panel. Size and style persist on the projector.
-- Optional picture adjustments (brightness, contrast, gamma). Effects are only
-  enabled when non-default, so the default path stays hardware-direct.
-  Device result: changing them mid-playback showed no visible difference yet.
+- Brightness from −30% to +30% while video remains on the hardware-direct
+  SurfaceView. A translucent dark/light overlay avoids the projector's broken
+  TextureView path; the phone remembers the value per movie or whole series.
 - Records watch progress on the projector itself and syncs it with phones.
 - Shows phone scrub previews (position + the phone's frame) live on screen.
 - Runs a foreground service from boot (and after self-update) so phones can cast
@@ -41,7 +41,7 @@ link-local and loopback peers are served.
 | `player.subtitles`, `player.addSubtitle {track}`, `player.setSubtitle {index\|'off'}` | Same shapes the phone used for Kodi. |
 | `player.audioTracks`, `player.setAudioTrack` | Audio language selection. |
 | `player.scrub {active, positionSeconds, durationSeconds?, image?}` | Mirror a phone scrub (JPEG data URI ≤150 KB). |
-| `display.get` / `display.set` | Caption scale/style and picture adjustments. |
+| `display.get` / `display.set` | Caption scale/style and picture adjustments; writes may carry source/content guards. |
 | `library.pull {since, limit}` / `library.push {records}` | Last-writer-wins sync of progress records. |
 | `volume.get/set/mute`, `app.notice`, `app.show` | Utilities. |
 | `update.status/check/install/skip/setPolicy/installFrom` | Release feed and dev channel. |

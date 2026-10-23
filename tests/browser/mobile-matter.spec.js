@@ -11,6 +11,7 @@ test.beforeAll(async () => {
     ['/', new URL('../../src/mobile/index.html', import.meta.url)],
     ['/app.js', new URL('../../src/mobile/app.js', import.meta.url)],
     ['/handoff/coordinator.mjs', new URL('../../src/handoff/coordinator.mjs', import.meta.url)],
+    ['/handoff/sync.mjs', new URL('../../src/handoff/sync.mjs', import.meta.url)],
   ]);
   server = http.createServer(async (request, response) => {
     const file = files.get(request.url);

@@ -1,5 +1,32 @@
 # Work log
 
+- 2026-10-23 per-title brightness: after the user physically confirmed the
+  SurfaceView overlay is "perfect", brightness was bounded to −30…+30% and
+  changed to 2% steps. Native `app.picturePreferences` keeps one value per movie
+  or series (all episodes share it); each LUMA/Philips cast restores that value
+  with source/content guards, and unseen titles reset to neutral instead of
+  inheriting the previous picture. Node 247, focused LUMA/Philips browser tests,
+  combined mobile browser 97 before the added Philips case, receiver unit/debug
+  build, and phone debug/AndroidTest assembly pass. Signed phone 0.4.11/code 21
+  (9,822,418 bytes, SHA-256 `38f02fdf08d6…`) was installed over USB; signed
+  receiver 0.3.2/code 16 (1,134,598 bytes, SHA-256 `b45d3e642c98…`) was installed
+  at 2026-10-23T13:03:09.817Z and returned brightness 0.
+  [Handoff](session-handoffs/2026-10-23-per-title-brightness.md).
+
+- 2026-10-23 LUMA brightness black-screen fix: both
+  `View.setLayerType(HARDWARE, paint)` and a follow-up
+  `TextureView.setLayerPaint` physically blacked every nonzero value on the
+  Android 9/Amlogic projector. The receiver now keeps the decoder on its single
+  working SurfaceView and applies brightness as a non-interactive light/dark
+  tint in `PlayerView`'s overlay. Receiver unit tests and debug assembly pass. A
+  real paused H.264 frame on the API 36 emulator remained visible from −60% to
+  +60%; centre-crop luma was 101.891 / 111.662 / 124.214 at −10 / 0 / +10%.
+  Final lint still reaches the same 14 existing errors and 11 warnings, first in
+  `Diagnostics.java`. Signed receiver 0.3.2/code 16 (1,134,102 bytes, SHA-256
+  prefix `4908733a0cd1`) was installed at 2026-10-23T12:45:42.383Z and returned
+  healthy/idle with brightness 0. Active-video physical confirmation remains.
+  [Handoff](session-handoffs/2026-10-23-luma-brightness-black-screen.md).
+
 - 2026-10-23 receiver-first cold boot: confirmed the receiver APK already starts
   its sticky foreground control service from `BOOT_COMPLETED` and foregrounds
   playback on `player.open`. Removed the phone's accidental dependency on the
@@ -1001,3 +1028,7 @@
   the catalog, receiver 0.3.1 remembers the last caption language and tries up to
   three same-language files on auto-next. Node 242, browser 159, receiver unit
   tests pass; phone build installed, receiver 0.3.1 built (not yet on projector).
+- 2026-10-23 Philips parity (captions/size/picture/scrub overlay/ended/auto-play
+  natively), Move and Play-on-both with drift control, LUMA brightness via
+  a SurfaceView-safe tint overlay, Library >64-track fix, per-title subtitle
+  memory, indefinite source cache. Receiver 0.3.2. Philips untested physically.

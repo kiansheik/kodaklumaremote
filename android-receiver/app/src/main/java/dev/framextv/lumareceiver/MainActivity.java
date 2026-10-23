@@ -8,6 +8,7 @@ import android.os.SystemClock;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.WindowManager;
+import android.widget.FrameLayout;
 import android.widget.TextView;
 
 
@@ -25,6 +26,7 @@ import java.util.Collections;
 public final class MainActivity extends Activity implements PlaybackController.Ui, Updater.Ui {
     private ReceiverApp app;
     private PlayerView playerView;
+    private View brightnessOverlay;
     private SubtitleOverlay captions;
     private final Player.Listener cueListener = new Player.Listener() {
         @Override public void onCues(CueGroup group) {
@@ -65,6 +67,13 @@ public final class MainActivity extends Activity implements PlaybackController.U
         setContentView(R.layout.main);
         app = ReceiverApp.get(this);
         playerView = findViewById(R.id.player);
+        brightnessOverlay = new View(this);
+        brightnessOverlay.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        brightnessOverlay.setVisibility(View.GONE);
+        FrameLayout playerOverlay = playerView.getOverlayFrameLayout();
+        if (playerOverlay == null) throw new IllegalStateException("Player overlay is unavailable");
+        playerOverlay.addView(brightnessOverlay, new FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
         idle = findViewById(R.id.idle);
         status = findViewById(R.id.idle_status);
         pairingCode = findViewById(R.id.pairing_code);
@@ -157,6 +166,20 @@ public final class MainActivity extends Activity implements PlaybackController.U
 
     @Override public void onDisplayChanged() {
         captions.setStyle(app.display.subtitleScale(), app.display.subtitleBox());
+        float brightness = app.display.brightness();
+        if (brightness == 0f) {
+            brightnessOverlay.setVisibility(View.GONE);
+            brightnessOverlay.setBackgroundColor(android.graphics.Color.TRANSPARENT);
+            return;
+        }
+        // Never move decoded video away from the projector's proven SurfaceView.
+        // A translucent white/black view is composited above that surface and
+        // cannot replace the decoder output with a black TextureView frame.
+        int alpha = Math.round(255f * Math.min(DisplaySettings.MAX_BRIGHTNESS, Math.abs(brightness)));
+        brightnessOverlay.setBackgroundColor(brightness > 0
+            ? android.graphics.Color.argb(alpha, 255, 255, 255)
+            : android.graphics.Color.argb(alpha, 0, 0, 0));
+        brightnessOverlay.setVisibility(View.VISIBLE);
     }
 
     private void render() {

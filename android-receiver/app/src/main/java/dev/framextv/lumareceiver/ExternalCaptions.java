@@ -16,6 +16,9 @@ import java.util.concurrent.TimeUnit;
  */
 final class ExternalCaptions {
     static final int MAX_BYTES = 8 * 1024 * 1024;
+    /** Downloaded caption files, so resuming or replaying a title shows its subtitles at once. */
+    static volatile java.io.File cacheDirectory;
+    static final long CACHE_BYTES = 48L * 1024 * 1024;
     final String url, language, label, mimeType;
     final Map<String, String> headers;
     final boolean selectOnLoad;
@@ -36,6 +39,19 @@ final class ExternalCaptions {
         try {
             String contentType;
             ByteArrayOutputStream body = new ByteArrayOutputStream();
+            java.io.File cached = cacheFile();
+            if (cached != null && cached.isFile()) {
+                byte[] stored = java.nio.file.Files.readAllBytes(cached.toPath());
+                int newline = 0;
+                while (newline < stored.length && stored[newline] != '\n') newline++;
+                if (newline < stored.length) {
+                    cached.setLastModified(System.currentTimeMillis());
+                    contentType = new String(stored, 0, newline, java.nio.charset.StandardCharsets.UTF_8);
+                    body.write(stored, newline + 1, stored.length - newline - 1);
+                    finish(body.toByteArray(), contentType.isEmpty() ? null : contentType);
+                    return;
+                }
+            }
             URL target = new URL(url);
             for (int redirects = 0; ; redirects++) {
                 HttpURLConnection connection = (HttpURLConnection) target.openConnection();
@@ -63,14 +79,51 @@ final class ExternalCaptions {
                     break;
                 } finally { connection.disconnect(); }
             }
-            String hint = mimeType.isEmpty() ? contentType : mimeType + (contentType != null && contentType.contains("charset") ? "; " + contentType : "");
-            cues = CaptionParser.parse(body.toByteArray(), hint, language);
+            finish(body.toByteArray(), contentType);
+            store(body.toByteArray(), contentType);
         } catch (ApiException failure) { error = failure.code; }
         catch (Exception failure) { error = "SUBTITLE_DOWNLOAD"; }
         finally {
             if (error != null) android.util.Log.w("LumaCaptions", "LOAD_FAILED " + error);
             done.countDown();
         }
+    }
+
+    private void finish(byte[] body, String contentType) throws ApiException {
+        String hint = mimeType.isEmpty() ? contentType : mimeType + (contentType != null && contentType.contains("charset") ? "; " + contentType : "");
+        cues = CaptionParser.parse(body, hint, language);
+    }
+
+    private java.io.File cacheFile() {
+        java.io.File directory = cacheDirectory;
+        if (directory == null) return null;
+        try {
+            byte[] digest = java.security.MessageDigest.getInstance("SHA-256").digest(url.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            StringBuilder name = new StringBuilder();
+            for (int i = 0; i < 16; i++) name.append(String.format("%02x", digest[i]));
+            return new java.io.File(directory, name + ".cap");
+        } catch (Exception unavailable) { return null; }
+    }
+
+    /** Parsed files only, newest kept within {@link #CACHE_BYTES}; failures just skip caching. */
+    private void store(byte[] body, String contentType) {
+        java.io.File file = cacheFile();
+        if (file == null || cues == null) return;
+        try {
+            java.io.File directory = file.getParentFile();
+            if (!directory.isDirectory() && !directory.mkdirs()) return;
+            java.io.File temporary = new java.io.File(directory, file.getName() + ".tmp");
+            try (java.io.FileOutputStream out = new java.io.FileOutputStream(temporary)) {
+                out.write((contentType == null ? "" : contentType.replace('\n', ' ')).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                out.write('\n'); out.write(body);
+            }
+            if (!temporary.renameTo(file)) { temporary.delete(); return; }
+            java.io.File[] files = directory.listFiles((dir, name) -> name.endsWith(".cap"));
+            if (files == null) return;
+            java.util.Arrays.sort(files, (a, b) -> Long.compare(b.lastModified(), a.lastModified()));
+            long total = 0;
+            for (java.io.File entry : files) { total += entry.length(); if (total > CACHE_BYTES) entry.delete(); }
+        } catch (Exception ignored) { /* captions still play from memory */ }
     }
 
     String textAt(long positionMs) {

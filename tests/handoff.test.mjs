@@ -1140,8 +1140,13 @@ test('handoff honors caller AbortSignal and snapshots media before any async lau
 test('handoff validates and snapshots declared media, caps tracks, and never surfaces adapter errors', async () => {
   const bad = fixture();
   await assert.rejects(bad.coordinator.start({ ...media([]), url: 'https://user:secret@example.org/video.mp4' }), { code: 'INVALID_MEDIA' });
-  await assert.rejects(bad.coordinator.start(media(Array.from({ length: 65 }, (_, index) => track('en', `track-${index}`)))), { code: 'INVALID_MEDIA' });
   assert.equal(bad.state.calls.length, 0);
+  // A full Library catalog (more than a page lists, or one malformed link) still plays.
+  const many = fixture();
+  const catalog = Array.from({ length: 200 }, (_, index) => track('en', `track-${index}`));
+  catalog.splice(3, 0, { url: 'https://captions.example.org/bad|name.vtt', language: 'en', label: 'Broken' });
+  await many.coordinator.start(media(catalog));
+  assert.equal(many.state.opened, 1);
   const f = fixture({ neverActive: true, open: () => { throw new Error(url); }, coordinator: { limits: { activeMs: 700 } } });
   await assert.rejects(f.coordinator.start(media([])), error => error instanceof HandoffError && error.code === 'VIDEO_TIMEOUT' && !error.message.includes(url) && error.cause === undefined);
   assert.ok(!JSON.stringify(f.state.statuses).includes(url));

@@ -60,7 +60,7 @@ public final class PhilipsTextInstrumentation {
                         if ("activities/browser".equals(path)) {
                             browserCount++;
                             require(!json && user.matches("[a-f0-9]{32}") && "fixture-auth-key".equals(password) && PIN.equals(pin)
-                                    && body.length() == 1 && PhilipsTextController.fixedBrowserSetupUrl(body.getString("url")), "Browser launch changed fixed URL, saved authorization or certificate binding");
+                                    && body.length() == 1 && PhilipsTextController.fixedLauncherUrl(body.getString("url")), "Browser launch changed fixed URL, saved authorization or certificate binding");
                             if (browserError != null) throw new PhilipsTextController.TextException(browserError, true);
                             return new JSONObject();
                         }

@@ -65,7 +65,7 @@ final class PlaybackController implements Player.Listener {
     private Ui ui;
     private long revision, lastStartedAt;
     private String error;
-    private boolean seenPlaying, effectsApplied;
+    private boolean seenPlaying;
 
     private final Runnable progressTick = new Runnable() {
         @Override public void run() {
@@ -160,14 +160,8 @@ final class PlaybackController implements Player.Listener {
         return result;
     }
 
-    /** Main thread: push picture effects to the player and subtitle style to the UI. */
-    void applyDisplay() {
-        if (player != null && (display.pictureAdjusted() || effectsApplied)) {
-            player.setVideoEffects(display.effects());
-            effectsApplied = display.pictureAdjusted();
-        }
-        if (ui != null) ui.onDisplayChanged();
-    }
+    /** Main thread: picture and subtitle style live in the UI (colour matrix, caption overlay). */
+    void applyDisplay() { if (ui != null) ui.onDisplayChanged(); }
 
     void setUi(Ui ui) { this.ui = ui; }
 
@@ -232,6 +226,7 @@ final class PlaybackController implements Player.Listener {
         ExoPlayer exo = player();
         exo.setTrackSelectionParameters(exo.getTrackSelectionParameters().buildUpon()
             .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false).clearOverrides().build());
+        exo.setPlaybackSpeed(1f);
         prepare((long) (request.resumeSeconds * 1000));
         for (MediaRequest.Subtitle subtitle : request.subtitles) addExternal(subtitle);
         exo.setPlayWhenReady(true);
@@ -251,7 +246,6 @@ final class PlaybackController implements Player.Listener {
         MediaItem item = new MediaItem.Builder().setUri(current.url).setMimeType(mime)
             .setMediaMetadata(new MediaMetadata.Builder().setTitle(current.title).build()).build();
         ExoPlayer exo = player();
-        if (display.pictureAdjusted() || effectsApplied) { exo.setVideoEffects(display.effects()); effectsApplied = display.pictureAdjusted(); }
         exo.setMediaSource(new DefaultMediaSourceFactory(http).createMediaSource(item), Math.max(0, positionMs));
         exo.prepare();
     }
@@ -270,6 +264,12 @@ final class PlaybackController implements Player.Listener {
     /** For player.next: the current item may be ended, so only the canonical key is checked. */
     void expectContent(Object key) throws ApiException {
         if (current == null || current.content == null || !current.content.optString("key").equals(key)) throw new ApiException("SOURCE_CHANGED", 409);
+    }
+
+    void setRate(float rate) throws ApiException {
+        if (current == null || player == null) throw new ApiException("NOT_PLAYING", 409);
+        player.setPlaybackSpeed(rate);
+        bump();
     }
 
     void seek(double seconds) throws ApiException {
@@ -427,6 +427,7 @@ final class PlaybackController implements Player.Listener {
             .put("state", error != null ? "error" : state == Player.STATE_BUFFERING ? "buffering" : state == Player.STATE_READY ? "ready"
                 : state == Player.STATE_ENDED ? "ended" : "idle")
             .put("positionSeconds", player.getCurrentPosition() / 1000.0)
+            .put("rate", player.getPlaybackParameters().speed)
             .put("durationSeconds", duration == C.TIME_UNSET ? 0 : duration / 1000.0)
             .put("bufferedSeconds", player.getBufferedPosition() / 1000.0)
             .put("canSeek", player.isCurrentMediaItemSeekable())

@@ -10,7 +10,8 @@
 <body>
   <video id="video" playsinline preload="auto"></video>
   <div id="waiting"><div class="mark">▰</div><h1>LUMA Remote</h1><p id="status">Connecting to your phone…</p><button id="start-playback" type="button" hidden>Start playback</button><button id="tv-open-library" type="button" hidden>Browse movies and series</button><p class="hint">Keep LUMA Remote running on your phone.</p></div>
-  <div id="caption" aria-live="off"></div>
+  <div id="caption" aria-live="off"><span id="caption-text"></span></div>
+  <div id="scrub" hidden><img id="scrub-image" alt="" hidden><div id="scrub-time"></div><div id="scrub-bar"><div id="scrub-fill"></div></div></div>
   <div id="notice" hidden></div>
   <section id="tv-controls" aria-label="TV playback controls" hidden>
     <div class="tv-control-heading"><h2 id="tv-control-title">Playback</h2><span id="tv-control-time"></span></div>

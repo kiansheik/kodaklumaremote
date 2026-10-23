@@ -47,6 +47,7 @@ public final class ReceiverApp extends Application {
         updater.attach(null, playback);
         server = new ControlServer(this);
         thumbnails = new ThumbnailStore(this);
+        ExternalCaptions.cacheDirectory = new java.io.File(getCacheDir(), "captions");
         diagnostics = new Diagnostics(this);
         diagnostics.start(playback);
         startReceiverService(this);

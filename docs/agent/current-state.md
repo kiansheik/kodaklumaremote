@@ -1,5 +1,43 @@
 # Current state
 
+## Unreleased 0.4.12 / receiver 0.3.2: Philips parity, two-screen move/sync, brightness
+
+- Philips TV page (`src/msx/`) now matches LUMA Receiver: LUMA caption style
+  (centre 50 %, translucent rounded panel) with phone A−/A+ size (`display`
+  command, kept in TV localStorage and re-applied by the phone from its own
+  copy), CSS brightness/contrast, `rate`, `notice`, `ended` state, and a scrub
+  overlay fed by a `scrub` long poll on `MsxServer` (frame from the phone's
+  `ThumbnailStrip`). Worker pool is now 4 fixed threads.
+- Philips auto-play runs natively in `ConnectionService` (works with the phone
+  locked): 10 s TV notice, Back on the TV or any phone command cancels, stops
+  after three unattended episodes, keeps/remembers the caption language, uses
+  `MsxServer.playCatalog` (same path as the TV Library). Setting `msx.settings`.
+- More: Brightness (LUMA translucent light/dark tint above the always-direct
+  SurfaceView — Media3 GL effects showed no change and both TextureView paint
+  variants blacked the physical projector; Philips CSS filter). The user
+  physically confirmed the final overlay is "perfect". Both targets now use
+  gradual 2% steps bounded to −30…+30%; `app.picturePreferences` stores one
+  value per movie or series and guarded post-cast restore shares it across all
+  episodes. An unseen title starts at neutral. The signed local phone build
+  0.4.11/code 21 and receiver 0.3.2/code 16 containing this follow-up are
+  installed; device behavior is not yet checked. Also **Move to <other screen>**
+  and **Play on both screens**
+  (`src/handoff/sync.mjs`: speed nudges ≤8 % under 2 s, seek above; play/pause
+  and seeks mirrored). Sync runs in the phone page, so it pauses when the phone
+  sleeps; moves/sync need catalog titles (`app.chooseCatalog`).
+- Library/auto-next casts no longer fail with more than 64 subtitle tracks or one
+  malformed link (coordinator keeps the first 128 usable tracks).
+- Resume: resolved sources cached indefinitely (60 titles) behind a 1-byte probe;
+  per-title subtitle language stored natively (`app.captionPreferences`) and
+  re-selected after every cast; picture preference stored the same way; receiver
+  caches caption files (48 MB).
+- Not physically verified: anything Philips (TV unavailable), move/sync, and
+  the new per-title restore/bounds on devices. The underlying SurfaceView
+  brightness rendering is now user-confirmed on the Android 9/Amlogic projector.
+  API 36 emulator evidence before the final bound showed monotonic nonblack
+  composition through the full range. GitHub Pages hosting of the TV page is
+  blocked by mixed content (HTTPS page → HTTP LAN phone); only a launcher is viable.
+
 ## Unreleased 0.4.12 / receiver 0.3.1: remote layout, fast Resume, caption language on auto-next
 
 - Remote tab order: player card (title/status + power, seek bar with undo/redo

@@ -12,8 +12,8 @@ android {
         // userspace. Keep the APK free of native code so any ABI installs it.
         minSdk 23
         targetSdk 35
-        versionCode 15
-        versionName '0.3.1'
+        versionCode 16
+        versionName '0.3.2'
     }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
@@ -54,7 +54,6 @@ dependencies {
     implementation "androidx.media3:media3-exoplayer-hls:$media3"
     implementation "androidx.media3:media3-exoplayer-dash:$media3"
     implementation "androidx.media3:media3-ui:$media3"
-    implementation "androidx.media3:media3-effect:$media3"
     testImplementation 'junit:junit:4.13.2'
     testImplementation 'org.json:json:20240303'
 }

@@ -31,6 +31,7 @@ test.beforeAll(async () => {
     ['/', new URL('../../src/mobile/index.html', import.meta.url)],
     ['/app.js', new URL('../../src/mobile/app.js', import.meta.url)],
     ['/handoff/coordinator.mjs', new URL('../../src/handoff/coordinator.mjs', import.meta.url)],
+    ['/handoff/sync.mjs', new URL('../../src/handoff/sync.mjs', import.meta.url)],
   ]);
   server = http.createServer(async (request, response) => {
     const file = files.get(request.url);
@@ -62,6 +63,7 @@ async function openApp(page, { selectedTarget = 'luma', tvConnected = true, text
         playback: { active: true, sourceUrl: lumaMedia.url, playing: true, positionSeconds: 12, durationSeconds: 600, canSeek: true },
         remote: { media: lumaMedia, tracks: [{ index: 0, language: 'pt-BR', label: 'LUMA Portuguese' }], catalog: [], selectedIndex: 0, subtitlesEnabled: true }, receivers: { philips: tv },
       };
+      if (method === 'app.picturePreferences') { window.__picturePreferences = params.value || {}; return { saved: true }; }
       if (method === 'app.selectTarget') return { selectedTarget: params.target, receivers: { philips: tv } };
       if (method === 'app.beginHandoff') return { sourceToken: 'attempt-tv' };
       if (method === 'watch.history') return {version:1,items:window.__historyItems||[]};
@@ -123,6 +125,9 @@ async function openApp(page, { selectedTarget = 'luma', tvConnected = true, text
       if (method === 'receiver.seek') {window.__lumaPosition=params.position;return {accepted:true};}
       if (method === 'receiver.pause') return { accepted: true };
       if (method === 'receiver.scrub') return { accepted: true };
+      if (method === 'msx.scrub') return { accepted: true };
+      if (method === 'msx.settings') return { autoNext: params.autoNext === true };
+      if (method === 'msx.display') { tv.playback.display = { subtitleScale: 1, brightness: 1, contrast: 1, ...tv.playback.display, ...params }; return tv; }
       if (method === 'receiver.display') return { subtitleScale: 1 };
       if (method === 'luma.key') return { accepted: true };
       if (method === 'receiver.status') return { active: true, sourceUrl: window.__lumaSource||lumaMedia.url, playing: !!window.__lumaSource, positionSeconds: window.__lumaPosition??12, durationSeconds: 600, canSeek: true };
@@ -908,7 +913,7 @@ test('native target restoration waits until an in-flight command updates its ori
   await expect(page.locator('#play-toggle')).toHaveText('Resume');
 });
 
-test('Philips scrubbing and subtitles never mirror to or configure LUMA Receiver', async ({ page }) => {
+test('Philips scrubbing and subtitle size go to the TV and never mirror to or configure LUMA Receiver', async ({ page }) => {
   await openApp(page, { selectedTarget: 'philips' });
   const range = page.getByLabel('Playback position');
   await expect(range).toBeEnabled();
@@ -917,8 +922,11 @@ test('Philips scrubbing and subtitles never mirror to or configure LUMA Receiver
   await expect(page.locator('#scrub-preview-time')).toHaveText(/^2:00 \/ /);
   await range.evaluate(element => element.dispatchEvent(new Event('pointerup', { bubbles: true })));
   await expect(page.locator('#scrub-preview')).toBeHidden();
+  expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'msx.scrub').map(call => call.params.active))).toContain(true);
   await page.locator('#show-subtitles').click();
-  await expect(page.locator('#subtitle-size')).toBeHidden();
+  await expect(page.locator('#subtitle-size')).toBeVisible();
+  await page.getByRole('button', { name: 'Larger subtitles', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.__calls.find(call => call.method === 'msx.display')?.params)).toEqual({ subtitleScale: 1.1 });
   await page.locator('#close-sheet').click();
   expect(await page.evaluate(() => window.__calls.filter(call => ['receiver.scrub', 'receiver.display'].includes(call.method)))).toEqual([]);
   // The same gesture on LUMA does mirror, so the absence above is target-specific.
@@ -926,6 +934,23 @@ test('Philips scrubbing and subtitles never mirror to or configure LUMA Receiver
   await expect(page.locator('#target-luma')).toHaveAttribute('aria-pressed', 'true');
   await range.evaluate(element => { element.value = '60'; element.dispatchEvent(new Event('input', { bubbles: true })); });
   await expect.poll(() => page.evaluate(() => window.__calls.filter(call => call.method === 'receiver.scrub').map(call => call.params))).toEqual([{ active: true, positionSeconds: 60, durationSeconds: 600 }]);
+});
+
+test('Philips brightness uses the same 2% series preference with a guarded display command', async ({ page }) => {
+  const episode1 = {key:'framextv:tv:84:1:1',kind:'tv',contentId:'84',season:1,episode:1,watchUrl:'https://framextv.cc/watch/84/1/1',title:'TV series · S1 E1'};
+  const episode2 = {...episode1,key:'framextv:tv:84:1:2',episode:2,watchUrl:'https://framextv.cc/watch/84/1/2',title:'TV series · S1 E2'};
+  await openApp(page, { selectedTarget: 'philips' });
+  await page.evaluate(({media,content}) => window.LumaApp.onCapturedMedia({...media,content}), {media:tvMedia,content:episode1});
+  await expect(page.locator('#message')).toContainText('Ready on Philips TV');
+  await expect.poll(() => page.evaluate(() => window.__calls.filter(call => call.method === 'msx.display').at(-1)?.params)).toEqual({ brightness: 1, expectedSourceUrl: tvMedia.url });
+  await page.getByRole('button', { name: 'More', exact: true }).click();
+  await page.getByRole('button', { name: 'Brighter', exact: true }).click();
+  await expect(page.locator('#brightness-value')).toHaveText('Brightness +2%');
+  await expect.poll(() => page.evaluate(() => window.__picturePreferences?.['framextv:tv:84']?.brightness)).toBe(0.02);
+  await page.getByRole('button', { name: 'Done', exact: true }).click();
+  const secondUrl = 'https://media.example.org/philips-2.m3u8';
+  await page.evaluate(({media,content,url}) => window.LumaApp.onCapturedMedia({...media,url,sourceToken:'capture-tv-2',content}), {media:tvMedia,content:episode2,url:secondUrl});
+  await expect.poll(() => page.evaluate(() => window.__calls.filter(call => call.method === 'msx.display').at(-1)?.params)).toEqual({ brightness: 1.02, expectedSourceUrl: secondUrl });
 });
 
 test('Philips setup, approval and remote panels fit a narrow phone without scrolling', async ({ page }) => {

@@ -5,7 +5,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { MAX_MANIFEST_BYTES, RELEASE_REPOSITORY, receiverAssetName, validateReceiverManifest, validateUpdateManifest } from '../site/update-manifest.js';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
-const pageFiles = ['index.html', 'styles.css', 'app.js', 'update-manifest.js', 'projector.svg'];
+const pageFiles = ['index.html', 'styles.css', 'app.js', 'update-manifest.js', 'projector.svg', 'tv.html'];
 
 export function validateRelease(manifest, release) {
   if (!release || release.draft !== false || release.prerelease !== false || release.tag_name !== `v${manifest.versionName}` || release.html_url !== `https://github.com/${RELEASE_REPOSITORY}/releases/tag/v${manifest.versionName}` || !Array.isArray(release.assets)) throw new Error('A matching published stable release is required.');

@@ -81,7 +81,8 @@
     function state() {
       return {
         active: active && !video.ended && !video.error,
-        source: source, title: title, paused: !!video.paused,
+        ended: !!source && !!video.ended && !video.error,
+        source: source, title: title, paused: !!video.paused, rate: number(video.playbackRate, 1),
         positionSeconds: Math.max(0, number(video.currentTime, 0)), durationSeconds: Math.max(0, number(video.duration, 0)),
         canSeek: !!(active && number(video.duration, 0) > 0 && video.seekable && video.seekable.length),
         volume: {current: Math.round(number(video.volume, 1) * 100), max: 100},
@@ -106,6 +107,7 @@
       video.removeAttribute('src');
       video.load();
       active = false; selectedIndex = -1; subtitlesEnabled = false; subtitleError = null; subtitleEpoch += 1; cues = []; subtitleCache = {}; onCaption('');
+      try { video.playbackRate = 1; } catch (_) {}
     }
     function playStarted(expected) {
       return new Promise(function (resolve, reject) {
@@ -201,6 +203,18 @@
           }
           return selectSubtitle(params.index, params.enabled !== false, epoch);
         }
+        if (method === 'display' || method === 'notice') {
+          // Presentation only (caption size, picture, on-screen notices); the page applies it.
+          var handler = method === 'display' ? options.onDisplay : options.onNotice;
+          if (typeof handler !== 'function') throw failure('UNKNOWN_COMMAND');
+          handler(params); changed(); return Promise.resolve();
+        }
+        if (method === 'rate') {
+          // Small speed nudges keep two screens in step without a visible seek.
+          var rate = number(params.value, -1);
+          if (rate < 0.5 || rate > 2) throw failure('INVALID_RATE');
+          video.playbackRate = rate; changed(); return Promise.resolve();
+        }
         if (method === 'volume') {
           var volume = number(params.value, -1);
           if (volume < 0 || volume > 100) throw failure('INVALID_VOLUME');
@@ -227,7 +241,7 @@
     }
     video.addEventListener('error', function () { active = false; mediaError = 'MEDIA_FAILED'; rejectStart(mediaError); changed(); });
     video.addEventListener('ended', function () { active = false; render(); changed(); });
-    ['playing', 'pause', 'seeked', 'durationchange', 'volumechange'].forEach(function (event) { video.addEventListener(event, changed); });
+    ['playing', 'pause', 'seeked', 'durationchange', 'volumechange', 'ratechange'].forEach(function (event) { video.addEventListener(event, changed); });
     video.addEventListener('timeupdate', render);
     return {command: command, state: state, render: render};
   }

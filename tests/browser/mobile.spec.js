@@ -22,6 +22,7 @@ test.beforeAll(async () => {
     ['/', new URL('../../src/mobile/index.html', import.meta.url)],
     ['/app.js', new URL('../../src/mobile/app.js', import.meta.url)],
     ['/handoff/coordinator.mjs', new URL('../../src/handoff/coordinator.mjs', import.meta.url)],
+    ['/handoff/sync.mjs', new URL('../../src/handoff/sync.mjs', import.meta.url)],
   ]);
   server = http.createServer(async (request, response) => {
     const file = paths.get(request.url);
@@ -60,6 +61,7 @@ async function openApp(page, initialSnapshot = null) {
       switch (method) {
         case 'app.ready': return { browserUrl: 'https://framextv.xyz/watch/284833/1/1', ...initialSnapshot };
         case 'app.seekHistory': if (params.value) { window.__seekHistory = params.value; return { saved: true }; } return { value: window.__seekHistory || {} };
+        case 'app.picturePreferences': if (params.value) { window.__picturePreferences = params.value; return { saved: true }; } return { value: window.__picturePreferences || {} };
         case 'app.browse': case 'app.handoffStatus': case 'app.checkUpdates': return { accepted: true };
         case 'app.handoffReady': case 'app.rememberRemote': receiver.rememberedRemote = params.remote; return { accepted: true };
         case 'app.settings.rescan': return receiver.rescanAutoConnect ? { connected: true, name: 'Other LUMA', devices: [{ host: '192.168.1.51', name: 'Other LUMA', port: 8121 }] } : { connection: { connected: false, configured: false }, devices: [{ host: '192.168.1.51', name: 'Other LUMA', port: 8121 }] };
@@ -73,7 +75,7 @@ async function openApp(page, initialSnapshot = null) {
         case 'device.disconnect': return { connected: false };
         case 'receiver.pairBegin': return { pairingId: `pairing-${++receiver.pairings}`, expiresInSeconds: 120 };
         case 'receiver.pairComplete': receiver.paired = true; return { paired: true, name: 'LUMA Receiver' };
-        case 'receiver.display': if (params.subtitleScale !== undefined) receiver.subtitleScale = params.subtitleScale; return { subtitleScale: receiver.subtitleScale };
+        case 'receiver.display': if (params.subtitleScale !== undefined) receiver.subtitleScale = params.subtitleScale; if (params.brightness !== undefined) receiver.brightness = params.brightness; return { subtitleScale: receiver.subtitleScale, brightness: receiver.brightness ?? 0 };
         case 'receiver.scrub': return { accepted: true };
         case 'luma.launchReceiver': receiver.running = true; return { accepted: true };
         case 'luma.key': case 'luma.launchApp': return { accepted: true };
@@ -591,6 +593,45 @@ test('scrubbing mirrors the latest position (never the frame) to LUMA Receiver a
   await range.evaluate(element => element.dispatchEvent(new Event('change', {bubbles:true})));
   await expect.poll(async () => (await scrubs()).at(-1)).toEqual({ active: false });
   await expect.poll(() => page.evaluate(() => window.__calls.filter(call => call.method === 'receiver.seek').map(call => call.params.position))).toEqual([90]);
+});
+
+test('brightness uses 2% steps within ±30% and follows a series across episodes', async ({ page }) => {
+  const episode1 = {key:'framextv:tv:284833:1:1',kind:'tv',contentId:'284833',season:1,episode:1,watchUrl:'https://framextv.cc/watch/284833/1/1',title:'Household · S1 E1'};
+  const episode2 = {...episode1,key:'framextv:tv:284833:1:2',episode:2,watchUrl:'https://framextv.cc/watch/284833/1/2',title:'Household · S1 E2'};
+  const movie = {key:'framextv:movie:42',kind:'movie',contentId:'42',season:null,episode:null,watchUrl:'https://framextv.cc/watch/42',title:'Another title'};
+  await openApp(page, { picturePreferences: { 'framextv:tv:284833': { brightness: 0.24, at: 1 } } }); await setup(page);
+  await page.evaluate(({media,content}) => window.LumaApp.onCapturedMedia({...media,content}), {media,content:episode1});
+  await expect(page.locator('#message')).toHaveText('Video is playing. Choose a language in Subtitles.');
+  await expect.poll(() => page.evaluate(() => window.__receiver.brightness)).toBe(0.24);
+  await page.getByRole('button', { name: 'More', exact: true }).click();
+  await expect(page.locator('#brightness-value')).toHaveText('Brightness +24%');
+  await page.getByRole('button', { name: 'Brighter', exact: true }).click();
+  await expect(page.locator('#brightness-value')).toHaveText('Brightness +26%');
+  await page.getByRole('button', { name: 'Brighter', exact: true }).click();
+  await page.getByRole('button', { name: 'Brighter', exact: true }).click();
+  await expect(page.locator('#brightness-value')).toHaveText('Brightness +30%');
+  await expect(page.getByRole('button', { name: 'Brighter', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: 'Darker', exact: true }).click();
+  await expect(page.locator('#brightness-value')).toHaveText('Brightness +28%');
+  await expect.poll(() => page.evaluate(() => window.__picturePreferences?.['framextv:tv:284833']?.brightness)).toBe(0.28);
+  await page.getByRole('button', { name: 'Done', exact: true }).click();
+
+  // A later episode uses the series-level value; an unseen movie starts neutral.
+  await page.evaluate(({media,content}) => { window.__receiver.brightness = 0; window.LumaApp.onCapturedMedia({...media,url:'https://media.example.org/episode-2.m3u8',sourceToken:'capture-two',content}); }, {media,content:episode2});
+  await expect.poll(() => page.evaluate(() => window.__receiver.brightness)).toBe(0.28);
+  await page.evaluate(() => { window.__receiver.brightness = -0.28; });
+  await page.getByRole('button', { name: 'More', exact: true }).click();
+  await expect(page.locator('#brightness-value')).toHaveText('Brightness -28%');
+  await page.getByRole('button', { name: 'Darker', exact: true }).click();
+  await expect(page.locator('#brightness-value')).toHaveText('Brightness -30%');
+  await expect(page.getByRole('button', { name: 'Darker', exact: true })).toBeDisabled();
+  await expect.poll(() => page.evaluate(() => window.__picturePreferences?.['framextv:tv:284833']?.brightness)).toBe(-0.3);
+  await page.getByRole('button', { name: 'Done', exact: true }).click();
+  await page.evaluate(({media,content}) => { window.__receiver.brightness = 0.2; window.LumaApp.onCapturedMedia({...media,url:'https://media.example.org/movie.m3u8',sourceToken:'capture-movie',content}); }, {media,content:movie});
+  await expect.poll(() => page.evaluate(() => window.__receiver.brightness)).toBe(0);
+  // Move and Play on both need a second connected screen.
+  await expect(page.locator('#move-playback')).toBeHidden();
+  await expect(page.locator('#sync-playback')).toBeHidden();
 });
 
 test('subtitle size is read from LUMA Receiver and stepped within bounds from the Subtitles sheet', async ({ page }) => {
