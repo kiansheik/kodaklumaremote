@@ -1,6 +1,6 @@
 # Current state
 
-## Philips typing rebind and one-speed-dial setup candidate
+## Released 0.4.14: Philips typing rebind and one-speed-dial setup
 
 - A saved JointSPACE typing credential no longer dead-ends after the Matter TV
   resolves to a different private address. The same-address request remains a
@@ -12,12 +12,15 @@
   its phone field and now accepts the exact native-owned direct receiver URL as
   well as an IP. **Autofill this phone on LUMA page** types that current URL and
   sends Matter Enter/Go. Direct browser-address typing remains the fallback.
-- Verified locally: Node 247/247; focused launcher/setup browser 10/10; full
-  browser 159/161 before two obsolete wording assertions were updated, then
-  both corrected cases passed; Android app and AndroidTest Java compilation.
-  The Android instrumentation source covers rebind/rollback but was only
-  compiled because no emulator is connected. Real TV focus, typing, Go and
-  speed-dial launch remain physical acceptance checks.
+- Guarded release verification passed Node 247/247 and browser 161/161; Android
+  app and AndroidTest Java compilation also passed. Release 0.4.14/code 24 was
+  published from `aec4bb4`; Pages commit `8e1ce499` built and the live launcher
+  plus update feed were verified. The signed 9,821,742-byte APK has SHA-256
+  `02d15163f0f64128f5b43e35cd32d5619fd41e6eea68ca1e0db3f685b9be9ad1`;
+  it installed in place over wireless ADB and cold-launched on the Samsung. The
+  Android instrumentation source covers rebind/rollback but was only compiled
+  because no emulator is connected. Real TV focus, typing, Go and speed-dial
+  launch remain physical acceptance checks.
 
 ## Released 0.4.13: Philips browser-only receiver setup
 

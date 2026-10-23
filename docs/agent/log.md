@@ -6,9 +6,12 @@
   retained until grant success. The phone now instructs the user to keep the
   stable LUMA page as the TV Internet browser's only speed dial and can type its
   exact current direct receiver URL into that page's auto-focused field. The
-  direct browser URL remains a fallback. Node 247, focused browser 10 and the
-  two corrected full-suite wording/layout cases pass; Android app and
-  AndroidTest sources compile. Real Philips behavior remains unverified.
+  direct browser URL remains a fallback. The guarded release passed Node
+  247/247 and browser 161/161, then published 0.4.14/code 24 from `aec4bb4` and
+  Pages `8e1ce499`; the live launcher/feed were verified. Signed APK 9,821,742
+  bytes, SHA-256 `02d15163f0f64128f5b43e35cd32d5619fd41e6eea68ca1e0db3f685b9be9ad1`,
+  installed in place and cold-launched on the Samsung. Android app/AndroidTest
+  sources compile; real Philips behavior remains unverified.
   [Handoff](session-handoffs/2026-10-23-philips-typing-rebind-speed-dial.md).
 
 - 2026-10-23 Philips browser-only setup: disconnected video setup now says

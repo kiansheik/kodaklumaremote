@@ -28,6 +28,8 @@ whose phone field the app can fill automatically.
   `npm run test:browser`
 - Offline Gradle app and AndroidTest Java compilation
 - Read-only ADB package/activity/UI inspection of the installed Samsung app
+- Guarded `make deploy-gh-pages`, GitHub release/Pages/live-feed verification,
+  wireless `adb install -r`, package inspection and cold Activity launch
 
 ## What worked
 
@@ -38,10 +40,18 @@ whose phone field the app can fill automatically.
 - The fixed launcher focuses its field and accepts the exact direct receiver URL
   typed by the native app, including a non-default valid port, while retaining
   IP-only entry and remembered-phone behavior.
-- Node passed 247/247. Focused browser coverage passed 10/10. The full browser
-  run passed 159/161 and exposed only two obsolete old-wording assertions; both
-  updated cases then passed, including narrow-phone fit. Android app and
-  AndroidTest Java sources compile.
+- Node passed 247/247. Focused browser coverage passed 10/10. The pre-release
+  full browser run exposed only two obsolete old-wording assertions; both
+  updated cases passed, including narrow-phone fit. The guarded release then
+  passed Node 247/247 and browser 161/161. Android app and AndroidTest Java
+  sources compile.
+- Release 0.4.14/code 24 was published from source `aec4bb4`; Pages commit
+  `8e1ce499` built successfully, and the live custom-domain launcher and update
+  feed expose the new behavior/version. The exact signed phone APK is 9,821,742
+  bytes with SHA-256
+  `02d15163f0f64128f5b43e35cd32d5619fd41e6eea68ca1e0db3f685b9be9ad1`.
+  It installed in place over wireless ADB and cold-launched on the Samsung as
+  0.4.14/code 24.
 
 ## What failed
 
@@ -49,7 +59,7 @@ whose phone field the app can fill automatically.
   its native platform library; the authorized runs worked.
 - No emulator is connected, so the compiled rebind instrumentation did not run.
 - The real Philips has not yet established page focus, typed URL submission, or
-  automatic speed-dial launch for this candidate.
+  automatic speed-dial launch for this release.
 
 ## Remaining questions
 
