@@ -9,13 +9,13 @@
   for the phone's final IP number, remembers it, probes/auto-opens one phone and
   shows a chooser for several. Old fragments and `/msx/connect.html` are
   compatibility-only. Node 247, browser 158, focused receiver 61, focused
-  release/deploy 15, and Android app/AndroidTest Java compilation pass. A signed
-  same-version 0.4.12/code 22 APK was previously rebuilt and installed
-  in place on the USB-connected Samsung (`adb install -r` Success); its cold
-  `MainActivity` launch succeeded. Artifact is 9,821,230 bytes, SHA-256
-  `aead10c90f1d1a76bb4d29e2e9ff3281804dc16d17238a6cef9631ea817224bf`.
-  No emulator or Philips TV flow was tested; the final page/Enter follow-up is
-  not yet installed or deployed.
+  release/deploy 15, and Android app/AndroidTest Java compilation pass. Guarded
+  release 0.4.13/code 23 was published from `6e4ca1e`; Pages `6a20f13` completed
+  and the custom domain was verified with the new TV UI and manifest. Signed APK
+  9,821,506 bytes, SHA-256
+  `4aacc6a636412fc880e67100f526fab5710ed84b01fa7b26ed753bf59343d479`,
+  was installed in place on the Samsung over wireless ADB and cold-launched.
+  No emulator or real Philips TV flow was tested.
   [Handoff](session-handoffs/2026-10-23-philips-browser-only-setup.md).
 
 - 2026-10-23 release 0.4.12 and TV launcher: explicitly reviewed/staged the new

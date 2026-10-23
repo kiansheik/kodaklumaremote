@@ -36,6 +36,8 @@ first-run addressing on the fixed page, and removes Media Station X from the vis
 - `adb devices -l`
 - Signed offline `:app:assembleRelease`, `adb install -r`, package inspection,
   and cold `MainActivity` launch on the USB-connected Samsung
+- `caffeinate -i make deploy-gh-pages`, GitHub Pages build status/API checks,
+  live custom-domain fetches, then 0.4.13 wireless-ADB install and cold launch
 - Targeted `rg`, `sed`, `git diff`, and `git status` inspection
 
 ## What worked
@@ -46,6 +48,11 @@ first-run addressing on the fixed page, and removes Media Station X from the vis
 - Signed 0.4.12/code 22 APK installed in place successfully and cold-launched.
   It is 9,821,230 bytes with SHA-256
   `aead10c90f1d1a76bb4d29e2e9ff3281804dc16d17238a6cef9631ea817224bf`.
+- Guarded release published 0.4.13/code 23 from source `6e4ca1e`; Pages commit
+  `6a20f13` built successfully and the live custom domain serves the new TV UI
+  and manifest. The signed APK is 9,821,506 bytes with SHA-256
+  `4aacc6a636412fc880e67100f526fab5710ed84b01fa7b26ed753bf59343d479`;
+  it installed in place over wireless ADB and cold-launched on the Samsung.
 - Disconnected action routes to setup. Stable and direct values are owned and
   validated natively; first-use text permission and Matter Enter/Go are part of
   the same action. The stable page infers the local prefix when WebRTC exposes
@@ -66,9 +73,10 @@ first-run addressing on the fixed page, and removes Media Station X from the vis
 - Confirm whether connected-state **Open TV receiver** can foreground the TV
   browser on this firmware; prior `activities/browser` acceptance did not visibly
   navigate, and no second network-accessible launch API was found.
-- The phone APK is installed; no Pages/release deployment was made.
+- Phone 0.4.13 is installed and Pages/release deployment is live. Real Philips
+  browser acceptance remains unverified.
 
 ## Suggested next prompt
 
-Deploy release 0.4.13, install it on the phone, then walk through stable and
-direct Philips browser setup on the real TV.
+Walk through stable and direct Philips browser setup on the real TV, including
+automatic Matter Enter/Go and first-run subnet inference.

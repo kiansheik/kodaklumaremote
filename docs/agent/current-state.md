@@ -1,6 +1,6 @@
 # Current state
 
-## Unreleased 0.4.13: Philips browser-only receiver setup
+## Released 0.4.13: Philips browser-only receiver setup
 
 - When the Philips receiver is disconnected, More now says **Set up TV
   receiver** and opens setup instead of sending the known-failing browser launch
@@ -26,13 +26,12 @@
 - Verified locally: Node 247/247, browser 158/158, focused release/deploy 15/15,
   focused new setup 8/8, receiver Node 61/61, Android app and AndroidTest Java
   compilation, and JS syntax. No emulator was connected, so instrumentation was
-  not run. A same-version signed 0.4.12/code 22 APK was rebuilt from the current
-  working tree and installed in place on the physical Samsung with saved app
-  data preserved by `adb install -r`; Android cold-launched `MainActivity`
-  successfully. APK: 9,821,230 bytes, SHA-256
-  `aead10c90f1d1a76bb4d29e2e9ff3281804dc16d17238a6cef9631ea817224bf`.
-  The real Philips flow remains untested. The later page/Enter changes have not
-  yet been installed on the phone or deployed.
+  not run. The guarded release published source commit `6e4ca1e`, GitHub release
+  `v0.4.13`, and Pages commit `6a20f13`; the live custom-domain page contains the
+  new first-run UI and manifest 0.4.13/code 23. Signed APK 9,821,506 bytes,
+  SHA-256 `4aacc6a636412fc880e67100f526fab5710ed84b01fa7b26ed753bf59343d479`,
+  was installed in place over wireless ADB and cold-launched successfully on the
+  Samsung. The real Philips flow remains untested.
 
 ## Released 0.4.12 / receiver 0.3.2: Philips parity, two-screen move/sync, brightness
 
