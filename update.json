@@ -1,12 +1,12 @@
 {
   "schemaVersion": 1,
   "packageName": "dev.framextv.lumaremote",
-  "versionName": "0.4.15",
-  "versionCode": 25,
+  "versionName": "0.4.16",
+  "versionCode": 26,
   "minSdk": 24,
-  "apkUrl": "https://github.com/kiansheik/kodaklumaremote/releases/download/v0.4.15/luma-remote-0.4.15.apk",
-  "sha256": "143d996ac1b2d317521094aff5922dc55596d0b50d84bdeeccf643ba8a9df132",
+  "apkUrl": "https://github.com/kiansheik/kodaklumaremote/releases/download/v0.4.16/luma-remote-0.4.16.apk",
+  "sha256": "54406ba6220343b273e8d764d86e11d7cf42e91b36208b214de4230226a94774",
   "sizeBytes": 9821746,
-  "releasedAt": "2026-10-23T17:16:50.225Z",
-  "notes": "LUMA Remote 0.4.15\n\nThe Philips LUMA speed-dial page now starts with a blank phone field and accepts only a private IP address. Autofill this phone types only the phone's current private IP, without the protocol, port or receiver path, then presses Go.\n\nThe complete direct receiver URL remains available only as the separate browser-address fallback.\n"
+  "releasedAt": "2026-10-23T17:24:45.036Z",
+  "notes": "LUMA Remote 0.4.16\n\nFixes a white screen after Philips direct navigation when the TV's network address changed. Before IP autofill, the app now safely moves the saved browser-receiver approval to the current authenticated Matter TV address while preserving the TV's saved receiver identity.\n\nThe TV launcher continues to accept only the phone's private IP address, and an inconclusive browser probe no longer claims that the phone failed to answer.\n"
 }
