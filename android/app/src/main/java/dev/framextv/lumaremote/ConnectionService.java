@@ -1275,7 +1275,9 @@ public final class ConnectionService extends Service {
     private void cancelTelevisionText() { textGeneration++; if (televisionText != null) televisionText.cancel(); }
     private void requestTelevisionText(String method, JSONObject args, Callback callback) {
         boolean grant = "msx.textPairGrant".equals(method);
-        if (!"philips".equals(selectedTarget) || (grant ? args.length() != 1 || !(args.opt("pin") instanceof String) || !args.optString("pin").matches("[0-9]{4}") : args.length() != 0)) {
+        boolean browserAddress = "msx.typeBrowserAddress".equals(method);
+        boolean validBrowserAddress = browserAddress && args.length() == 1 && ("stable".equals(args.optString("address")) || "direct".equals(args.optString("address")));
+        if (!"philips".equals(selectedTarget) || (grant ? args.length() != 1 || !(args.opt("pin") instanceof String) || !args.optString("pin").matches("[0-9]{4}") : browserAddress ? !validBrowserAddress : args.length() != 0)) {
             reject(callback, grant ? "TEXT_INVALID_PIN" : "TEXT_INVALID_INPUT", "Check the TV text setup details."); return;
         }
         if (textRequestPending) { reject(callback, "TEXT_BUSY", "Wait for the current text request."); return; }
@@ -1296,7 +1298,7 @@ public final class ConnectionService extends Service {
                             if ("msx.textPairRequest".equals(method)) result = televisionText.pairRequest(host);
                             else if (grant) televisionText.pairGrant(host, args.optString("pin"));
                             else if ("msx.launchBrowser".equals(method)) result = televisionText.launchBrowser(host, television.status().optString("startupUrl"));
-                            else if ("msx.typeBrowserAddress".equals(method)) result = televisionText.typeBrowserAddress(host, television.status().optString("startupUrl"));
+                            else if ("msx.typeBrowserAddress".equals(method)) result = televisionText.typeBrowserAddress(host, television.status().optString("startupUrl"), args.optString("address"));
                             else result = televisionText.typeAddress(host, television.status().optString("startupUrl"));
                         } catch (PhilipsTextController.TextException failure) { error = failure.code; }
                         catch (Exception invalid) { error = "TEXT_REJECTED"; }

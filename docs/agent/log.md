@@ -1,5 +1,23 @@
 # Work log
 
+- 2026-10-23 Philips browser-only setup: disconnected video setup now says
+  **Set up TV receiver** rather than attempting the failing native launch. The
+  visible Media Station X path was removed. One **Type and open selected
+  address** action starts the listener, obtains Philips text permission if
+  necessary, types a native-owned stable or direct URL, and sends Matter
+  Enter/Go. The stable TV page infers the local prefix when available, asks only
+  for the phone's final IP number, remembers it, probes/auto-opens one phone and
+  shows a chooser for several. Old fragments and `/msx/connect.html` are
+  compatibility-only. Node 247, browser 158, focused receiver 61, focused
+  release/deploy 15, and Android app/AndroidTest Java compilation pass. A signed
+  same-version 0.4.12/code 22 APK was previously rebuilt and installed
+  in place on the USB-connected Samsung (`adb install -r` Success); its cold
+  `MainActivity` launch succeeded. Artifact is 9,821,230 bytes, SHA-256
+  `aead10c90f1d1a76bb4d29e2e9ff3281804dc16d17238a6cef9631ea817224bf`.
+  No emulator or Philips TV flow was tested; the final page/Enter follow-up is
+  not yet installed or deployed.
+  [Handoff](session-handoffs/2026-10-23-philips-browser-only-setup.md).
+
 - 2026-10-23 release 0.4.12 and TV launcher: explicitly reviewed/staged the new
   pure `src/handoff/sync.mjs`, changed brightness from 5% to 2% steps, and ran
   the guarded release. All 247 Node and 163 browser tests passed; signed phone

@@ -161,9 +161,13 @@ public final class PhilipsTextController implements AutoCloseable {
     public JSONObject typeAddress(String host, String startupUrl) throws TextException {
         return typeFixedValue(host, startupAuthority(startupUrl), "msx", 65000);
     }
-    /** Fixed browser entry, derived from the native server rather than a caller URL. */
-    public JSONObject typeBrowserAddress(String host, String startupUrl) throws TextException {
-        return typeFixedValue(host, browserSetupUrl(startupUrl), "browser", 90000);
+    /** Fixed browser entry selected from two native-owned choices, never a caller URL. */
+    public JSONObject typeBrowserAddress(String host, String startupUrl, String address) throws TextException {
+        final String value;
+        if ("stable".equals(address)) value = launcherUrl(startupUrl);
+        else if ("direct".equals(address)) value = browserSetupUrl(startupUrl);
+        else throw new TextException("TEXT_INVALID_INPUT");
+        return typeFixedValue(host, value, "browser", 90000);
     }
     /** An accepted browser request is not proof that the TV loaded the receiver. */
     public JSONObject launchBrowser(String host, String startupUrl) throws TextException {
@@ -233,34 +237,22 @@ public final class PhilipsTextController implements AutoCloseable {
         } catch (Exception invalid) { throw new TextException("TEXT_INVALID_INPUT"); }
     }
     static String browserSetupUrl(String startupUrl) throws TextException {
-        return "http://" + startupAuthority(startupUrl) + "/msx/connect.html";
+        return "http://" + startupAuthority(startupUrl) + "/tv/connect.html";
     }
-    /**
-     * Fixed GitHub Pages address the TV can keep as a speed dial. It remembers each
-     * phone that opens it (the fragment never reaches a server) and forwards to
-     * {@link #browserSetupUrl}; phone addresses can change and several phones can serve.
-     */
+    /** Fixed GitHub Pages speed dial. The TV page collects and remembers local phones. */
     static final String LAUNCHER = "https://kiansheik.io/kodaklumaremote/tv.html";
     static String launcherUrl(String startupUrl) throws TextException {
-        String name = android.os.Build.MODEL == null ? "" : android.os.Build.MODEL.replaceAll("[^A-Za-z0-9 ._-]", "").trim();
-        if (name.length() > 30) name = name.substring(0, 30);
-        return LAUNCHER + "#phone=" + startupAuthority(startupUrl) + (name.isEmpty() ? "" : "&name=" + name.replace(' ', '+').replace("+", "%20"));
+        startupAuthority(startupUrl); // The listener must already have a valid private origin.
+        return LAUNCHER;
     }
     static boolean fixedLauncherUrl(String value) {
-        if (value == null || !value.startsWith(LAUNCHER + "#phone=")) return false;
-        String rest = value.substring((LAUNCHER + "#phone=").length());
-        String authority = rest.split("&", 2)[0];
-        try { return value.equals(launcherUrlFor(authority, rest.contains("&") ? rest.substring(rest.indexOf('&')) : "")) && startupAuthority("http://" + authority).equals(authority); }
-        catch (TextException invalid) { return false; }
-    }
-    private static String launcherUrlFor(String authority, String suffix) {
-        return suffix.isEmpty() || suffix.matches("&name=[A-Za-z0-9%._-]{1,90}") ? LAUNCHER + "#phone=" + authority + suffix : "";
+        return LAUNCHER.equals(value);
     }
     static boolean fixedBrowserSetupUrl(String value) {
         if (value == null) return false;
         try {
             URI receiver = new URI(value);
-            return "/msx/connect.html".equals(receiver.getRawPath()) && receiver.getRawQuery() == null && receiver.getRawFragment() == null
+            return "/tv/connect.html".equals(receiver.getRawPath()) && receiver.getRawQuery() == null && receiver.getRawFragment() == null
                     && value.equals(browserSetupUrl("http://" + receiver.getRawAuthority()));
         } catch (Exception invalid) { return false; }
     }

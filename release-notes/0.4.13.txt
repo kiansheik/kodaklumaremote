@@ -1,0 +1,7 @@
+LUMA Remote 0.4.13
+
+Philips receiver setup now uses the TV's Internet browser only. When the video receiver is offline, the remote says Set up TV receiver instead of attempting a launch that may fail.
+
+Select the TV browser's address field, choose the stable kiansheik.io address or the current phone's direct backup address, then tap Type and open selected address. The phone types the URL and presses Go for you; the same action requests first-time TV typing permission when needed. The old Media Station X setup has been removed from the app.
+
+The fixed TV page now detects the local network prefix when the browser allows it, so first setup normally needs only the phone's final IP number. It remembers the phone, checks it next time, opens it automatically when available, and shows a chooser when several phones have been saved.

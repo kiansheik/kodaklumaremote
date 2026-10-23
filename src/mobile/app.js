@@ -3,14 +3,14 @@ import { syncStep } from '../handoff/sync.mjs';
 
 const $ = selector => document.querySelector(selector);
 const DEFAULT_SITE = 'https://framextv.cc/watch/284833/1/1';
-const TV_TEXT_ACK = 'TV acknowledged the keys. Check the address in MSX Setup before selecting Go / OK.';
-const TV_BROWSER_ACK = 'TV acknowledged the keys. Check the Internet browser address before selecting Go / OK.';
+const TV_LAUNCHER = 'https://kiansheik.io/kodaklumaremote/tv.html';
+const TV_BROWSER_ACK = 'Address typed and Go sent. Waiting for the TV browser…';
 const TV_BROWSER_WAIT = 'Launch requested. Waiting for the TV to connect…';
 const TV_BROWSER_BOOKMARK = 'Open Internet on the TV, then choose your saved LUMA bookmark. The receiver is not connected yet.';
 const MSX_SETUP_HINTS = Object.freeze({
-  HTTPS_REQUEST: 'The TV is trying a secure connection. In Media Station X setup, leave the padlock open.',
+  HTTPS_REQUEST: 'The direct phone address uses http. Check that the TV browser kept the address exactly as shown.',
   ORIGIN_REJECTED: 'The TV reached this phone, but its app connection was rejected. Share the error shown on the TV.',
-  PAIRING_EXPIRED: 'Tap Restart TV setup, then try the setup again on the TV.',
+  PAIRING_EXPIRED: 'Tap Type and open selected address to prepare the phone receiver again.',
   BOOTSTRAP_READY: 'The TV loaded the setup. Open “Connect this TV” on the TV next.',
   HELLO_READY: 'The TV receiver reached this phone.',
   POLL_READY: 'The TV receiver checked its connection.',
@@ -35,7 +35,7 @@ const TV_TEXT_ERRORS = Object.freeze({
   TEXT_BUSY: 'Wait for address entry to finish.',
   TEXT_PARTIAL: 'Entry may be incomplete. Clear the TV’s address field before trying again.',
   TEXT_CANCELLED: 'Address entry stopped. Clear the TV’s address field before trying again.',
-  TEXT_BROWSER_UNSUPPORTED: 'Automatic browser launch is unavailable. Use Enter link manually with the TV browser address bar selected.',
+  TEXT_BROWSER_UNSUPPORTED: 'Automatic browser launch is unavailable. Select the TV browser address bar, then tap Type and open selected address.',
 });
 const errors = {
   ...TV_TEXT_ERRORS,
@@ -108,7 +108,7 @@ const state = {
   pairingId: null, subtitleScale: 1,
   settings: { hasReceiver: false, hasPairing: false, autoConnect: true },
   target: 'luma', pendingTarget: 'luma',
-  tvSetup: 'remote', tvEntry: 'browser', tvBrowserManual: false, matterShareTimer: null,
+  tvSetup: 'remote', tvAddress: 'stable', matterShareTimer: null,
   matter: { available: false, paired: false, connected: false, pairing: false, capabilities: {}, volume: null, inputs: [] },
   philips: { connected: false, host: '', name: 'Philips TV', startupUrl: '', awaitingApproval: false, pendingHost: '', playback: null, activeMedia: null, tracks: [], catalog: [], selectedIndex: null, subtitlesEnabled: false, nextEpisode: null, volume: null, subtitlePage: 0 },
 };
@@ -505,7 +505,7 @@ function msxState(value) {
       if (url.protocol === 'http:' && privateHost(url.hostname) && !url.username && !url.password) remote.startupUrl = url.origin;
     } catch { /* Only show the native listener's local address. */ }
   }
-  remote.browserSetupUrl = remote.startupUrl && value.browserSetupUrl === remote.startupUrl + '/msx/connect.html' ? value.browserSetupUrl : '';
+  remote.browserSetupUrl = remote.startupUrl && value.browserSetupUrl === remote.startupUrl + '/tv/connect.html' ? value.browserSetupUrl : '';
   const snapshot = value.playback;
   if (snapshot && typeof snapshot.active === 'boolean') {
     const sourceUrl = snapshot.sourceUrl || snapshot.source;
@@ -764,7 +764,6 @@ function renderControls() {
   const free = state.native && !state.busy && !state.handoff;
   const tv = state.target === 'philips';
   const remote = receiver();
-  const browserEntry = state.tvEntry === 'browser';
   const matter = state.matter;
   const tvRemote = free && tv && matter.connected;
   const navigation = navigationReady();
@@ -800,13 +799,14 @@ function renderControls() {
   $('#receiver-panel').hidden ||= tv;
   $('#pair-panel').hidden ||= tv;
   if (!tv && $('#receiver-panel').hidden && $('#pair-panel').hidden) deviceStep('receiver');
-  $('#msx-startup').hidden = !remote.startupUrl || browserEntry;
-  $('#msx-startup').textContent = remote.startupUrl ? new URL(remote.startupUrl).host : '';
-  $('#msx-title').textContent = remote.textOperation === 'msx.textPairGrant' ? 'Checking the TV PIN…' : remote.textOperation === 'msx.textPairRequest' ? 'Requesting the TV PIN…' : remote.textOperation === 'msx.launchBrowser' ? 'Requesting the TV browser…' : ['msx.typeAddress', 'msx.typeBrowserAddress'].includes(remote.textOperation) ? browserEntry ? 'Entering the browser link…' : 'Entering the MSX address…' : remote.textPairing ? 'Enter the TV PIN' : remote.connected ? 'TV connected' : remote.awaitingApproval ? 'Allow your TV' : remote.textPermissionSaved ? browserEntry ? 'TV browser permission saved' : 'Address entry enabled' : 'Connect your Philips TV';
+  const selectedAddress = state.tvAddress === 'direct' ? remote.browserSetupUrl : TV_LAUNCHER;
+  $('#msx-startup').hidden = remote.textPairing === true;
+  $('#msx-startup').textContent = selectedAddress || 'The direct phone address will appear when setup starts.';
+  $('#msx-title').textContent = remote.textOperation === 'msx.textPairGrant' ? 'Checking the TV PIN…' : remote.textOperation === 'msx.textPairRequest' ? 'Requesting the TV PIN…' : remote.textOperation === 'msx.launchBrowser' ? 'Requesting the TV browser…' : remote.textOperation === 'msx.typeBrowserAddress' ? 'Typing the receiver address…' : remote.textPairing ? 'Enter the TV PIN' : remote.connected ? 'TV receiver connected' : remote.awaitingApproval ? 'Allow your TV' : remote.textPermissionSaved ? 'TV typing enabled' : 'Set up the Philips receiver';
   $('#tv-entry-methods').hidden = remote.textPairing === true;
-  for (const method of ['browser', 'msx']) {
-    $(`#tv-entry-${method}`).setAttribute('aria-pressed', String(state.tvEntry === method));
-    $(`#tv-entry-${method}`).disabled = !free;
+  for (const address of ['stable', 'direct']) {
+    $(`#receiver-address-${address}`).setAttribute('aria-pressed', String(state.tvAddress === address));
+    $(`#receiver-address-${address}`).disabled = !free;
   }
   $('#msx-pairing').textContent = remote.awaitingApproval && remote.pendingHost ? `Allow the TV at ${remote.pendingHost} if it is yours.` : remote.connected ? 'TV connected. You can choose a video in Browse.' : 'Use the same Wi-Fi network on both devices.';
   $('#msx-pairing').hidden = remote.textPairing || !!remote.startupUrl && !remote.awaitingApproval && !remote.connected;
@@ -821,37 +821,28 @@ function renderControls() {
       else receiverStage = 'TV allowed. Waiting for receiver status.';
     }
   } else if (diagnostic?.sessionPresent === false && (diagnostic.bootstrapAccepted > 0 || diagnostic.helloAccepted > 0)) receiverStage = 'TV reached this phone. Waiting for receiver connection.';
-  const setupHint = !remote.connected && !remote.awaitingApproval && setupWindowClosed ? browserEntry && !state.tvBrowserManual ? 'TV setup window closed. Tap Open TV receiver to reopen it.' : 'TV setup window closed. Tap Restart TV setup before connecting the TV.' : receiverStage || (!remote.connected && !remote.awaitingApproval ? MSX_SETUP_HINTS[diagnostic?.lastReason] : '');
+  const setupHint = !remote.connected && !remote.awaitingApproval && setupWindowClosed ? 'The phone receiver stopped. Tap Type and open selected address to prepare it again.' : receiverStage || (!remote.connected && !remote.awaitingApproval ? MSX_SETUP_HINTS[diagnostic?.lastReason] : '');
   $('#msx-diagnostic').textContent = setupHint || '';
   $('#msx-diagnostic').hidden = !setupHint;
   $('#msx-panel').dataset.diagnostic = String(Boolean(setupHint));
   $('#msx-panel').dataset.textPairing = String(remote.textPairing === true);
-  $('#msx-start').disabled = !free;
-  $('#msx-start').hidden = browserEntry && !state.tvBrowserManual || remote.textPairing || !!remote.startupUrl && !setupWindowClosed && remote.diagnostics?.lastReason !== 'PAIRING_EXPIRED';
-  $('#msx-start').textContent = remote.startupUrl ? 'Restart TV setup' : 'Set up TV';
+  $('#msx-panel').dataset.awaitingApproval = String(remote.awaitingApproval === true);
   $('#msx-refresh').hidden = !remote.startupUrl || remote.textPairing;
   $('#msx-refresh').disabled = !free;
   $('#msx-confirm').hidden = !remote.awaitingApproval || !remote.pendingHost;
   $('#msx-confirm').disabled = !free;
-  $('#browser-launch').hidden = !browserEntry || remote.textPairing;
-  $('#browser-launch').disabled = !free || remote.typingBusy === true;
-  $('#browser-manual').hidden = !browserEntry || remote.textPairing || state.tvBrowserManual;
-  $('#browser-manual').disabled = !free;
-  $('#msx-type-address').hidden = remote.textPairing || browserEntry && !state.tvBrowserManual;
-  $('#msx-type-address').textContent = browserEntry ? 'Type browser link' : 'Enter TV address';
-  $('#msx-type-address').disabled = !free || !remote.startupUrl || !remote.typingAvailable || remote.typingBusy === true || setupWindowClosed || browserEntry && !remote.browserSetupUrl;
-  $('#msx-text-pair').hidden = !remote.startupUrl || remote.textPermissionSaved === true || remote.textPairing === true;
-  $('#msx-text-pair').textContent = browserEntry ? 'Enable TV browser control' : 'Enable address entry';
+  $('#msx-type-address').hidden = remote.textPairing;
+  $('#msx-type-address').textContent = 'Type and open selected address';
+  $('#msx-type-address').disabled = !free || remote.typingBusy === true || !matter.connected;
+  $('#msx-text-pair').hidden = true;
+  $('#msx-text-pair').textContent = 'Enable TV typing';
   $('#msx-text-pair').disabled = !free || remote.typingBusy === true;
   $('#msx-text-form').hidden = remote.textPairing !== true;
   for (const control of $('#msx-text-form').querySelectorAll('button,input')) control.disabled = !free;
-  $('#msx-startup').hidden ||= remote.textPairing === true;
-  const hideEntrySteps = !!remote.startupUrl && !remote.textPermissionSaved;
-  $('#msx-steps').hidden = browserEntry || hideEntrySteps;
-  $('#browser-steps').hidden = !browserEntry || !state.tvBrowserManual || hideEntrySteps;
-  const textProgress = { 'msx.textPairRequest': 'Waiting for the TV to show its PIN…', 'msx.textPairGrant': 'Checking the PIN and saving permission. Please wait…', 'msx.typeAddress': 'Keep the empty MSX address field selected on the TV. Waiting for its reply…', 'msx.typeBrowserAddress': 'Keep the empty Internet browser address bar selected on the TV. Waiting for its reply…', 'msx.launchBrowser': 'Preparing the phone receiver and requesting its TV page…' }[remote.textOperation];
-  const fieldHint = browserEntry ? state.tvBrowserManual ? 'Permission saved. Open the TV Internet browser and select and clear its address bar.' : 'Permission saved. Tap Open TV receiver, then allow the TV when it connects.' : 'Permission saved. Open MSX Setup and select and clear its address field before tapping Enter TV address.';
-  $('#msx-type-status').textContent = textProgress || remote.typingNotice || TV_TEXT_ERRORS[remote.textError] || (remote.textPairing ? 'Enter the four-digit PIN shown on the TV.' : remote.typingAvailable ? fieldHint : remote.textPermissionSaved ? browserEntry ? 'Permission saved. Reconnect your TV remote to open the receiver.' : 'Permission saved. Reconnect your TV remote to enable address entry.' : remote.startupUrl ? browserEntry ? 'Enable TV browser control once with the TV’s PIN.' : 'Enable address entry once with the TV’s PIN.' : browserEntry ? 'Tap Open TV receiver. First time only, enable TV browser control with its PIN.' : 'Tap Set up TV to prepare this phone’s address.');
+  $('#browser-steps').hidden = remote.textPairing === true;
+  const textProgress = { 'msx.textPairRequest': 'Waiting for the TV to show its PIN…', 'msx.textPairGrant': 'Checking the PIN and saving permission. Please wait…', 'msx.typeBrowserAddress': 'Keep the empty Internet browser address bar selected. Typing the complete address…', 'msx.launchBrowser': 'Requesting the TV browser…' }[remote.textOperation];
+  const fieldHint = remote.typingAvailable ? 'Select and clear the TV browser address bar, choose an address, then tap Type and open selected address.' : remote.textPermissionSaved ? 'Permission saved. Reconnect your TV remote to type the receiver address.' : 'Tap Type and open selected address. The first time, the TV will show a PIN to enable typing.';
+  $('#msx-type-status').textContent = textProgress || remote.typingNotice || TV_TEXT_ERRORS[remote.textError] || (remote.textPairing ? 'Enter the four-digit PIN shown on the TV.' : fieldHint);
   $('#msx-type-status').dataset.error = String(!textProgress && (remote.typingNotice ? remote.typingNoticeError === true : !!remote.textError));
   $('#msx-text-grant').textContent = remote.textOperation === 'msx.textPairGrant' ? 'Checking PIN…' : 'Save permission';
   $('#msx-sample').hidden = !tv;
@@ -942,6 +933,7 @@ function renderControls() {
   $('#show-matter-setup').hidden = !tv || !matter.available;
   $('#open-receiver').disabled = !luma;
   $('#open-tv-receiver').hidden = !tv;
+  $('#open-tv-receiver').textContent = remote.connected ? 'Open TV receiver' : 'Set up TV receiver';
   $('#open-tv-receiver').disabled = !free;
   $('#turn-on-tv').hidden = !tv || !matter.paired || matter.capabilities.powerOn !== true;
   $('#turn-on-tv').disabled = !free;
@@ -1578,23 +1570,22 @@ $('#show-tv-inputs').addEventListener('click', () => {
   $('#tv-input-list').replaceChildren(...state.matter.inputs.map(input => listButton(input.name + (input.index === state.matter.currentInput ? ' · selected' : ''), () => command('matter.input', { index: input.index }, 'TV input selected.', matterState))));
   sheet('inputs');
 });
-for (const entry of ['browser', 'msx']) $(`#tv-entry-${entry}`).addEventListener('click', () => {
+for (const address of ['stable', 'direct']) $(`#receiver-address-${address}`).addEventListener('click', () => {
   if (state.busy || state.handoff) return;
-  state.tvEntry = entry;
+  state.tvAddress = address;
   state.philips.typingNotice = '';
   state.philips.typingNoticeError = false;
   renderControls();
 });
-$('#browser-manual').addEventListener('click', () => {
-  if (state.busy || state.handoff) return;
-  state.tvBrowserManual = true;
-  state.philips.typingNotice = '';
-  renderControls();
-});
 async function openTvReceiver() {
   if (state.target !== 'philips' || state.busy || state.handoff) return;
-  state.tvEntry = 'browser';
   state.tvSetup = 'video';
+  if (!state.philips.connected) {
+    closeSheet(); page('devices');
+    state.philips.typingNotice = 'Select the TV browser address bar, then tap Type and open selected address.';
+    message('Set up the TV browser receiver first.'); renderControls();
+    return;
+  }
   await tvTextCommand('msx.launchBrowser', {}, async result => {
     if (result?.permissionRequired) {
       closeSheet(); page('devices');
@@ -1628,7 +1619,6 @@ async function openTvReceiver() {
     }
   });
 }
-$('#browser-launch').addEventListener('click', () => { if (state.tvEntry === 'browser') void openTvReceiver(); });
 $('#open-tv-receiver').addEventListener('click', () => void openTvReceiver());
 $('#turn-on-tv').addEventListener('click', () => {
   if (state.target !== 'philips' || state.busy || state.handoff || !state.matter.paired || state.matter.capabilities.powerOn !== true) return;
@@ -1649,7 +1639,6 @@ $('#turn-on-tv').addEventListener('click', () => {
     }
   }, {}, 'TV accepted the turn-on request. Check its screen.', matterState);
 });
-$('#msx-start').addEventListener('click', () => command('msx.start', {}, state.tvEntry === 'browser' ? 'Prepare the TV Internet browser address bar, then tap Type browser link.' : 'Prepare the address field in Media Station X setup, then tap Enter TV address.', msxState));
 $('#msx-refresh').addEventListener('click', () => command('msx.status', {}, '', msxState));
 function tvTextCommand(method, params, consume) {
   if (state.target !== 'philips' || state.busy || state.handoff) return Promise.resolve(false);
@@ -1674,16 +1663,15 @@ function tvTextCommand(method, params, consume) {
       const code = Object.hasOwn(TV_TEXT_ERRORS, error.code) ? error.code : error.code === 'TIMEOUT' ? 'TEXT_TIMEOUT' : 'TEXT_REJECTED';
       const observed = await rpc('msx.status', {}, { timeoutMs: 5000 }).catch(() => null);
       if (observed) msxState(observed);
-      const notice = method === 'msx.launchBrowser' && code === 'TEXT_TIMEOUT' ? 'The TV did not confirm the launch request. Check its screen before trying again.' : method === 'msx.launchBrowser' && code === 'TEXT_REJECTED' ? 'The TV did not accept the browser launch. Use Enter link manually.' : method === 'msx.launchBrowser' && code === 'TEXT_CANCELLED' ? 'TV launch stopped. Check its screen before trying again.' : method === 'msx.textPairGrant' && ['TEXT_REJECTED', 'TEXT_INVALID_PIN'].includes(code) ? 'The TV did not accept this PIN. Check the code on the TV and try again.' : !['msx.typeAddress', 'msx.typeBrowserAddress'].includes(method) && code === 'TEXT_TIMEOUT' ? 'The TV has not confirmed permission. Check the TV, then refresh before trying again.' : TV_TEXT_ERRORS[code];
+      const notice = method === 'msx.launchBrowser' && code === 'TEXT_TIMEOUT' ? 'The TV did not confirm the launch request. Check its screen before trying again.' : method === 'msx.launchBrowser' && code === 'TEXT_REJECTED' ? 'The TV did not accept the browser launch. Open Internet on the TV and use Type and open selected address.' : method === 'msx.launchBrowser' && code === 'TEXT_CANCELLED' ? 'TV launch stopped. Check its screen before trying again.' : method === 'msx.textPairGrant' && ['TEXT_REJECTED', 'TEXT_INVALID_PIN'].includes(code) ? 'The TV did not accept this PIN. Check the code on the TV and try again.' : !['msx.typeAddress', 'msx.typeBrowserAddress'].includes(method) && code === 'TEXT_TIMEOUT' ? 'The TV has not confirmed permission. Check the TV, then refresh before trying again.' : TV_TEXT_ERRORS[code];
       remote.typingNotice = notice;
       remote.typingNoticeError = true;
-      if (code === 'TEXT_BROWSER_UNSUPPORTED') state.tvBrowserManual = true;
       const failure = fixedError(code); failure.message = notice;
       throw failure;
     }
   }, {}, '', consume).finally(() => { remote.textOperation = null; renderControls(); });
 }
-$('#msx-text-pair').addEventListener('click', () => {
+function requestTvTypingPermission() {
   if (!state.philips.startupUrl || state.philips.textPermissionSaved || state.philips.textPairing) return;
   $('#msx-text-pin').value = '';
   void tvTextCommand('msx.textPairRequest', {}, result => {
@@ -1694,7 +1682,8 @@ $('#msx-text-pair').addEventListener('click', () => {
     renderControls(); $('#msx-text-pin').focus();
     message('Enter the four-digit PIN shown on the TV.');
   });
-});
+}
+$('#msx-text-pair').addEventListener('click', requestTvTypingPermission);
 $('#msx-text-form').addEventListener('submit', event => {
   event.preventDefault();
   if (!state.philips.textPairing) return;
@@ -1703,23 +1692,32 @@ $('#msx-text-form').addEventListener('submit', event => {
   $('#msx-text-pin').value = '';
   void tvTextCommand('msx.textPairGrant', { pin }, result => {
     msxState(result);
-    state.philips.typingNotice = state.philips.textPermissionSaved ? state.tvEntry === 'browser' ? 'Permission saved. Tap Open TV receiver to request the TV page.' : 'Permission saved. Return to MSX Setup and select and clear its address field.' : TV_TEXT_ERRORS[result?.textError] || TV_TEXT_ERRORS.TEXT_UNSUPPORTED;
+    state.philips.typingNotice = state.philips.textPermissionSaved ? 'Permission saved. Keep the TV browser address bar selected, then tap Type and open selected address.' : TV_TEXT_ERRORS[result?.textError] || TV_TEXT_ERRORS.TEXT_UNSUPPORTED;
     state.philips.typingNoticeError = !state.philips.textPermissionSaved;
-    message(state.philips.textPermissionSaved ? state.tvEntry === 'browser' ? 'TV permission saved. Tap Open TV receiver next.' : 'TV permission saved. Prepare its setup address field next.' : state.philips.typingNotice, !state.philips.textPermissionSaved);
+    message(state.philips.textPermissionSaved ? 'TV typing permission saved. Type and open the selected address next.' : state.philips.typingNotice, !state.philips.textPermissionSaved);
   });
 });
-$('#msx-type-address').addEventListener('click', () => {
+$('#msx-type-address').addEventListener('click', async () => {
   const tv = state.philips;
-  if (!tv.typingAvailable || !tv.startupUrl || tv.typingBusy || tv.configured === false && tv.pairingOpen === false) return;
-  const browserEntry = state.tvEntry === 'browser';
-  if (browserEntry && !tv.browserSetupUrl) return;
-  const expectedChars = browserEntry ? tv.browserSetupUrl.length : new URL(tv.startupUrl).host.length;
+  if (tv.typingBusy || !state.matter.connected) return;
+  if (!tv.startupUrl || tv.configured === false && tv.pairingOpen === false) {
+    const started = await command('msx.start', {}, '', msxState);
+    if (!started) return;
+  }
+  if (!tv.textPermissionSaved) { requestTvTypingPermission(); return; }
+  if (!tv.typingAvailable || !tv.browserSetupUrl) { message(TV_TEXT_ERRORS.TEXT_ADDRESS_UNAVAILABLE, true); return; }
   tv.typingNotice = '';
-  void tvTextCommand(browserEntry ? 'msx.typeBrowserAddress' : 'msx.typeAddress', {}, result => {
-    if (result?.accepted !== true || result.acknowledgedChars !== expectedChars || browserEntry && (result.textEntryMode !== 'browser' || result.totalChars !== expectedChars)) throw fixedError('TEXT_REJECTED');
-    tv.typingNotice = browserEntry ? TV_BROWSER_ACK : TV_TEXT_ACK;
+  void tvTextCommand('msx.typeBrowserAddress', { address: state.tvAddress }, async result => {
+    if (result?.accepted !== true || !Number.isInteger(result.totalChars) || result.totalChars < 1 || result.acknowledgedChars !== result.totalChars || result.textEntryMode !== 'browser') throw fixedError('TEXT_REJECTED');
+    await new Promise(resolve => setTimeout(resolve, 350));
+    try {
+      matterState(await rpc('matter.key', { key: 'enter' }, { timeoutMs: 15000 }));
+      tv.typingNotice = TV_BROWSER_ACK;
+    } catch (_) {
+      tv.typingNotice = 'Address typed. The TV did not accept Go automatically; press Go / OK on the TV.';
+    }
     tv.typingNoticeError = false;
-    message('Input acknowledged. Check the TV address field.');
+    message(tv.typingNotice);
   });
 });
 $('#msx-developer').addEventListener('toggle', renderControls);
@@ -1809,7 +1807,7 @@ for (const button of document.querySelectorAll('[data-reset]')) button.addEventL
       if (await command('matter.forget', { confirmed: true }, 'TV pairing removed from this phone.', matterState)) { closeSheet(); page('devices'); }
       return;
     }
-    if (await command('msx.reset', {}, 'TV pairing forgotten. Set up Media Station X again.', result => {
+    if (await command('msx.reset', {}, 'TV receiver pairing forgotten. Set up the TV browser again.', result => {
       state.philips = { connected: false, host: '', name: 'Philips TV', startupUrl: '', awaitingApproval: false, pendingHost: '', playback: null, activeMedia: null, tracks: [], catalog: [], selectedIndex: null, subtitlesEnabled: false, volume: null, subtitlePage: 0 };
       msxState(result);
     })) { closeSheet(); page('devices'); }

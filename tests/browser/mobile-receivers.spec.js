@@ -44,7 +44,7 @@ test.beforeAll(async () => {
 });
 test.afterAll(async () => { if (server) await new Promise(resolve => server.close(resolve)); });
 
-async function openApp(page, { selectedTarget = 'luma', tvConnected = true, textState = {}, entryMethod = 'browser' } = {}) {
+async function openApp(page, { selectedTarget = 'luma', tvConnected = true, textState = {} } = {}) {
   await page.addInitScript(({ selectedTarget, tvConnected, lumaMedia, textState }) => {
     window.__calls = [];
     const tv = window.__tv = {
@@ -52,7 +52,7 @@ async function openApp(page, { selectedTarget = 'luma', tvConnected = true, text
       playback: { active: tvConnected, source: 'https://media.example.org/existing-tv.mp4', title: 'Already on TV', paused: false, positionSeconds: 30, durationSeconds: 900, canSeek: true, volume: { current: 40, max: 100 }, tracks: [], selectedIndex: null, subtitlesEnabled: false },
       ...textState,
     };
-    const browserSetupUrl = () => tv.startupUrl ? tv.startupUrl + '/msx/connect.html' : '';
+    const browserSetupUrl = () => tv.startupUrl ? tv.startupUrl + '/tv/connect.html' : '';
     tv.browserSetupUrl = browserSetupUrl();
     window.__holdMethod = null;
     window.__held = [];
@@ -85,11 +85,15 @@ async function openApp(page, { selectedTarget = 'luma', tvConnected = true, text
       if (method === 'msx.confirm') { tv.connected = true; tv.configured = true; tv.pairingOpen = false; tv.awaitingApproval = false; tv.pendingHost = ''; return tv; }
       if (method === 'msx.status') { if (window.__connectOnStatus) tv.connected = true; return tv; }
       if (method === 'matter.status') { window.__matter.paused = false; return window.__matter; }
+      if (method === 'matter.key') return window.__matter;
       if (method === 'matter.powerOn') return { ...window.__matter, accepted: true, powerStateVerified: false, onOff: null };
       if (method === 'msx.textPairRequest') { tv.textPairing = true; tv.textPairingExpiresInSeconds = 60; return { pairing: true, expiresInSeconds: 60 }; }
       if (method === 'msx.textPairGrant') { tv.textPairing = false; tv.textPairingExpiresInSeconds = 0; tv.textPermissionSaved = true; tv.typingAvailable = true; tv.typingBusy = false; tv.textError = null; return tv; }
       if (method === 'msx.typeAddress') return { accepted: true, acknowledgedChars: window.__typingAck ?? 17, textAppliedVerified: false, textEntryMode: 'msx', totalChars: 17 };
-      if (method === 'msx.typeBrowserAddress') return { accepted: true, acknowledgedChars: window.__typingAck ?? browserSetupUrl().length, textAppliedVerified: false, textEntryMode: window.__typingMode ?? 'browser', totalChars: window.__typingTotal ?? browserSetupUrl().length };
+      if (method === 'msx.typeBrowserAddress') {
+        const typed = params.address === 'stable' ? 'https://kiansheik.io/kodaklumaremote/tv.html' : browserSetupUrl();
+        return { accepted: true, acknowledgedChars: window.__typingAck ?? typed.length, textAppliedVerified: false, textEntryMode: window.__typingMode ?? 'browser', totalChars: window.__typingTotal ?? typed.length };
+      }
       if (method === 'msx.launchBrowser') return { ...tv, accepted: true, pageLoadVerified: false };
       if (['msx.debugPing', 'msx.debugLabel', 'msx.reloadReceiver'].includes(method)) {
         const id = window.__debugSequence = (window.__debugSequence || 20) + 1;
@@ -181,7 +185,6 @@ async function openApp(page, { selectedTarget = 'luma', tvConnected = true, text
   await page.goto(origin);
   await expect(page.locator(`#target-${selectedTarget}`)).toHaveAttribute('aria-pressed', 'true');
   await expect(page.locator('#target-luma')).toHaveAttribute('data-connected', 'true');
-  if (entryMethod === 'msx') await page.locator('#tv-entry-msx').click();
 }
 async function fits(page) {
   expect(await page.evaluate(() => {
@@ -218,105 +221,51 @@ test('Home and Back flank Up in the first D-pad row with original key routing an
   expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'luma.key').map(call => call.params))).toEqual([{ key: 'home' }, { key: 'back' }]);
 });
 
-test('address entry needs one-time PIN permission and an explicit empty typing request after TV refocus', async ({ page }) => {
-  await page.setViewportSize({ width: 320, height: 592 });
-  await openApp(page, { selectedTarget: 'philips', tvConnected: false, entryMethod: 'msx' });
-  await page.evaluate(() => { window.__typingSetup = true; });
-  await page.locator('#msx-start').click();
-  await expect(page.locator('#msx-type-address')).toBeDisabled();
-  await page.evaluate(() => document.querySelector('#msx-type-address').dispatchEvent(new Event('click')));
-  expect(await page.evaluate(() => window.__calls.some(call => call.method === 'msx.typeAddress'))).toBe(false);
-  await fits(page);
-  await page.locator('#msx-text-pair').click();
-  await expect(page.locator('#msx-text-form')).toBeVisible();
-  await page.locator('#msx-text-pin').fill('0123');
-  await fits(page);
-  await page.locator('#msx-text-grant').click();
-  await expect(page.locator('#msx-type-address')).toBeEnabled();
-  await expect(page.locator('#msx-text-pin')).toHaveValue('');
-  await expect(page.locator('#msx-steps')).toContainText('Select and clear the address field');
-  await fits(page);
-  expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'msx.textPairRequest').map(call => call.params))).toEqual([{}]);
-  expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'msx.textPairGrant').map(call => call.params))).toEqual([{ pin: '0123' }]);
-  expect(await page.evaluate(() => window.__calls.some(call => call.method === 'msx.typeAddress'))).toBe(false);
-  await page.locator('#msx-type-address').click();
-  await expect(page.locator('#msx-type-status')).toHaveText('TV acknowledged the keys. Check the address in MSX Setup before selecting Go / OK.');
-  expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'msx.typeAddress').map(call => call.params))).toEqual([{}]);
-});
-
-test('default TV browser shortcut starts the receiver, reuses permission and waits for actual TV approval', async ({ page }) => {
-  await page.setViewportSize({ width: 320, height: 592 });
-  await openApp(page, { selectedTarget: 'philips', tvConnected: false, textState: { configured: false, pairingOpen: false } });
-  await page.evaluate(() => { window.__typingSetup = true; });
-  await expect(page.locator('#tv-entry-browser')).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.locator('#msx-steps')).toBeHidden();
-  await expect(page.locator('#msx-type-address')).toBeHidden();
-  await expect(page.locator('#msx-diagnostic')).toContainText('Tap Open TV receiver');
-  await page.locator('#browser-launch').click();
-  await expect(page.locator('#msx-text-pair')).toHaveText('Enable TV browser control');
-  expect(await page.evaluate(() => window.__calls.some(call => call.method === 'msx.launchBrowser' || call.method === 'msx.textPairRequest'))).toBe(false);
-  await page.locator('#msx-text-pair').click();
-  await page.locator('#msx-text-pin').fill('0123');
-  await page.locator('#msx-text-grant').click();
-  await expect(page.locator('#msx-title')).toHaveText('TV browser permission saved');
-  await fits(page);
-  await page.evaluate(() => { window.__holdMethod = 'msx.launchBrowser'; });
-  await page.locator('#browser-launch').click();
-  await expect(page.locator('#browser-launch')).toBeDisabled();
-  await expect(page.locator('#msx-type-status')).toContainText('requesting its TV page');
-  await page.evaluate(() => window.__release());
-  await expect(page.locator('#msx-type-status')).toHaveText('Launch requested. Waiting for the TV to connect…');
-  await expect(page.locator('#msx-confirm')).toBeHidden();
-  await expect(page.locator('#target-philips')).toHaveAttribute('data-connected', 'false');
-  expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'msx.launchBrowser').map(call => call.params))).toEqual([{}]);
-  expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'msx.start').length)).toBe(1);
-  expect(await page.evaluate(() => window.__calls.some(call => call.method === 'msx.typeBrowserAddress' || call.method === 'msx.typeAddress' || call.method === 'matter.key'))).toBe(false);
-  await page.evaluate(() => { window.__tv.awaitingApproval = true; window.__tv.pendingHost = '192.168.1.60'; window.LumaApp.onConnectionState({ receivers: { philips: window.__tv } }); });
-  await expect(page.locator('#msx-title')).toHaveText('Allow your TV');
-  await expect(page.locator('#msx-confirm')).toBeVisible();
-  await fits(page);
-  await page.locator('#msx-confirm').click();
-  await expect(page.locator('#target-philips')).toHaveAttribute('data-connected', 'true');
-});
-
-test('accepted TV launch observes bounded state before offering its saved bookmark without replay', async ({ page }) => {
-  await page.clock.install();
-  await openApp(page, { selectedTarget: 'philips', tvConnected: false, textState: {
-    startupUrl: 'http://192.168.1.10:4178', configured: true, pairingOpen: true, textPermissionSaved: true, typingAvailable: true,
-  } });
-  await page.locator('#browser-launch').click();
-  await expect(page.locator('#message')).toHaveText('Launch requested. Waiting for the TV to connect…');
-  await expect(page.locator('#target-philips')).toHaveAttribute('data-connected', 'false');
-  await page.clock.runFor(12500);
-  await expect(page.locator('#message')).toContainText('choose your saved LUMA bookmark');
-  await expect(page.locator('#browser-launch')).toBeEnabled();
-  await page.clock.runFor(30000);
-  expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'msx.launchBrowser').length)).toBe(1);
-  expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'msx.status').length)).toBeGreaterThan(0);
-  expect(await page.evaluate(() => window.__calls.some(call => ['msx.open', 'msx.sample', 'msx.reloadReceiver', 'matter.key'].includes(call.method)))).toBe(false);
-});
-
-test('remote receiver quick action waits for state and a fresh More action preserves playback without relaunch', async ({ page }) => {
-  await page.clock.install();
-  await page.setViewportSize({ width: 320, height: 592 });
-  await openApp(page, { selectedTarget: 'philips', tvConnected: false, textState: {
-    startupUrl: 'http://192.168.1.10:4178', configured: true, pairingOpen: true, textPermissionSaved: true, typingAvailable: true,
-  } });
-  await page.locator('#tab-remote').click();
-  await expect(page.locator('#choose-video')).toHaveText('Open TV receiver');
-  await page.evaluate(() => { window.__connectOnStatus = true; });
-  await page.locator('#choose-video').click();
-  await page.clock.runFor(1000);
-  await expect(page.locator('#message')).toHaveText('TV receiver connected. Your remote is ready.');
-  await expect(page.locator('#choose-video')).toHaveText('Choose video');
-  await page.evaluate(() => { window.__tv.playback.active = true; window.LumaApp.onConnectionState({ receivers: { philips: window.__tv } }); });
+test('unavailable Philips receiver becomes setup and never attempts a failing browser launch', async ({ page }) => {
+  const matter = { available: true, paired: true, connected: true, capabilities: { navigation: true } };
+  await openApp(page, { selectedTarget: 'philips', tvConnected: false, textState: { matter } });
   await page.locator('#show-more').click();
-  await fits(page);
+  await expect(page.locator('#open-tv-receiver')).toHaveText('Set up TV receiver');
   await page.locator('#open-tv-receiver').click();
-  await expect(page.locator('#message')).toContainText('TV receiver is connected. If it is not visible');
-  expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'msx.launchBrowser').length)).toBe(1);
-  expect(await page.evaluate(() => window.__calls.some(call => ['msx.open', 'msx.stop', 'msx.playPause', 'msx.reloadReceiver'].includes(call.method)))).toBe(false);
-  await expect(page.locator('#play-toggle')).toHaveText('Pause');
+  await expect(page.locator('#msx-title')).toHaveText('Set up the Philips receiver');
+  await expect(page.locator('#browser-steps')).toContainText('Open Internet on the TV');
+  await expect(page.locator('#msx-type-address')).toHaveText('Type and open selected address');
+  await expect(page.locator('#msx-startup')).toHaveText('https://kiansheik.io/kodaklumaremote/tv.html');
+  expect(await page.evaluate(() => window.__calls.some(call => call.method === 'msx.launchBrowser'))).toBe(false);
+});
+
+test('one browser typing button offers stable and direct receiver addresses', async ({ page }) => {
+  const matter = { available: true, paired: true, connected: true, capabilities: { navigation: true } };
+  await openApp(page, { selectedTarget: 'philips', tvConnected: false, textState: {
+    matter, startupUrl: 'http://192.168.1.10:4178', configured: true, pairingOpen: true, textPermissionSaved: true, typingAvailable: true,
+  } });
+  await page.locator('#show-more').click();
+  await page.locator('#open-tv-receiver').click();
+  await expect(page.locator('#receiver-address-stable')).toHaveAttribute('aria-pressed', 'true');
+  await page.locator('#msx-type-address').click();
+  await expect(page.locator('#msx-type-status')).toHaveText('Address typed and Go sent. Waiting for the TV browser…');
+  await page.locator('#receiver-address-direct').click();
+  await expect(page.locator('#msx-startup')).toHaveText('http://192.168.1.10:4178/tv/connect.html');
+  await page.locator('#msx-type-address').click();
+  await expect.poll(() => page.evaluate(() => window.__calls.filter(call => call.method === 'matter.key').length)).toBe(2);
+  expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'msx.typeBrowserAddress').map(call => call.params))).toEqual([
+    { address: 'stable' }, { address: 'direct' },
+  ]);
+  expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'matter.key').map(call => call.params))).toEqual([
+    { key: 'enter' }, { key: 'enter' },
+  ]);
+  await expect(page.locator('body')).not.toContainText('Media Station X');
+});
+
+test('first address-typing action prepares the receiver and requests one-time TV permission', async ({ page }) => {
+  const matter = { available: true, paired: true, connected: true, capabilities: { navigation: true } };
+  await openApp(page, { selectedTarget: 'philips', tvConnected: false, textState: { matter, configured: false, pairingOpen: false } });
+  await page.evaluate(() => { window.__typingSetup = true; });
+  await page.locator('#show-more').click();
+  await page.locator('#open-tv-receiver').click();
+  await page.locator('#msx-type-address').click();
+  await expect(page.locator('#msx-text-form')).toBeVisible();
+  expect(await page.evaluate(() => window.__calls.filter(call => ['msx.start', 'msx.textPairRequest'].includes(call.method)).map(call => call.method))).toEqual(['msx.start', 'msx.textPairRequest']);
 });
 
 test('Turn on TV requires its advertised discrete capability and stays separate from browser launch', async ({ page }) => {
@@ -343,195 +292,6 @@ test('Turn on TV requires its advertised discrete capability and stays separate 
   await expect(page.locator('#message')).toContainText('Ligue com LAN');
   await page.evaluate(() => { window.__matter.capabilities.powerOn = 'true'; window.LumaApp.onConnectionState({ receivers: { philips: { ...window.__tv, matter: window.__matter } } }); });
   await expect(page.locator('#turn-on-tv')).toBeHidden();
-});
-
-test('browser manual entry keeps the fixed native link separate from MSX authority, uses saved PIN and full deadline', async ({ page }) => {
-  await page.clock.install();
-  await page.setViewportSize({ width: 320, height: 592 });
-  await openApp(page, { selectedTarget: 'philips', tvConnected: false, textState: {
-    startupUrl: 'http://192.168.1.10:4178', textPermissionSaved: true, typingAvailable: true, configured: false, pairingOpen: true,
-  } });
-  await page.locator('#browser-manual').click();
-  await expect(page.locator('#browser-steps')).toContainText('Internet on the TV');
-  await expect(page.locator('#browser-steps')).toContainText('When the receiver opens, allow the TV here.');
-  await expect(page.locator('#browser-steps')).not.toContainText('Connect this TV');
-  await expect(page.locator('#msx-steps')).toBeHidden();
-  await expect(page.locator('#msx-type-address')).toHaveText('Type browser link');
-  await fits(page);
-  for (const invalid of ['https://httpbin.org/redirect-to?url=http%3A%2F%2F192.168.1.10%3A4178%2Fmsx%2Fconnect.html', 'http://192.168.1.11:4178/msx/connect.html', 'http://192.168.1.10:4178/msx/connect.html?extra=1', 'http://192.168.1.10:4178/msx/connect.html#extra', 'http://user@192.168.1.10:4178/msx/connect.html']) {
-    await page.evaluate(browserSetupUrl => window.LumaApp.onConnectionState({ receivers: { philips: { ...window.__tv, browserSetupUrl } } }), invalid);
-    await expect(page.locator('#msx-type-address')).toBeDisabled();
-    await page.evaluate(() => document.querySelector('#msx-type-address').dispatchEvent(new Event('click')));
-  }
-  expect(await page.evaluate(() => window.__calls.some(call => call.method === 'msx.typeBrowserAddress'))).toBe(false);
-  await page.evaluate(() => window.LumaApp.onConnectionState({ receivers: { philips: window.__tv } }));
-  await expect(page.locator('#msx-type-address')).toBeEnabled();
-  await page.evaluate(() => { window.__holdMethod = 'msx.typeBrowserAddress'; });
-  await page.locator('#msx-type-address').click();
-  await page.clock.runFor(91000);
-  await expect(page.locator('#msx-type-address')).toBeDisabled();
-  expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'msx.typeBrowserAddress').map(call => call.params))).toEqual([{}]);
-  await page.evaluate(() => window.__release());
-  await expect(page.locator('#msx-type-status')).toHaveText('TV acknowledged the keys. Check the Internet browser address before selecting Go / OK.');
-  expect(await page.evaluate(() => window.__calls.some(call => call.method === 'msx.textPairRequest' || call.method === 'msx.textPairGrant' || call.method === 'matter.key'))).toBe(false);
-  await page.locator('#tv-entry-msx').click();
-  await expect(page.locator('#msx-type-address')).toHaveText('Enter TV address');
-  await expect(page.locator('#browser-steps')).toBeHidden();
-  await expect(page.locator('#msx-steps')).toContainText('Start Parameter');
-  await fits(page);
-  await page.locator('#msx-type-address').click();
-  await expect(page.locator('#msx-type-status')).toHaveText('TV acknowledged the keys. Check the address in MSX Setup before selecting Go / OK.');
-  expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'msx.typeAddress').map(call => call.params))).toEqual([{}]);
-});
-
-test('browser launch failures expose manual fallback and partial typing never submits or retries automatically', async ({ page }) => {
-  await openApp(page, { selectedTarget: 'philips', tvConnected: false, textState: {
-    startupUrl: 'http://192.168.1.10:4178', textPermissionSaved: true, typingAvailable: true, configured: false, pairingOpen: true,
-  } });
-  await page.evaluate(() => { window.__launchError = 'TEXT_BROWSER_UNSUPPORTED'; });
-  await page.locator('#browser-launch').click();
-  await expect(page.locator('#msx-type-status')).toContainText('Automatic browser launch is unavailable');
-  await expect(page.locator('#msx-type-address')).toBeVisible();
-  await page.evaluate(() => { window.__typingFailure = true; });
-  await page.locator('#msx-type-address').click();
-  await expect(page.locator('#msx-type-status')).toHaveText('Entry may be incomplete. Clear the TV’s address field before trying again.');
-  expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'msx.typeBrowserAddress').length)).toBe(1);
-  await page.evaluate(() => { window.__typingFailure = false; window.__typingMode = 'msx'; });
-  await page.locator('#msx-type-address').click();
-  await expect(page.locator('#msx-type-status')).not.toContainText('TV acknowledged');
-  expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'msx.typeBrowserAddress').length)).toBe(2);
-  expect(await page.evaluate(() => window.__calls.some(call => call.method === 'msx.typeAddress' || call.method === 'matter.key'))).toBe(false);
-});
-
-test('PIN grant shows progress and a durable saved-permission stage when native publishes before its callback', async ({ page }) => {
-  await page.clock.install();
-  await page.setViewportSize({ width: 320, height: 592 });
-  await openApp(page, { selectedTarget: 'philips', tvConnected: false, entryMethod: 'msx' });
-  await page.evaluate(() => { window.__typingSetup = true; window.__publishTextBeforeReply = true; });
-  await page.locator('#msx-start').click();
-  await page.locator('#msx-text-pair').click();
-  await page.locator('#msx-text-pin').fill('0123');
-  await page.evaluate(() => { window.__holdMethod = 'msx.textPairGrant'; });
-  await page.locator('#msx-text-grant').click();
-  await expect(page.locator('#msx-title')).toHaveText('Checking the TV PIN…');
-  await expect(page.locator('#msx-type-status')).toContainText('Checking the PIN and saving permission');
-  await expect(page.locator('#msx-text-grant')).toBeDisabled();
-  await page.evaluate(() => { window.__tv.typingBusy = true; window.LumaApp.onConnectionState({ receivers: { philips: window.__tv } }); });
-  await page.evaluate(() => window.__release());
-  await expect(page.locator('#msx-title')).toHaveText('Address entry enabled');
-  await expect(page.locator('#msx-text-form')).toBeHidden();
-  await expect(page.locator('#msx-text-pair')).toBeHidden();
-  await expect(page.locator('#msx-type-status')).toContainText('Permission saved. Return to MSX Setup');
-  await expect(page.locator('#msx-steps')).toContainText('Leave the LUMA waiting page');
-  await fits(page);
-  await page.clock.runFor(3500);
-  await expect(page.locator('#msx-title')).toHaveText('Address entry enabled');
-  await expect(page.locator('#msx-type-status')).toContainText('Permission saved');
-  expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'msx.textPairGrant').length)).toBe(1);
-  expect(await page.evaluate(() => window.__calls.some(call => call.method === 'msx.typeAddress'))).toBe(false);
-});
-
-test('restored TV permission stays saved while its current address is resolving and a quiet closed setup can restart', async ({ page }) => {
-  await page.setViewportSize({ width: 320, height: 592 });
-  await openApp(page, { selectedTarget: 'philips', tvConnected: false, entryMethod: 'msx', textState: {
-    startupUrl: 'http://192.168.1.10:4178', textPermissionSaved: true, typingAvailable: false, configured: false, pairingOpen: false,
-  } });
-  await expect(page.locator('#msx-title')).toHaveText('Address entry enabled');
-  await expect(page.locator('#msx-type-status')).toHaveText('Permission saved. Reconnect your TV remote to enable address entry.');
-  await expect(page.locator('#msx-text-pair')).toBeHidden();
-  await expect(page.locator('#msx-type-address')).toBeDisabled();
-  await page.evaluate(() => document.querySelector('#msx-text-pair').dispatchEvent(new Event('click')));
-  expect(await page.evaluate(() => window.__calls.some(call => call.method === 'msx.textPairRequest'))).toBe(false);
-  await expect(page.locator('#msx-start')).toHaveText('Restart TV setup');
-  await expect(page.locator('#msx-diagnostic')).toContainText('TV setup window closed');
-  await fits(page);
-  await page.evaluate(() => { window.__typingSetup = true; window.__tv.typingAvailable = true; window.LumaApp.onConnectionState({ receivers: { philips: window.__tv } }); });
-  await expect(page.locator('#msx-type-address')).toBeDisabled();
-  await page.evaluate(() => document.querySelector('#msx-type-address').dispatchEvent(new Event('click')));
-  expect(await page.evaluate(() => window.__calls.some(call => call.method === 'msx.typeAddress'))).toBe(false);
-  await page.locator('#msx-start').click();
-  await expect(page.locator('#msx-diagnostic')).toBeHidden();
-  await expect(page.locator('#msx-type-address')).toBeEnabled();
-  expect(await page.evaluate(() => window.__calls.some(call => call.method === 'msx.textPairRequest' || call.method === 'msx.typeAddress'))).toBe(false);
-});
-
-test('rejected PIN remains an inline error and expiry clearly requests a new code without retrying', async ({ page }) => {
-  await openApp(page, { selectedTarget: 'philips', tvConnected: false });
-  await page.evaluate(() => { window.__typingSetup = true; window.__grantError = 'TEXT_REJECTED'; });
-  await page.locator('#browser-launch').click();
-  await page.locator('#msx-text-pair').click();
-  await page.locator('#msx-text-pin').fill('0123');
-  await page.locator('#msx-text-grant').click();
-  await expect(page.locator('#msx-text-form')).toBeVisible();
-  await expect(page.locator('#msx-text-pin')).toHaveValue('');
-  await expect(page.locator('#msx-type-status')).toHaveText('The TV did not accept this PIN. Check the code on the TV and try again.');
-  await expect(page.locator('#msx-type-status')).toHaveAttribute('data-error', 'true');
-  await page.evaluate(() => window.LumaApp.onConnectionState({ receivers: { philips: window.__tv } }));
-  await expect(page.locator('#msx-type-status')).toContainText('did not accept this PIN');
-  await page.evaluate(() => {
-    window.__tv.textPairing = false; window.__tv.textPairingExpiresInSeconds = 0; window.__tv.textError = 'TEXT_PAIRING_EXPIRED';
-    window.LumaApp.onConnectionState({ receivers: { philips: window.__tv } });
-  });
-  await expect(page.locator('#msx-text-form')).toBeHidden();
-  await expect(page.locator('#msx-type-status')).toHaveText('The TV PIN expired. Request a new PIN.');
-  await expect(page.locator('#msx-text-pair')).toBeVisible();
-  expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'msx.textPairRequest').length)).toBe(1);
-  expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'msx.textPairGrant').length)).toBe(1);
-  expect(await page.evaluate(() => window.__calls.some(call => call.method === 'msx.typeAddress'))).toBe(false);
-});
-
-test('expired TV PIN clears the entry and partial typing asks for clearing without any automatic retry', async ({ page }) => {
-  await openApp(page, { selectedTarget: 'philips', tvConnected: false, entryMethod: 'msx' });
-  await page.evaluate(() => { window.__typingSetup = true; });
-  await page.locator('#msx-start').click();
-  await page.locator('#msx-text-pair').click();
-  await page.locator('#msx-text-pin').fill('0123');
-  await page.evaluate(() => {
-    window.__tv.textPairing = false; window.__tv.textPairingExpiresInSeconds = 0; window.__tv.textError = 'TEXT_PAIRING_EXPIRED';
-    window.LumaApp.onConnectionState({ receivers: { philips: window.__tv } });
-  });
-  await expect(page.locator('#msx-text-pin')).toHaveValue('');
-  await expect(page.locator('#msx-type-address')).toBeDisabled();
-  await expect(page.locator('#msx-type-status')).toContainText('PIN expired');
-  await page.evaluate(() => { window.__tv.typingAvailable = true; window.__tv.textError = null; window.__typingFailure = true; window.LumaApp.onConnectionState({ receivers: { philips: window.__tv } }); });
-  await page.locator('#msx-type-address').click();
-  await expect(page.locator('#msx-type-status')).toHaveText('Entry may be incomplete. Clear the TV’s address field before trying again.');
-  expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'msx.typeAddress').length)).toBe(1);
-  expect(await page.evaluate(() => window.__calls.some(call => call.method === 'msx.textPairGrant'))).toBe(false);
-  await page.evaluate(() => { window.__typingFailure = false; window.__typingAck = 1; });
-  await page.locator('#msx-type-address').click();
-  await expect(page.locator('#message')).toContainText('did not accept address entry');
-  await expect(page.locator('#msx-type-status')).not.toContainText('Address sent');
-  expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'msx.typeAddress').length)).toBe(2);
-  await page.evaluate(() => { window.__typingFailure = true; window.__typingError = 'TEXT_CANCELLED'; });
-  await page.locator('#msx-type-address').click();
-  await expect(page.locator('#msx-type-status')).toHaveText('Address entry stopped. Clear the TV’s address field before trying again.');
-  expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'msx.typeAddress').length)).toBe(3);
-});
-
-test('TV text operations keep native work pending through their full pairing and typing budgets', async ({ page }) => {
-  await page.clock.install();
-  await openApp(page, { selectedTarget: 'philips', tvConnected: false, entryMethod: 'msx' });
-  await page.evaluate(() => { window.__typingSetup = true; });
-  await page.locator('#msx-start').click();
-  await page.evaluate(() => { window.__holdMethod = 'msx.textPairRequest'; });
-  await page.locator('#msx-text-pair').click();
-  await page.clock.runFor(45001);
-  await expect(page.locator('#msx-text-pair')).toBeDisabled();
-  await expect(page.locator('#msx-text-form')).toBeHidden();
-  await page.evaluate(() => window.__release());
-  await expect(page.locator('#msx-text-form')).toBeVisible();
-  await page.locator('#msx-text-pin').fill('0123');
-  await page.locator('#msx-text-grant').click();
-  await expect(page.locator('#msx-type-address')).toBeEnabled();
-  await page.evaluate(() => { window.__holdMethod = 'msx.typeAddress'; });
-  await page.locator('#msx-type-address').click();
-  await page.clock.runFor(61000);
-  await expect(page.locator('#msx-type-address')).toBeDisabled();
-  await expect(page.locator('#msx-type-status')).not.toContainText('incomplete');
-  await page.evaluate(() => window.__release());
-  await expect(page.locator('#msx-type-status')).toHaveText('TV acknowledged the keys. Check the address in MSX Setup before selecting Go / OK.');
-  expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'msx.typeAddress').length)).toBe(1);
 });
 
 test('sample stays inside the connected Philips app flow and waits for its real receipt before showing playback controls', async ({ page }) => {
@@ -831,13 +591,19 @@ test('Philips subtitle failures and invalid receipts do not reopen or relabel pl
   expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'msx.subtitle').length)).toBe(2);
 });
 
-test('MSX setup requires explicit listener start and matching TV approval without disturbing LUMA', async ({ page }) => {
-  await openApp(page, { selectedTarget: 'philips', tvConnected: false, entryMethod: 'msx' });
-  expect(await page.evaluate(() => window.__calls.some(call => call.method === 'msx.start'))).toBe(false);
-  await page.locator('#msx-start').click();
-  await expect(page.locator('#msx-startup')).toHaveText('192.168.1.10:4178');
+test('browser receiver requires matching TV approval without disturbing LUMA', async ({ page }) => {
+  const matter = { available: true, paired: true, connected: true, capabilities: { navigation: true } };
+  await openApp(page, { selectedTarget: 'philips', tvConnected: false, textState: { matter } });
+  await page.locator('#tab-devices').dispatchEvent('click');
+  await page.locator('#tv-setup-video').dispatchEvent('click');
+  await page.evaluate(() => {
+    window.__tv.startupUrl = 'http://192.168.1.10:4178'; window.__tv.browserSetupUrl = 'http://192.168.1.10:4178/tv/connect.html';
+    window.__tv.awaitingApproval = true; window.__tv.pendingHost = '192.168.1.60';
+    window.LumaApp.onConnectionState({ receivers: { philips: window.__tv } });
+  });
   await expect(page.locator('#msx-pairing')).toContainText('192.168.1.60');
-  await page.locator('#msx-confirm').click();
+  await expect(page.locator('#msx-confirm')).toBeVisible();
+  await page.locator('#msx-confirm').dispatchEvent('click');
   await expect(page.locator('#page-remote')).toBeVisible();
   await expect(page.locator('#target-luma')).toHaveAttribute('data-connected', 'true');
   expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'msx.confirm').map(call => call.params))).toEqual([{ host: '192.168.1.60' }]);
@@ -955,11 +721,18 @@ test('Philips brightness uses the same 2% series preference with a guarded displ
 
 test('Philips setup, approval and remote panels fit a narrow phone without scrolling', async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 592 });
-  await openApp(page, { selectedTarget: 'philips', tvConnected: false, entryMethod: 'msx' });
+  const matter = { available: true, paired: true, connected: true, capabilities: { navigation: true } };
+  await openApp(page, { selectedTarget: 'philips', tvConnected: false, textState: { matter } });
   await fits(page);
-  await page.locator('#msx-start').click();
+  await page.locator('#tab-devices').dispatchEvent('click');
+  await page.locator('#tv-setup-video').dispatchEvent('click');
+  await page.evaluate(() => {
+    window.__tv.awaitingApproval = true; window.__tv.pendingHost = '192.168.1.60';
+    window.LumaApp.onConnectionState({ receivers: { philips: window.__tv } });
+  });
   await fits(page);
-  await page.locator('#msx-confirm').click();
+  await expect(page.locator('#msx-confirm')).toBeVisible();
+  await page.locator('#msx-confirm').dispatchEvent('click');
   await fits(page);
   await page.evaluate(media => window.LumaApp.onCapturedMedia(media), tvMedia);
   await expect(page.locator('#message')).toHaveText('Ready on Philips TV. You can use the remote.');
@@ -976,13 +749,13 @@ test('Philips setup, approval and remote panels fit a narrow phone without scrol
 
 test('TV setup diagnostics show only observed fixed guidance and keep narrow-phone controls visible', async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 592 });
-  await openApp(page, { selectedTarget: 'philips', tvConnected: false, entryMethod: 'msx' });
-  await expect(page.locator('#msx-steps')).toContainText('padlock open');
+  await openApp(page, { selectedTarget: 'philips', tvConnected: false });
+  await expect(page.locator('#browser-steps')).toContainText('Open Internet on the TV');
   await expect(page.locator('#msx-diagnostic')).toBeHidden();
   const cases = [
-    ['HTTPS_REQUEST', 'TV is trying a secure connection'],
+    ['HTTPS_REQUEST', 'direct phone address uses http'],
     ['ORIGIN_REJECTED', 'app connection was rejected'],
-    ['PAIRING_EXPIRED', 'Tap Restart TV setup'],
+    ['PAIRING_EXPIRED', 'Tap Type and open selected address'],
     ['BOOTSTRAP_READY', 'Open “Connect this TV”'],
   ];
   for (const [lastReason, hint] of cases) {
@@ -998,7 +771,7 @@ test('TV setup diagnostics show only observed fixed guidance and keep narrow-pho
   } } }));
   await expect(page.locator('#msx-diagnostic')).toBeHidden();
   await expect(page.locator('#msx-type-address')).toBeDisabled();
-  await expect(page.locator('#msx-type-status')).toHaveText('Enable address entry once with the TV’s PIN.');
+  await expect(page.locator('#msx-type-status')).toContainText('Tap Type and open selected address');
   expect(await page.locator('body').innerText()).not.toContain('private-origin');
   expect(await page.locator('body').innerText()).not.toContain('private-diagnostic-token');
   expect(await page.evaluate(() => window.diagnosticExecuted)).toBeUndefined();

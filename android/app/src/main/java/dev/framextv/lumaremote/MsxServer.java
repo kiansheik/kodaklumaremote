@@ -520,7 +520,7 @@ public final class MsxServer implements AutoCloseable {
                 if (target.getRawQuery() != null && !target.getRawQuery().matches("t=[0-9]{1,16}")) throw new HttpFailure(400);
                 respond(accepted, 200, "image/gif", PROBE_GIF, false); return;
             }
-            if ("/msx/connect.html".equals(path) && "GET".equals(request.method)) {
+            if (("/tv/connect.html".equals(path) || "/msx/connect.html".equals(path)) && "GET".equals(request.method)) {
                 if (target.getRawQuery() != null) throw new HttpFailure(400);
                 String receiver;
                 synchronized (lock) { admitBootstrap(peer, request); receiver = "/" + token + "/receiver.html"; bootstrapAccepted++; }

@@ -1,5 +1,39 @@
 # Current state
 
+## Unreleased 0.4.13: Philips browser-only receiver setup
+
+- When the Philips receiver is disconnected, More now says **Set up TV
+  receiver** and opens setup instead of sending the known-failing browser launch
+  request. When connected, it remains **Open TV receiver**.
+- Setup now has one TV-browser flow: open Internet on the TV and select its URL
+  field, choose **Stable address** or **Direct phone address**, then tap **Type
+  and open selected address**. The same action starts the phone listener,
+  requests the one-time Philips text-input PIN when needed, types the fixed URL,
+  and sends Matter Enter/Go. If Enter fails, it asks for manual Go/OK.
+- Stable typing is native-owned and exact:
+  `https://kiansheik.io/kodaklumaremote/tv.html`. The fixed page attempts local
+  `/24` prefix inference, asks only for the phone's final IP number, saves it,
+  probes and auto-opens one remembered phone, and shows a chooser for multiple
+  phones. Failed inference/probing leaves an editable full address and an
+  open-anyway fallback. The backup remains
+  `http://PHONE:PORT/tv/connect.html`. Arbitrary text remains impossible; old
+  fragment links and `/msx/connect.html` remain compatibility-only.
+- The only exposed phone-side direct launch remains JointSPACE
+  `activities/browser`; this TV previously acknowledged it without visibly
+  navigating. Its `applications` inventory is unavailable. Firmware
+  `GotoOpenInternet` is a privileged in-TV bridge, not a network phone-control
+  route, so no second direct-launch method is claimed.
+- Verified locally: Node 247/247, browser 158/158, focused release/deploy 15/15,
+  focused new setup 8/8, receiver Node 61/61, Android app and AndroidTest Java
+  compilation, and JS syntax. No emulator was connected, so instrumentation was
+  not run. A same-version signed 0.4.12/code 22 APK was rebuilt from the current
+  working tree and installed in place on the physical Samsung with saved app
+  data preserved by `adb install -r`; Android cold-launched `MainActivity`
+  successfully. APK: 9,821,230 bytes, SHA-256
+  `aead10c90f1d1a76bb4d29e2e9ff3281804dc16d17238a6cef9631ea817224bf`.
+  The real Philips flow remains untested. The later page/Enter changes have not
+  yet been installed on the phone or deployed.
+
 ## Released 0.4.12 / receiver 0.3.2: Philips parity, two-screen move/sync, brightness
 
 - Published from source commit `bd9223f` as GitHub release `v0.4.12`; live

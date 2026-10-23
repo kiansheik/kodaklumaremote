@@ -44,7 +44,7 @@
     var duration = typeof seconds === 'number' && isFinite(seconds) ? Math.max(1, Math.min(60, seconds)) * 1000 : 5000;
     noticeTimer = setTimeout(function () { notice.hidden = true; }, duration);
   }
-  if (!core || typeof Promise !== 'function') { status.textContent = window.parent === window ? 'This TV browser is unsupported. Update your TV software and try again.' : 'This TV browser is unsupported. Update Media Station X and try again.'; return; }
+  if (!core || typeof Promise !== 'function') { status.textContent = 'This TV browser is unsupported. Update your TV software and try again.'; return; }
   function request(method, path, data, textMode, timeoutMs) {
     return new Promise(function (resolve, reject) {
       var xhr = new XMLHttpRequest(); xhr.open(method, textMode ? path : base + path, true); xhr.timeout = timeoutMs || (textMode ? 15000 : 10000);
@@ -206,7 +206,7 @@
             if (alive && !moved) {
               moved = true;
               var rest = others.filter(function (value) { return value !== address; }).concat([own]);
-              location.replace('http://' + address + '/msx/connect.html#phones=' + rest.join(',') + '&client=' + receiverClient);
+              location.replace('http://' + address + '/tv/connect.html#phones=' + rest.join(',') + '&client=' + receiverClient);
             }
             if (!remaining && !moved) { probing = false; offlineSince = Date.now() - 5000; }
           });

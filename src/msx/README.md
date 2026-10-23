@@ -1,6 +1,6 @@
 # TV receiver
 
-These files run in the TV Internet browser or inside Media Station X. The Android sender serves the
+These files run in the TV Internet browser. The Android sender serves the
 receiver assets and a small control channel on its Wi-Fi address. The TV fetches
 the original video and selected subtitle URL itself; the phone never relays
 media. Once the video and selected subtitle have loaded, losing the phone control
@@ -8,45 +8,31 @@ connection does not stop or reset the TV player.
 
 ## Setup and platform boundary
 
-In LUMA Remote, select Philips → Video receiver → **TV browser** and tap
-**Open TV receiver**. The phone prepares its listener. First time only, enable
-TV browser control with the four-digit PIN shown by the TV, then tap **Open TV
-receiver** again. Existing saved permission is reused. The native launch request
-uses this phone's direct LAN URL `http://PHONE:PORT/msx/connect.html`; callers
-cannot provide a URL. A launch acknowledgement does not prove the TV opened the
-page. Wait for the actual TV connection, then explicitly **Allow this TV**.
+When the receiver is offline, LUMA Remote shows **Set up TV receiver** instead
+of attempting a browser launch. Open **Internet** on the TV, select and clear
+its address field, then choose either **Stable address** or **Direct phone
+address** on the phone and tap **Type and open selected address**. First use
+requests the separate four-digit Philips TV-text permission in the same flow.
 
-If automatic launch is unavailable, choose **Enter link manually**. Open
-**Internet on the TV**, select and clear its address bar, then tap **Type browser
-link** on the phone. Check the TV address and select **Go / OK on the TV**. The
-phone types its own fixed LAN setup link only; it does not clear or submit the field.
-The phone and TV must share a network; no public redirect service is involved.
-Actual TV launch, navigation and playback remain device acceptance checks.
+The stable choice types only
+`https://kiansheik.io/kodaklumaremote/tv.html`. The fixed page attempts to infer
+the TV's private `/24` network prefix and asks for the phone's final IP number,
+then remembers it. One saved phone is probed and opened automatically; multiple
+saved phones produce a chooser. If subnet discovery or the HTTPS-to-HTTP image
+probe is unavailable in the TV browser, the full address remains editable and
+an **Open saved phone anyway** fallback is shown. The direct backup types
+`http://PHONE:PORT/tv/connect.html`.
 
-The secondary **Media Station X** option retains its original setup flow. Tap
-**Set up TV** if needed. Enable address entry once with the TV PIN if it is not
-already saved.
-This text-control permission is separate from Matter and receiver approval.
-After permission is saved, return to **Media Station X → Settings → Start
-Parameter → Setup** on the TV. Select and clear its address field, leave the
-keyboard open and the padlock open, then tap **Enter TV address** on the phone.
-The phone sends only its own current `PHONE:PORT` startup address. Check the
-displayed text and confirm **Go / OK on the TV**; the phone does not submit it.
-If entry is interrupted or partial, clear the field before trying again. A
-successful protocol acknowledgement does not verify the displayed text.
-If text control is unavailable, enter the shown address manually. MSX requests
-`http://PHONE:PORT/msx/start.json`. The phone generates that start object and a
-home page containing a `video:plugin:` action pointing at `receiver.html` under
-the private capability prefix. Open **Connect this TV**, then explicitly approve
-the detected TV on the phone. No media commands are accepted before approval.
+After the fixed value is typed, the phone sends the TV's Matter **Enter/Go** key.
+If that key is rejected, the phone explicitly asks the user to press **Go / OK**
+on the TV. Callers choose only between the two native-owned URLs and cannot
+provide arbitrary text. The legacy `/msx/connect.html` route and old launcher
+fragments remain only for previously saved links.
 
-Startup must be possible over HTTP from the installed MSX app. An HTTPS-hosted
-MSX launcher can upgrade HTTP JSON/plugin URLs or block mixed content; a successful
-desktop-browser test does not establish compatibility with the Philips firmware.
-The phone and TV must be on the same network. Exact Philips picture, sound,
-subtitle rendering, control behavior and phone-off continuation require physical
-acceptance. MSX availability in the Titan OS catalog includes Brazil but varies
-by TV model and region.
+The phone and TV must share a network. A successful text-input acknowledgement
+does not prove the address is visible or that the TV loaded it. Actual TV
+navigation, HTTP access, playback, picture, sound, subtitles and phone-off
+continuation remain physical acceptance checks.
 
 ## Playback and controls
 

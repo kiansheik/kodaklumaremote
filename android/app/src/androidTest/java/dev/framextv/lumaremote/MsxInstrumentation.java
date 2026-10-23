@@ -211,7 +211,7 @@ public final class MsxInstrumentation {
             require(rawStatus(origin, preflight.replace("Access-Control-Request-Method: GET", "Access-Control-Request-Method: POST")) == 400, "Mutation preflight accepted");
             require(rawStatus(origin, preflight.replace("Origin: http://msx.benzac.de\r\n", "")) == 400, "Originless preflight accepted");
             require(!server.status().getBoolean("awaitingApproval") && !server.hasSavedReceiver() && server.status().getJSONObject("diagnostics").getLong("bootstrapAccepted") == 0, "Denied preflights changed pairing");
-            String connect = "GET /msx/connect.html HTTP/1.1\r\nHost: " + hostHeader + "\r\n\r\n";
+            String connect = "GET /tv/connect.html HTTP/1.1\r\nHost: " + hostHeader + "\r\n\r\n";
             require(rawStatus(origin, connect.replace(hostHeader, "attacker.example")) == 403, "Connect route accepted a foreign Host");
             String foreignConnect = rawResponse(origin, connect.replace("\r\n\r\n", "\r\nOrigin: https://attacker.example\r\n\r\n"));
             require(foreignConnect.startsWith("HTTP/1.1 403 ") && !foreignConnect.contains("Location:"), "Connect route disclosed redirect to foreign origin");

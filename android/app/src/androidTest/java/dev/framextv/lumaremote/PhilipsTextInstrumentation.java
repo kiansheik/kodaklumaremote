@@ -153,14 +153,14 @@ public final class PhilipsTextInstrumentation {
             require(cancelFactory.inputCount == 1 && canceled.getInt("acknowledgedChars") == 1 && canceled.getBoolean("partialInput") && "TEXT_CANCELLED".equals(canceled.getString("error")), "Cancel during pacing wrote another key or lost the partial receipt");
             cancelClock.onSleep = cancel::close; rejects("TEXT_CANCELLED", () -> cancel.typeAddress(HOST, START));
             require(cancelFactory.inputCount == 2 && cancel.status(HOST).getJSONObject("lastTyping").getBoolean("partialInput"), "Close during pacing misreported partial typing");
-            String browserExpected = "http://192.168.50.2:4178/msx/connect.html";
+            String browserExpected = "http://192.168.50.2:4178/tv/connect.html";
             require(browserExpected.equals(PhilipsTextController.browserSetupUrl(START)), "Browser entry changed fixed local target");
-            require("http://192.168.50.2:49153/msx/connect.html".equals(PhilipsTextController.browserSetupUrl("http://192.168.50.2:49153")), "Browser entry reused an old server port");
+            require("http://192.168.50.2:49153/tv/connect.html".equals(PhilipsTextController.browserSetupUrl("http://192.168.50.2:49153")), "Browser entry reused an old server port");
             Clock browserClock = new Clock(); Store browserStore = new Store(); Factory firstBrowserFactory = new Factory(browserClock);
             PhilipsTextController firstBrowser = paired(browserStore, firstBrowserFactory, browserClock); firstBrowser.close();
             Factory browserFactory = new Factory(browserClock); browserFactory.inputDelay = 1800;
             PhilipsTextController browser = new PhilipsTextController(browserStore, browserFactory, browserClock);
-            long browserStarted = browserClock.now(); JSONObject browserTyped = browser.typeBrowserAddress(HOST, START); StringBuilder browserActual = new StringBuilder();
+            long browserStarted = browserClock.now(); JSONObject browserTyped = browser.typeBrowserAddress(HOST, START, "direct"); StringBuilder browserActual = new StringBuilder();
             for (JSONObject call : browserFactory.calls) {
                 require("input/key".equals(call.getString("path")), "Browser entry requested another PIN instead of reusing saved permission");
                 browserActual.append(call.getJSONObject("body").getString("unicode"));
@@ -171,17 +171,22 @@ public final class PhilipsTextInstrumentation {
                     && !browserTyped.getBoolean("textAppliedVerified"), "Browser entry was not the exact fixed URL with an honest receipt");
             require(browserClock.now() - browserStarted > 65000 && browserClock.now() - browserStarted < 90000
                     && browserClock.sleeps.size() == browserExpected.length() - 1 && browserClock.sleeps.stream().allMatch(delay -> delay == 150), "Browser entry budget or Unicode pacing changed");
-            for (String unsafe : new String[] {"https://httpbin.org/redirect-to?url=http://elsewhere.test", "https://192.168.50.2:4178", "http://127.0.0.1:4178", START + "/msx/connect.html", START + "?url=other", "http://user@192.168.50.2:4178"}) rejects("TEXT_INVALID_INPUT", () -> browser.typeBrowserAddress(HOST, unsafe));
+            for (String unsafe : new String[] {"", "browser", "https://elsewhere.test", "DIRECT"}) rejects("TEXT_INVALID_INPUT", () -> browser.typeBrowserAddress(HOST, START, unsafe));
             require(browserFactory.inputCount == browserExpected.length(), "Invalid browser entry wrote caller-provided text"); browser.close();
+            Clock stableClock = new Clock(); Factory stableFactory = new Factory(stableClock); PhilipsTextController stable = new PhilipsTextController(browserStore, stableFactory, stableClock);
+            JSONObject stableTyped = stable.typeBrowserAddress(HOST, START, "stable"); StringBuilder stableActual = new StringBuilder();
+            for (JSONObject call : stableFactory.calls) stableActual.append(call.getJSONObject("body").getString("unicode"));
+            String stableExpected = PhilipsTextController.launcherUrl(START);
+            require(stableExpected.contentEquals(stableActual) && stableTyped.getInt("totalChars") == stableExpected.length(), "Stable browser choice did not type the fixed launcher with this phone attached"); stable.close();
             Clock browserCancelClock = new Clock(); Factory browserCancelFactory = new Factory(browserCancelClock);
             PhilipsTextController browserCancel = new PhilipsTextController(browserStore, browserCancelFactory, browserCancelClock);
-            browserCancelClock.onSleep = browserCancel::cancel; rejects("TEXT_CANCELLED", () -> browserCancel.typeBrowserAddress(HOST, START));
+            browserCancelClock.onSleep = browserCancel::cancel; rejects("TEXT_CANCELLED", () -> browserCancel.typeBrowserAddress(HOST, START, "direct"));
             JSONObject browserCanceled = browserCancel.status(HOST).getJSONObject("lastTyping");
             require(browserCancelFactory.inputCount == 1 && browserCanceled.getInt("acknowledgedChars") == 1 && browserCanceled.getBoolean("partialInput")
                     && browserCanceled.getInt("totalChars") == browserExpected.length() && "browser".equals(browserCanceled.getString("textEntryMode")), "Browser cancellation lost its partial receipt or sent a second key"); browserCancel.close();
             Clock browserPartialClock = new Clock(); Factory browserPartialFactory = new Factory(browserPartialClock); browserPartialFactory.failInput = 3;
             PhilipsTextController browserPartial = new PhilipsTextController(browserStore, browserPartialFactory, browserPartialClock);
-            rejects("TEXT_TIMEOUT", () -> browserPartial.typeBrowserAddress(HOST, START)); JSONObject browserReceipt = browserPartial.status(HOST).getJSONObject("lastTyping");
+            rejects("TEXT_TIMEOUT", () -> browserPartial.typeBrowserAddress(HOST, START, "direct")); JSONObject browserReceipt = browserPartial.status(HOST).getJSONObject("lastTyping");
             require(browserPartialFactory.inputCount == 3 && browserReceipt.getInt("acknowledgedChars") == 2 && browserReceipt.getBoolean("partialInput")
                     && "browser".equals(browserReceipt.getString("textEntryMode")) && !browserReceipt.getBoolean("textAppliedVerified"), "Uncertain browser character retried or partial receipt lost"); browserPartial.close();
             passed(runner, ++checks, "Fixed MSX/browser entries reuse saved permission, pace one codepoint and preserve bounded cancellation/partial receipts without submitting");
@@ -191,10 +196,10 @@ public final class PhilipsTextInstrumentation {
             long launchStarted = launchClock.now(); JSONObject launched = launch.launchBrowser(HOST, START);
             require(launched.getBoolean("accepted") && !launched.getBoolean("pageLoadVerified") && launchFactory.calls.size() == 2
                     && "system".equals(launchFactory.calls.get(0).getString("path")) && "activities/browser".equals(launchFactory.calls.get(1).getString("path"))
-                    && browserExpected.equals(launchFactory.calls.get(1).getJSONObject("body").getString("url")), "Browser launch skipped fresh support or mistook acceptance for loading");
+                    && PhilipsTextController.launcherUrl(START).equals(launchFactory.calls.get(1).getJSONObject("body").getString("url")), "Browser launch skipped fresh support or mistook acceptance for loading");
             require(launchFactory.calls.get(0).getLong("deadline") == launchStarted + 15000 && launchFactory.calls.get(1).getLong("deadline") == launchStarted + 30000
                     && launchFactory.inputCount == 0 && launchClock.sleeps.isEmpty() && launchFactory.pins.size() == 1, "Browser launch changed its bounded budget, reused no saved pin, or typed/submitted keys");
-            for (String unsafe : new String[] {"https://elsewhere.test", START + "/msx/connect.html", START + "?url=other"}) rejects("TEXT_INVALID_INPUT", () -> launch.launchBrowser(HOST, unsafe));
+            for (String unsafe : new String[] {"https://elsewhere.test", START + "/tv/connect.html", START + "?url=other"}) rejects("TEXT_INVALID_INPUT", () -> launch.launchBrowser(HOST, unsafe));
             require(launchFactory.browserCount == 1 && launchFactory.calls.size() == 2, "Invalid launch input reached a transport"); launch.close();
             Clock unsupportedBrowserClock = new Clock(); Factory unsupportedBrowserFactory = new Factory(unsupportedBrowserClock); unsupportedBrowserFactory.browserSupported = false;
             PhilipsTextController unsupportedBrowser = new PhilipsTextController(browserStore, unsupportedBrowserFactory, unsupportedBrowserClock);
@@ -211,7 +216,7 @@ public final class PhilipsTextInstrumentation {
                 require(rejectedLaunchFactory.browserCount == 1 && rejectedLaunchFactory.calls.size() == 2 && !rejectedLaunch.status(HOST).getBoolean("typingBusy"), "Failed browser launch retried or remained busy"); rejectedLaunch.close();
             }
             require(PhilipsTextController.fixedBrowserSetupUrl(browserExpected), "Fixed browser URL was not admitted");
-            for (String unsafe : new String[] {"https://httpbin.org/redirect-to?url=http%3A%2F%2F192.168.50.2%3A4178%2Fmsx%2Fconnect.html", "http://127.0.0.1:4178/msx/connect.html", "https://192.168.50.2:4178/msx/connect.html", "http://8.8.8.8:4178/msx/connect.html", "http://192.168.50.2:80/msx/connect.html", "http://user@192.168.50.2:4178/msx/connect.html", browserExpected + "?extra=1", browserExpected + "#fragment", browserExpected.replace("connect.html", "other.html")}) require(!PhilipsTextController.fixedBrowserSetupUrl(unsafe), "Browser transport accepted an arbitrary URL or route");
+            for (String unsafe : new String[] {"https://httpbin.org/redirect-to?url=http%3A%2F%2F192.168.50.2%3A4178%2Ftv%2Fconnect.html", "http://127.0.0.1:4178/tv/connect.html", "https://192.168.50.2:4178/tv/connect.html", "http://8.8.8.8:4178/tv/connect.html", "http://192.168.50.2:80/tv/connect.html", "http://user@192.168.50.2:4178/tv/connect.html", browserExpected + "?extra=1", browserExpected + "#fragment", browserExpected.replace("connect.html", "other.html")}) require(!PhilipsTextController.fixedBrowserSetupUrl(unsafe), "Browser transport accepted an arbitrary URL or route");
             passed(runner, ++checks, "Browser shortcut checks fresh advertised support, reuses saved permission and reports acceptance without load proof or automatic retries");
 
             Object previousFactory = HttpsURLConnection.getDefaultSSLSocketFactory(), previousVerifier = HttpsURLConnection.getDefaultHostnameVerifier();

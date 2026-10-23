@@ -189,8 +189,9 @@
   healthy `error:null` reports are accepted. New pages bootstrap before hello;
   retained current-capability pages can reclaim an unapproved peer in an open
   setup window, still requiring phone approval. Reset revokes the old capability.
-  `/msx/connect.html` redirects locally into the receiver. Standalone pages skip
-  the MSX SDK; only embedded pages load its optional upstream bridge.
+  `/tv/connect.html` redirects locally into the receiver; `/msx/connect.html`
+  remains only as a compatibility alias for saved links. Standalone pages skip
+  the legacy optional player bridge.
   Channel state/status exceptions preserve poll/heartbeat retries and pending
   receipts without replaying executed commands; Ready follows a successful state
   POST. Shared player/channel timer defaults call browser-global delegates;
@@ -207,20 +208,21 @@
   picture and sound after an uninterrupted replay of this fixed clip.
   See [receiver domain](msx-receiver.md).
 - `PhilipsTextController.java`: separate phone-local JointSPACE PIN grant,
-  Keystore-encrypted credentials and per-TV certificate pin. Only the native
-  server origin supplies `browserSetupUrl`: exact HTTP/private IPv4/high-port
-  origin plus `/msx/connect.html`, empty while stopped. No public redirect service
-  is used. Empty-argument `msx.launchBrowser`
-  checks freshly advertised browser support before the pinned `activities/browser`
-  request; acceptance explicitly does not prove loading. Empty-argument browser
-  typing uses the same URL/90-second budget; legacy MSX typing retains bare
-  `IP:port`/65 seconds. Paced/cancellable input receipts include mode, total and
-  partial counts; no arbitrary UI URL/text, clearing, Enter or uncertain retry.
+  Keystore-encrypted credentials and per-TV certificate pin. Browser setup lets
+  the UI choose only native-owned `stable` or `direct` values: the stable
+  value is the exact `kiansheik.io` launcher; direct is the exact
+  HTTP/private IPv4/high-port origin plus
+  `/tv/connect.html`, empty while stopped. Paced/cancellable input receipts
+  include mode, total and partial counts; no arbitrary UI URL/text, clearing or
+  uncertain retry. Mobile setup sends Matter Enter/Go only after all URL
+  characters are acknowledged, with a manual-OK fallback.
   Matter supplies the paired TV's resolved private address. `ConnectionService`
   cancels queued/active typing on target change, reset/disconnect or shutdown.
-- `src/mobile/{index.html,app.js}`: distinct TV-remote/video setup, default
-  **Open TV receiver** browser shortcut, saved-PIN permission, manual browser-link
-  fallback, explicit legacy MSX mode, sample action and Home/Back beside Up.
+- `src/mobile/{index.html,app.js}`: distinct TV-remote/video setup. Disconnected
+  state says **Set up TV receiver**; setup selects the stable launcher or direct
+  phone fallback and has one **Type and open selected address** action that folds
+  in saved/first-use PIN permission and Enter/Go. Connected state retains **Open TV receiver**.
+  No Media Station X setup is exposed. Sample action and Home/Back remain beside Up.
   Installed debug APK retains real hello/poll/state and observed remote controls.
   Collapsed Developer tools compare loaded/server revisions, uptime/pings and
   reported capabilities. Phone-only fractional-uptime/later-hello notice fixes

@@ -6,43 +6,64 @@
   <meta name="referrer" content="no-referrer">
   <title>LUMA TV</title>
   <style>
-    html,body{margin:0;height:100%;background:#070b11;color:#f5f7fa;font-family:Arial,sans-serif}
+    html,body{margin:0;min-height:100%;background:#070b11;color:#f5f7fa;font-family:Arial,sans-serif}
     body{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:5vh 6vw;box-sizing:border-box}
-    h1{font-size:5vh;margin:0 0 2vh}
-    p{font-size:2.8vh;line-height:1.5;max-width:70vw;margin:0 0 3vh;color:#c2d7df}
-    #phones{display:grid;gap:1.5vh;min-width:40vw}
-    button{font:inherit;font-size:2.6vh;color:#fff;background:#1c3340;border:2px solid #48616e;border-radius:1vh;padding:1.6vh 2vw;text-align:left}
-    button:focus{outline:4px solid #b0f2dc;outline-offset:3px;background:#315c57}
-    small{display:block;font-size:1.9vh;color:#aab7c5;margin-top:.5vh}
+    h1{font-size:5vh;margin:0 0 2vh} p{font-size:2.7vh;line-height:1.45;max-width:76vw;margin:0 0 2.5vh;color:#c2d7df}
+    #setup{width:min(72vw,900px)} label{display:block;font-size:2.2vh;color:#b8cbd3;margin-bottom:1vh;text-align:left}
+    input{box-sizing:border-box;width:100%;font:inherit;font-size:4.2vh;letter-spacing:.08em;color:#fff;background:#101c25;border:3px solid #48616e;border-radius:1vh;padding:1.6vh 2vw}
+    input:focus,button:focus{outline:4px solid #b0f2dc;outline-offset:3px;background:#315c57}
+    #hint{font-size:2vh;margin:1.3vh 0 2.5vh;text-align:left;color:#aab7c5}
+    #phones,#actions{display:grid;gap:1.5vh;min-width:46vw;max-width:76vw}
+    button{font:inherit;font-size:2.6vh;color:#fff;background:#1c3340;border:2px solid #48616e;border-radius:1vh;padding:1.6vh 2vw;text-align:center}
+    button.primary{background:#2b665a;border-color:#83cbb3} button.quiet{background:#111c24;color:#c2d7df}
+    small{display:block;font-size:1.9vh;color:#aab7c5;margin-top:.5vh}[hidden]{display:none!important}
   </style>
 </head>
 <body>
   <h1>LUMA Remote</h1>
-  <p id="status">Looking for your phone…</p>
+  <p id="status">Finding your home network…</p>
+  <form id="setup" hidden autocomplete="off">
+    <label for="phone-ip">Phone’s local IP address</label>
+    <input id="phone-ip" type="text" inputmode="numeric" spellcheck="false" maxlength="15" aria-describedby="hint">
+    <p id="hint">Enter the final number shown by LUMA Remote on your phone.</p>
+    <div id="actions"><button class="primary" type="submit">Connect to phone</button><button id="open-anyway" class="quiet" type="button" hidden>Open saved phone anyway</button></div>
+  </form>
   <div id="phones"></div>
   <script>
-  /* Fixed address for the TV browser's speed dial. It never talks to a phone (an
-     https page cannot reach a phone's http server); it remembers the phones that
-     opened it and sends the TV to one. Phones open it as tv.html#phone=IP:PORT. */
+  /* This speed-dial page keeps private phone addresses only in the TV's local
+     storage. WebRTC may reveal the TV's /24 prefix; the user then enters just
+     the phone's final number. No LAN address is sent to GitHub. */
   (function () {
     'use strict';
-    var KEY = 'luma-phones', MAX = 8, AUTO_MS = 4000;
+    var KEY = 'luma-phones', MAX = 8, PORT = 4178, PROBE_MS = 2600;
     var status = document.getElementById('status'), list = document.getElementById('phones');
-    function address(value) {
-      var match = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3}):(\d{4,5})$/.exec(String(value || ''));
+    var setup = document.getElementById('setup'), input = document.getElementById('phone-ip');
+    var openAnyway = document.getElementById('open-anyway'), savedFallback = null;
+    function ip(value) {
+      var match = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(String(value || '').trim());
       if (!match) return null;
-      var a = +match[1], b = +match[2], parts = [a, b, +match[3], +match[4]], port = +match[5];
+      var parts = [+match[1], +match[2], +match[3], +match[4]], a = parts[0], b = parts[1];
       for (var i = 0; i < 4; i++) if (parts[i] > 255 || String(parts[i]) !== match[i + 1]) return null;
-      var privateRange = a === 10 || a === 172 && b >= 16 && b <= 31 || a === 192 && b === 168;
-      return privateRange && port >= 1024 && port <= 65535 ? parts.join('.') + ':' + port : null;
+      return (a === 10 || a === 172 && b >= 16 && b <= 31 || a === 192 && b === 168) ? parts.join('.') : null;
     }
+    function address(value) {
+      var match = /^([^:]+):(\d{4,5})$/.exec(String(value || '')), host = match && ip(match[1]), port = match ? +match[2] : 0;
+      return host && port >= 1024 && port <= 65535 ? host + ':' + port : null;
+    }
+    function prefix(value) { var host = ip(String(value || '').split(':')[0]); return host ? host.replace(/\d+$/, '') : ''; }
     function clean(value) { return String(value || '').replace(/[\x00-\x1f\x7f<>]/g, '').slice(0, 40); }
     function load() {
-      var saved = [];
+      var saved = [], seen = {};
       try { saved = JSON.parse(localStorage.getItem(KEY) || '[]'); } catch (_) {}
-      return (saved instanceof Array ? saved : []).filter(function (item) { return item && address(item.address); });
+      return (saved instanceof Array ? saved : []).filter(function (item) {
+        var valid = item && address(item.address); if (!valid || seen[valid]) return false; seen[valid] = true; item.address = valid; return true;
+      }).sort(function (a, b) { return (b.at || 0) - (a.at || 0); }).slice(0, MAX);
     }
     function save(phones) { try { localStorage.setItem(KEY, JSON.stringify(phones.slice(0, MAX))); } catch (_) {} }
+    function remember(phone, phones) {
+      phones = phones.filter(function (item) { return item.address !== phone.address; });
+      phone.at = Date.now(); phones.unshift(phone); save(phones); return phones;
+    }
     function params() {
       var result = {};
       location.hash.replace(/^#/, '').split('&').forEach(function (pair) {
@@ -67,47 +88,71 @@
     function go(phone, phones) {
       var others = phones.filter(function (item) { return item.address !== phone.address; }).map(function (item) { return item.address; });
       status.textContent = 'Opening LUMA Remote on ' + (phone.name || phone.address) + '…';
-      // One TV identity for every phone address (approvals survive address changes); the
-      // receiver page uses the other addresses to move to another phone if this one leaves.
-      location.replace('http://' + phone.address + '/msx/connect.html#client=' + client() + (others.length ? '&phones=' + others.join(',') : ''));
+      location.replace('http://' + phone.address + '/tv/connect.html#client=' + client() + (others.length ? '&phones=' + others.join(',') : ''));
     }
+    function probe(phone, done) {
+      var image = new Image(), finished = false;
+      function finish(alive) { if (!finished) { finished = true; done(alive); } }
+      image.onload = function () { finish(true); }; image.onerror = function () { finish(false); };
+      setTimeout(function () { finish(false); }, PROBE_MS);
+      image.src = 'http://' + phone.address + '/msx/probe.gif?t=' + Date.now();
+    }
+    function showSetup(value, message, fallback) {
+      list.innerHTML = ''; setup.hidden = false; openAnyway.hidden = !fallback; savedFallback = fallback || null;
+      status.textContent = message || 'Enter your phone’s address once. This TV will remember it.';
+      input.value = value || '192.168.1.';
+      setTimeout(function () { try { input.focus(); input.setSelectionRange(input.value.length, input.value.length); } catch (_) {} }, 0);
+    }
+    function showChoices(phones) {
+      setup.hidden = true; list.innerHTML = ''; status.textContent = 'Choose a phone. This TV remembers each one.';
+      phones.forEach(function (phone) {
+        var button = document.createElement('button'); button.type = 'button'; button.textContent = phone.name || ('Phone ' + phone.address.split(':')[0]);
+        var detail = document.createElement('small'); detail.textContent = phone.address; button.appendChild(detail);
+        button.addEventListener('click', function () { go(phone, remember(phone, phones)); }); list.appendChild(button);
+      });
+      var add = document.createElement('button'); add.type = 'button'; add.className = 'quiet'; add.textContent = 'Use another phone';
+      add.addEventListener('click', function () { detectSubnet(function (found) { showSetup(found || prefix(phones[0].address), 'Enter the new phone’s local address.'); }); });
+      list.appendChild(add); if (list.firstChild) list.firstChild.focus();
+    }
+    function detectSubnet(done) {
+      var Peer = window.RTCPeerConnection || window.webkitRTCPeerConnection, finished = false, peer;
+      function finish(value) { if (finished) return; finished = true; try { if (peer) peer.close(); } catch (_) {} done(value || ''); }
+      if (!Peer) { finish(''); return; }
+      try {
+        peer = new Peer({iceServers: []}); peer.createDataChannel('luma');
+        peer.onicecandidate = function (event) {
+          var text = event && event.candidate && (event.candidate.candidate || event.candidate.toString()) || '';
+          var matches = text.match(/(?:\d{1,3}\.){3}\d{1,3}/g) || [];
+          for (var i = 0; i < matches.length; i++) if (ip(matches[i])) { finish(prefix(matches[i])); return; }
+          if (event && event.candidate === null) finish('');
+        };
+        peer.createOffer().then(function (offer) { return peer.setLocalDescription(offer); }).catch(function () { finish(''); });
+        setTimeout(function () { finish(''); }, 1800);
+      } catch (_) { finish(''); }
+    }
+    setup.addEventListener('submit', function (event) {
+      event.preventDefault(); var host = ip(input.value); if (!host) { status.textContent = 'Enter a private address such as 192.168.68.24.'; input.focus(); return; }
+      var phone = {address: host + ':' + PORT, name: 'Phone ' + host.split('.')[3], at: Date.now()};
+      go(phone, remember(phone, load()));
+    });
+    openAnyway.addEventListener('click', function () { if (savedFallback) go(savedFallback, remember(savedFallback, load())); });
+
     var phones = load(), wanted = params(), given = address(wanted.phone);
     if (given) {
-      phones = phones.filter(function (item) { return item.address !== given; });
-      phones.unshift({address: given, name: clean(wanted.name), at: Date.now()});
-      save(phones);
+      phones = remember({address: given, name: clean(wanted.name), at: Date.now()}, phones);
       try { history.replaceState(null, '', location.pathname); } catch (_) {}
-      go(phones[0], phones);
-      return;
+      go(phones[0], phones); return;
     }
-    if (!phones.length) {
-      status.textContent = 'Open LUMA Remote on your phone, choose Philips, then tap Open TV receiver. This page remembers your phones after that.';
-      return;
-    }
-    phones.sort(function (a, b) { return (b.at || 0) - (a.at || 0); });
-    var timer = setTimeout(function () { go(phones[0], phones); }, AUTO_MS);
-    status.textContent = 'Opening the most recent phone. Choose another phone to use it instead.';
-    phones.forEach(function (phone, index) {
-      var button = document.createElement('button');
-      button.type = 'button';
-      button.textContent = phone.name || 'Phone';
-      var detail = document.createElement('small');
-      detail.textContent = phone.address + (index === 0 ? ' · most recent' : '');
-      button.appendChild(detail);
-      button.addEventListener('click', function () {
-        clearTimeout(timer);
-        phone.at = Date.now(); save(phones.sort(function (a, b) { return (b.at || 0) - (a.at || 0); }));
-        go(phone, phones);
+    if (phones.length > 1) { showChoices(phones); return; }
+    if (phones.length === 1) {
+      status.textContent = 'Checking your saved phone…';
+      probe(phones[0], function (alive) {
+        if (alive) go(phones[0], phones);
+        else showSetup(phones[0].address.split(':')[0], 'The saved phone did not answer. Check its address or open it anyway.', phones[0]);
       });
-      button.addEventListener('focus', function () { if (index !== 0) clearTimeout(timer); });
-      list.appendChild(button);
-    });
-    list.firstChild.focus();
-    document.addEventListener('keydown', function (event) {
-      var buttons = Array.prototype.slice.call(list.querySelectorAll('button')), index = buttons.indexOf(document.activeElement);
-      if (event.keyCode === 40 || event.keyCode === 39) { clearTimeout(timer); buttons[Math.min(buttons.length - 1, index + 1)].focus(); event.preventDefault(); }
-      else if (event.keyCode === 38 || event.keyCode === 37) { clearTimeout(timer); buttons[Math.max(0, index - 1)].focus(); event.preventDefault(); }
-    });
+      return;
+    }
+    detectSubnet(function (found) { showSetup(found || '192.168.1.', found ? 'Network found. Enter only your phone’s final number.' : 'Enter your phone’s local IP address once.'); });
   }());
   </script>
 </body>

@@ -187,7 +187,7 @@ public final class MultiReceiverInstrumentation {
             launchAndBind(); connectLuma();
             JSONObject started = call("msx.start"); String origin = started.getString("startupUrl");
             require(new URL(origin).getHost().startsWith("10.0.2."), "TV HTTP fixture escaped the emulator interface");
-            require((origin + "/msx/connect.html").equals(started.getString("browserSetupUrl")), "Browser setup URL was not the active native LAN origin and fixed path");
+            require((origin + "/tv/connect.html").equals(started.getString("browserSetupUrl")), "Browser setup URL was not the active native LAN origin and fixed path");
             String home = request(origin + "/msx/start.json", null).getString("parameter").substring("content:".length());
             base = home.substring(0, home.length() - "home.json".length());
             session = request(base + "hello?client=" + CLIENT, null).getString("sessionId");
