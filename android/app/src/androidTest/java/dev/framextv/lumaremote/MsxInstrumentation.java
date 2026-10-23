@@ -636,17 +636,20 @@ public final class MsxInstrumentation {
             passed(runner, ++checks, "delivered timeout remains unknown and late acknowledgement resolves safe receipt");
 
             String originalPeer = new URL(origin).getHost(), movedPeer = "192.168.50.9";
-            rejects("MSX_PAIRING", () -> target.rebindApprovedPeer("8.8.8.8"));
-            server.rebindApprovedPeer(movedPeer);
-            require(movedPeer.equals(server.status().getString("host")) && server.hasSavedReceiver() && !server.status().getBoolean("connected"), "Matter peer rebind lost approval or retained a stale session");
+            rejects("MSX_PAIRING", () -> target.prepareApprovedPeerMigration("8.8.8.8"));
+            server.prepareApprovedPeerMigration(movedPeer);
+            require(originalPeer.equals(server.status().getString("host")) && server.hasSavedReceiver(), "Matter preparation changed the approved browser peer before identity proof");
             int stablePort = server.status().getInt("port"); server.close(); server = new MsxServer(runner.getTargetContext());
-            require(movedPeer.equals(server.status().getString("host")), "Matter peer rebind did not persist");
-            server.rebindApprovedPeer(originalPeer);
+            require(originalPeer.equals(server.status().getString("host")), "Migration preparation persisted transient state");
+            server.prepareApprovedPeerMigration(originalPeer);
             require(server.hasSavedReceiver() && origin.equals(server.start().getString("startupUrl")) && server.status().getInt("port") == stablePort, "Approved receiver or startup address did not persist");
             require(home.equals(request(origin + "/msx/start.json", null, 200).getString("parameter").substring("content:".length())), "Persistent token changed");
-            server.rebindApprovedPeer(movedPeer);
-            require(rawStatus(origin, "GET /tv/connect.html HTTP/1.1\r\nHost: " + new URL(origin).getAuthority() + "\r\nConnection: close\r\n\r\n") == 302, "Connection-peer migration did not redirect");
-            require(originalPeer.equals(server.status().getString("host")) && server.hasSavedReceiver(), "Actual connection peer did not replace stale Matter address");
+            java.lang.reflect.Field migratedPeer = MsxServer.class.getDeclaredField("approvedHost"); migratedPeer.setAccessible(true); migratedPeer.set(server, movedPeer);
+            require(rawStatus(origin, "GET /tv/connect.html HTTP/1.1\r\nHost: " + new URL(origin).getAuthority() + "\r\nConnection: close\r\n\r\n") == 302, "Connection-peer candidate did not redirect");
+            require(movedPeer.equals(server.status().getString("host")), "Candidate changed the saved peer before browser identity proof");
+            String candidateBase = home.substring(0, home.length() - "home.json".length());
+            JSONObject migrated = request(candidateBase + "hello?client=" + CLIENT, null, 200);
+            require(migrated.getBoolean("approved") && originalPeer.equals(server.status().getString("host")) && server.hasSavedReceiver(), "Saved browser identity did not migrate the actual connection peer");
             server.reset(); server.start(); request(home, null, 404);
             mediaRequest(diagnosticSampleUrl, "GET", "bytes=0-0", null, 404);
             require(!server.hasSavedReceiver(), "Reset retained approved receiver");

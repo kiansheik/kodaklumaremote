@@ -105,10 +105,9 @@ public final class MsxServer implements AutoCloseable {
     private final Set<Socket> clients = new HashSet<>();
     private ServerSocket listener;
     private ThreadPoolExecutor workers;
-    private String host = "", token, approvedHost, approvedClient, pendingHost, pendingClient, sessionId;
+    private String host = "", token, approvedHost, approvedClient, pendingHost, pendingClient, sessionId, rebindCandidateHost = "";
     private int port;
-    private long pairingUntil, lastSeen, lastState, sequence;
-    private long peerRebindUntil;
+    private long pairingUntil, lastSeen, lastState, sequence, rebindCandidateUntil;
     private long connections, tlsRequests, bootstrapRequests, bootstrapAccepted, lastRequestAt;
     // Accepted counts are object-lifetime totals; lastState remains current-session only.
     private long helloAccepted, pollAccepted, stateAccepted, lastHelloAt, lastPollAt;
@@ -242,17 +241,12 @@ public final class MsxServer implements AutoCloseable {
         }
     }
 
-    /** Move an existing receiver approval only to the authenticated Matter TV peer. */
-    public JSONObject rebindApprovedPeer(String matterHost) throws MsxException {
+    /** Validate that peer migration was initiated through the authenticated Matter TV. */
+    public JSONObject prepareApprovedPeerMigration(String matterHost) throws MsxException {
         if (!privateAddress(matterHost)) throw new MsxException("MSX_PAIRING");
         synchronized (lock) {
             if (approvedClient.isEmpty()) return snapshot();
-            peerRebindUntil = SystemClock.elapsedRealtime() + 60000;
-            if (!approvedHost.equals(matterHost)) {
-                clearSession(); pendingHost = pendingClient = null;
-                approvedHost = matterHost;
-                preferences.edit().putString("peer", approvedHost).commit();
-            }
+            Log.i("MsxReceiver", "PEER_MIGRATION_READY matter=" + matterHost + " saved=" + approvedHost);
             return snapshot();
         }
     }
@@ -260,7 +254,7 @@ public final class MsxServer implements AutoCloseable {
     /** Reset setup, not TV playback. A new capability prevents old pages controlling this phone. */
     public JSONObject reset() {
         synchronized (lock) {
-            stopLocked(); token = secret(); approvedHost = approvedClient = ""; peerRebindUntil = 0;
+            stopLocked(); token = secret(); approvedHost = approvedClient = ""; rebindCandidateHost = ""; rebindCandidateUntil = 0;
             preferences.edit().clear().putString("capability", token).putInt("port", port).commit();
             return snapshot();
         }
@@ -379,7 +373,7 @@ public final class MsxServer implements AutoCloseable {
         listener = null; if (workers != null) workers.shutdownNow(); workers = null;
         for (Socket socket : clients) try { socket.close(); } catch (IOException ignored) { }
         clients.clear();
-        clearSession(); pendingHost = pendingClient = null; pairingUntil = 0;
+        clearSession(); pendingHost = pendingClient = null; pairingUntil = 0; rebindCandidateHost = ""; rebindCandidateUntil = 0;
     }
     private void clearSession() {
         libraryGrant = null; catalogBridge.cancel();
@@ -569,7 +563,7 @@ public final class MsxServer implements AutoCloseable {
                     if (suppliedOrigin != null && !suppliedOrigin.equals(origin())) throw new HttpFailure(403, "ORIGIN_REJECTED");
                     pendingHost = peer;
                 }
-                if ((!approvedHost.isEmpty() && !approvedHost.equals(peer)) || (approvedHost.isEmpty() && (pendingHost == null || !pendingHost.equals(peer)))) throw new HttpFailure(403, "PEER_REJECTED");
+                if ((!approvedHost.isEmpty() && !approvedHost.equals(peer) && !rebindCandidate(peer)) || (approvedHost.isEmpty() && (pendingHost == null || !pendingHost.equals(peer)))) throw new HttpFailure(403, "PEER_REJECTED");
             }
             if ("diagnostic-sintel.mp4".equals(relative)) {
                 synchronized (lock) {
@@ -734,7 +728,15 @@ public final class MsxServer implements AutoCloseable {
 
     private JSONObject hello(String peer, Map<String, String> query) throws HttpFailure {
         String client = query.get("client"); if (!clientId(client)) throw new HttpFailure(400);
-        if (!approvedClient.isEmpty()) { if (!approvedHost.equals(peer) || !approvedClient.equals(client)) throw new HttpFailure(403); }
+        if (!approvedClient.isEmpty()) {
+            if (!approvedClient.equals(client)) throw new HttpFailure(403);
+            if (!approvedHost.equals(peer)) {
+                if (!rebindCandidate(peer)) throw new HttpFailure(403);
+                String previous = approvedHost; approvedHost = peer; rebindCandidateHost = ""; rebindCandidateUntil = 0;
+                preferences.edit().putString("peer", approvedHost).commit();
+                Log.i("MsxReceiver", "PEER_MIGRATED from=" + previous + " to=" + approvedHost);
+            }
+        }
         else {
             if (!pairingOpen() || !peer.equals(pendingHost) || (pendingClient != null && !pendingClient.equals(client))) throw new HttpFailure(403);
             pendingClient = client;
@@ -1017,18 +1019,20 @@ public final class MsxServer implements AutoCloseable {
     private void admitBootstrap(String peer, Request request) throws HttpFailure {
         bootstrapRequests++;
         requireBootstrapOrigin(request.headers.get("origin"));
-        if (!approvedHost.isEmpty()) {
-            if (!approvedHost.equals(peer)) {
-                if (SystemClock.elapsedRealtime() > peerRebindUntil) throw new HttpFailure(403, "PEER_REJECTED");
-                clearSession(); pendingHost = pendingClient = null; approvedHost = peer; peerRebindUntil = 0;
-                preferences.edit().putString("peer", approvedHost).commit();
-            } else peerRebindUntil = 0;
+        if (!approvedHost.isEmpty() && !approvedHost.equals(peer)) {
+            rebindCandidateHost = peer; rebindCandidateUntil = SystemClock.elapsedRealtime() + 60000;
+            Log.i("MsxReceiver", "PEER_CANDIDATE incoming=" + peer + " saved=" + approvedHost);
         }
         else {
             if (!pairingOpen()) throw new HttpFailure(403, "PAIRING_EXPIRED");
             if (pendingHost != null && !pendingHost.equals(peer)) throw new HttpFailure(403, "PEER_REJECTED");
             if ("GET".equals(request.method)) pendingHost = peer;
         }
+    }
+    /** Caller holds lock. A candidate can load only long enough to prove the saved browser identity. */
+    private boolean rebindCandidate(String peer) {
+        if (SystemClock.elapsedRealtime() > rebindCandidateUntil) { rebindCandidateHost = ""; rebindCandidateUntil = 0; return false; }
+        return !rebindCandidateHost.isEmpty() && rebindCandidateHost.equals(peer);
     }
     private void requireBootstrapOrigin(String value) throws HttpFailure {
         if (!allowedBootstrapOrigin(value)) throw new HttpFailure(403, "ORIGIN_REJECTED");

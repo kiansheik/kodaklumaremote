@@ -1,5 +1,21 @@
 # Current state
 
+## Philips authenticated connection-peer migration candidate
+
+- Post-0.4.18 physical logging still showed HTTP403 `PEER_REJECTED`. The log
+  intentionally omitted address values, which made the earlier Matter-address
+  and timed migration changes hypothesis-driven rather than directly observable.
+- The next candidate no longer predicts the browser peer from Matter. A new
+  private peer reaching `/tv/connect.html` may load the receiver shell for 60
+  seconds, but the saved TV browser must present the exact previously approved
+  receiver client ID in `hello` before the phone persists that peer. The old
+  approved peer remains unchanged until identity proof succeeds.
+- Live logs now record `PEER_CANDIDATE incoming=… saved=…` and
+  `PEER_MIGRATED from=… to=…`. Android app and AndroidTest sources compile.
+  Instrumentation covers candidate redirect, no pre-proof mutation and
+  identity-gated migration, but it was not run on the physical phone because it
+  resets receiver pairing state.
+
 ## Philips IP-only launcher and receiver-peer rebind candidate
 
 - The stable TV launcher now begins with a focused, empty 15-character field

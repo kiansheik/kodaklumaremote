@@ -1299,7 +1299,7 @@ public final class ConnectionService extends Service {
                             else if (grant) televisionText.pairGrant(host, args.optString("pin"));
                             else if ("msx.launchBrowser".equals(method)) result = televisionText.launchBrowser(host, television.status().optString("startupUrl"));
                             else if ("msx.typeBrowserAddress".equals(method)) {
-                                if ("phone".equals(args.optString("address"))) television.rebindApprovedPeer(host);
+                                if ("phone".equals(args.optString("address"))) television.prepareApprovedPeerMigration(host);
                                 result = televisionText.typeBrowserAddress(host, television.status().optString("startupUrl"), args.optString("address"));
                             }
                             else result = televisionText.typeAddress(host, television.status().optString("startupUrl"));

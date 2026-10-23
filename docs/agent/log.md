@@ -1101,3 +1101,9 @@
   60-second migration that adopts the real `/tv/connect.html` peer and preserves
   the approved receiver identity. Added a tested Philips **Speed dial** remote
   button that forces the saved browser activity request even while connected.
+- 2026-10-23 post-0.4.18 correction: a physical retry still logged
+  `PEER_REJECTED`. Replaced Matter-address prediction and the phone-timed window
+  with an authenticated two-stage connection migration: a private bootstrap
+  peer is temporary, and only the exact saved browser client ID may persist it.
+  Added address-bearing candidate/migration logs. Android sources compile;
+  physical instrumentation was not run because it resets saved pairing.

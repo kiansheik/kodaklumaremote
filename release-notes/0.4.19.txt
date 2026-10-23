@@ -1,0 +1,5 @@
+LUMA Remote 0.4.19
+
+Fixes Philips REQUEST_REJECTED using the browser's actual authenticated connection instead of guessing its address from Matter. A new private peer may load the receiver shell, but the saved TV browser must present the exact previously approved receiver identity before the phone persists the new address. Receiver logs now show the candidate and completed migration addresses for direct diagnosis.
+
+Includes the Philips Speed dial button and no-pointer directional navigation from 0.4.18.

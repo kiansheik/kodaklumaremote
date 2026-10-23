@@ -52,6 +52,16 @@ phone's correct `192.168.68…` address.
   the TV's former network address and returned `REQUEST_REJECTED`.
 - Rebinding only to Matter's resolved address was insufficient because the TV
   browser's observed private peer differed from it.
+- The 0.4.18 timed migration also failed physically with `PEER_REJECTED`; its
+  logs did not expose the incoming/saved addresses, so the prior iterations did
+  not establish the exact mismatch before changing behavior.
+
+## Current correction
+
+- `/tv/connect.html` creates a 60-second private candidate without changing the
+  approved peer.
+- Only `hello` carrying the exact saved TV browser client ID commits migration.
+- Logs include incoming, saved and migrated private addresses for live evidence.
 
 ## Remaining questions
 
