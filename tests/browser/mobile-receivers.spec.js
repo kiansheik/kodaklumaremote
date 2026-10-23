@@ -91,7 +91,7 @@ async function openApp(page, { selectedTarget = 'luma', tvConnected = true, text
       if (method === 'msx.textPairGrant') { tv.textPairing = false; tv.textPairingExpiresInSeconds = 0; tv.textPermissionSaved = true; tv.typingAvailable = true; tv.typingBusy = false; tv.textError = null; return tv; }
       if (method === 'msx.typeAddress') return { accepted: true, acknowledgedChars: window.__typingAck ?? 17, textAppliedVerified: false, textEntryMode: 'msx', totalChars: 17 };
       if (method === 'msx.typeBrowserAddress') {
-        const typed = params.address === 'stable' ? 'https://kiansheik.io/kodaklumaremote/tv.html' : browserSetupUrl();
+        const typed = params.address === 'stable' ? 'https://kiansheik.io/kodaklumaremote/tv.html' : params.address === 'phone' ? '192.168.1.10' : browserSetupUrl();
         return { accepted: true, acknowledgedChars: window.__typingAck ?? typed.length, textAppliedVerified: false, textEntryMode: window.__typingMode ?? 'browser', totalChars: window.__typingTotal ?? typed.length };
       }
       if (method === 'msx.launchBrowser') return { ...tv, accepted: true, pageLoadVerified: false };
@@ -257,7 +257,7 @@ test('one browser typing button offers stable and direct receiver addresses', as
   await expect(page.locator('body')).not.toContainText('Media Station X');
 });
 
-test('LUMA speed-dial page can be filled with this phone direct receiver URL', async ({ page }) => {
+test('LUMA speed-dial page can be filled with only this phone private IP', async ({ page }) => {
   const matter = { available: true, paired: true, connected: true, capabilities: { navigation: true } };
   await openApp(page, { selectedTarget: 'philips', tvConnected: false, textState: {
     matter, startupUrl: 'http://192.168.1.10:4178', configured: true, pairingOpen: true,
@@ -267,7 +267,7 @@ test('LUMA speed-dial page can be filled with this phone direct receiver URL', a
   await page.locator('#open-tv-receiver').click();
   await expect(page.locator('#browser-steps')).toContainText('only speed dial');
   await page.locator('#msx-fill-launcher').click();
-  expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'msx.typeBrowserAddress').map(call => call.params))).toEqual([{ address: 'direct' }]);
+  expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'msx.typeBrowserAddress').map(call => call.params))).toEqual([{ address: 'phone' }]);
   await expect.poll(() => page.evaluate(() => window.__calls.filter(call => call.method === 'matter.key').length)).toBe(1);
   expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'matter.key').map(call => call.params))).toEqual([{ key: 'enter' }]);
 });

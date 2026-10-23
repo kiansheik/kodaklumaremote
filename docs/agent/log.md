@@ -1,5 +1,13 @@
 # Work log
 
+- 2026-10-23 Philips IP-only launcher autofill: corrected the speed-dial handoff
+  after the real page rejected a full direct receiver URL as JSON. The TV page
+  now starts with a focused blank field and accepts only a private IPv4 address;
+  phone Autofill types only the native listener host, while the full URL remains
+  the explicit direct-browser fallback. Focused browser 10/10 and Android
+  app/AndroidTest compilation pass. Physical TV confirmation remains.
+  [Handoff](session-handoffs/2026-10-23-philips-ip-only-autofill.md).
+
 - 2026-10-23 Philips typing recovery and speed-dial autofill: fixed the saved
   permission dead end when DHCP changes the Matter-resolved TV address. A new
   PIN pairing is allowed for the new private peer while the old credential is

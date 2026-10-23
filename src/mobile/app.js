@@ -1725,7 +1725,7 @@ async function typeTvBrowserAddress(address) {
   });
 }
 $('#msx-type-address').addEventListener('click', () => { void typeTvBrowserAddress(state.tvAddress); });
-$('#msx-fill-launcher').addEventListener('click', () => { void typeTvBrowserAddress('direct'); });
+$('#msx-fill-launcher').addEventListener('click', () => { void typeTvBrowserAddress('phone'); });
 $('#msx-developer').addEventListener('toggle', renderControls);
 for (const [id, method, receiptMethod, notice] of [
   ['msx-debug-ping', 'msx.debugPing', 'ping', 'TV ping acknowledged.'],

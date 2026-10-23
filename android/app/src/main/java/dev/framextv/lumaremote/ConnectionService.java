@@ -1276,7 +1276,7 @@ public final class ConnectionService extends Service {
     private void requestTelevisionText(String method, JSONObject args, Callback callback) {
         boolean grant = "msx.textPairGrant".equals(method);
         boolean browserAddress = "msx.typeBrowserAddress".equals(method);
-        boolean validBrowserAddress = browserAddress && args.length() == 1 && ("stable".equals(args.optString("address")) || "direct".equals(args.optString("address")));
+        boolean validBrowserAddress = browserAddress && args.length() == 1 && ("stable".equals(args.optString("address")) || "direct".equals(args.optString("address")) || "phone".equals(args.optString("address")));
         if (!"philips".equals(selectedTarget) || (grant ? args.length() != 1 || !(args.opt("pin") instanceof String) || !args.optString("pin").matches("[0-9]{4}") : browserAddress ? !validBrowserAddress : args.length() != 0)) {
             reject(callback, grant ? "TEXT_INVALID_PIN" : "TEXT_INVALID_INPUT", "Check the TV text setup details."); return;
         }

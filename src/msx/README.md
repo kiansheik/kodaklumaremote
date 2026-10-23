@@ -10,26 +10,27 @@ connection does not stop or reset the TV player.
 
 When the receiver is offline, LUMA Remote shows **Set up TV receiver** instead
 of attempting a browser launch. In the TV Internet browser, keep the stable LUMA
-page as its only speed dial and open it. The launcher's phone-address field takes
-focus automatically; **Autofill this phone on LUMA page** types the current
-native-owned direct receiver URL and presses Go. First use requests the separate
+page as its only speed dial and open it. The launcher's empty phone-IP field takes
+focus automatically; **Autofill this phone on LUMA page** types only the current
+native-owned private phone IP and presses Go. First use requests the separate
 four-digit Philips TV-text permission in the same flow. If the speed dial is
 unavailable, **Direct phone address** plus **Type and open selected address**
 remains the backup for the browser address bar.
 
 The stable choice types only
-`https://kiansheik.io/kodaklumaremote/tv.html`. The fixed page attempts to infer
-the TV's private `/24` network prefix and accepts either the phone's IP or the
-exact direct URL filled by the phone, then remembers it. One saved phone is probed and opened automatically; multiple
-saved phones produce a chooser. If subnet discovery or the HTTPS-to-HTTP image
-probe is unavailable in the TV browser, the full address remains editable and
-an **Open saved phone anyway** fallback is shown. The direct backup types
+`https://kiansheik.io/kodaklumaremote/tv.html`. The fixed page presents a blank,
+IP-only field and remembers the submitted private phone IP. Full URLs are
+rejected. One saved phone is probed and opened automatically; multiple saved
+phones produce a chooser. If the HTTPS-to-HTTP image probe is unavailable in
+the TV browser, the IP field stays blank for phone autofill and an **Open saved
+phone anyway** fallback is shown. The direct backup types
 `http://PHONE:PORT/tv/connect.html`.
 
 After the fixed value is typed, the phone sends the TV's Matter **Enter/Go** key.
 If that key is rejected, the phone explicitly asks the user to press **Go / OK**
-on the TV. Callers choose only between the two native-owned URLs and cannot
-provide arbitrary text. The legacy `/msx/connect.html` route and old launcher
+on the TV. Callers choose only between native-owned fixed values (the stable
+URL, direct backup URL, or current private phone IP) and cannot provide arbitrary
+text. The legacy `/msx/connect.html` route and old launcher
 fragments remain only for previously saved links.
 
 The phone and TV must share a network. A successful text-input acknowledgement

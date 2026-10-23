@@ -165,11 +165,12 @@ public final class PhilipsTextController implements AutoCloseable {
     public JSONObject typeAddress(String host, String startupUrl) throws TextException {
         return typeFixedValue(host, startupAuthority(startupUrl), "msx", 65000);
     }
-    /** Fixed browser entry selected from two native-owned choices, never a caller URL. */
+    /** Fixed browser entry selected from native-owned choices, never caller text. */
     public JSONObject typeBrowserAddress(String host, String startupUrl, String address) throws TextException {
         final String value;
         if ("stable".equals(address)) value = launcherUrl(startupUrl);
         else if ("direct".equals(address)) value = browserSetupUrl(startupUrl);
+        else if ("phone".equals(address)) value = launcherPhoneAddress(startupUrl);
         else throw new TextException("TEXT_INVALID_INPUT");
         return typeFixedValue(host, value, "browser", 90000);
     }
@@ -242,6 +243,11 @@ public final class PhilipsTextController implements AutoCloseable {
     }
     static String browserSetupUrl(String startupUrl) throws TextException {
         return "http://" + startupAuthority(startupUrl) + "/tv/connect.html";
+    }
+    /** The fixed launcher field accepts only the phone's private IPv4 address. */
+    static String launcherPhoneAddress(String startupUrl) throws TextException {
+        String authority = startupAuthority(startupUrl);
+        return authority.substring(0, authority.lastIndexOf(':'));
     }
     /** Fixed GitHub Pages speed dial. The TV page collects and remembers local phones. */
     static final String LAUNCHER = "https://kiansheik.io/kodaklumaremote/tv.html";

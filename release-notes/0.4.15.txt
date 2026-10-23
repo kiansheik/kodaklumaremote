@@ -1,0 +1,5 @@
+LUMA Remote 0.4.15
+
+The Philips LUMA speed-dial page now starts with a blank phone field and accepts only a private IP address. Autofill this phone types only the phone's current private IP, without the protocol, port or receiver path, then presses Go.
+
+The complete direct receiver URL remains available only as the separate browser-address fallback.

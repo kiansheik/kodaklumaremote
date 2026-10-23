@@ -155,8 +155,10 @@ historical, not the current readiness state.
     The latest candidate repairs saved typing after a TV DHCP address change:
     it re-pairs against the current Matter-resolved private peer without deleting
     the old credential until grant success. The intended browser setup now uses
-    the canonical LUMA page as the only speed dial, then the phone types its
-    fixed direct receiver URL into that page's focused field. This does not yet
+    the canonical LUMA page as the only speed dial. Real-TV feedback showed that
+    putting the full direct receiver URL in its field was incompatible and led
+    to a simple JSON rejection; the follow-up leaves the field blank and types
+    only the phone's fixed private IP. This does not yet
     prove that phone controls can foreground Internet or select the speed dial.
 12. Can the physically confirmed DIAL route launch another supported receiver?
     Exact-TV multicast discovery supplied an `Application-URL`; Netflix state

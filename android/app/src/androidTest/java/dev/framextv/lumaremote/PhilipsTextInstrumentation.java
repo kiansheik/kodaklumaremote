@@ -190,6 +190,12 @@ public final class PhilipsTextInstrumentation {
             for (JSONObject call : stableFactory.calls) stableActual.append(call.getJSONObject("body").getString("unicode"));
             String stableExpected = PhilipsTextController.launcherUrl(START);
             require(stableExpected.contentEquals(stableActual) && stableTyped.getInt("totalChars") == stableExpected.length(), "Stable browser choice did not type the fixed launcher with this phone attached"); stable.close();
+            require("192.168.50.2".equals(PhilipsTextController.launcherPhoneAddress(START))
+                    && "192.168.50.2".equals(PhilipsTextController.launcherPhoneAddress("http://192.168.50.2:49153")), "Launcher autofill included a URL or port instead of only the phone IP");
+            Clock phoneClock = new Clock(); Factory phoneFactory = new Factory(phoneClock); PhilipsTextController phone = new PhilipsTextController(browserStore, phoneFactory, phoneClock);
+            JSONObject phoneTyped = phone.typeBrowserAddress(HOST, START, "phone"); StringBuilder phoneActual = new StringBuilder();
+            for (JSONObject call : phoneFactory.calls) phoneActual.append(call.getJSONObject("body").getString("unicode"));
+            require("192.168.50.2".contentEquals(phoneActual) && phoneTyped.getInt("totalChars") == phoneActual.length(), "Launcher autofill did not type only the fixed phone IP"); phone.close();
             Clock browserCancelClock = new Clock(); Factory browserCancelFactory = new Factory(browserCancelClock);
             PhilipsTextController browserCancel = new PhilipsTextController(browserStore, browserCancelFactory, browserCancelClock);
             browserCancelClock.onSleep = browserCancel::cancel; rejects("TEXT_CANCELLED", () -> browserCancel.typeBrowserAddress(HOST, START, "direct"));

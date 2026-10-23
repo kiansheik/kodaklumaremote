@@ -1,5 +1,20 @@
 # Current state
 
+## Philips IP-only launcher autofill candidate
+
+- The stable TV launcher now begins with a focused, empty 15-character field
+  and accepts only a private IPv4 address. Protocols, ports, paths and public
+  addresses are rejected. Saved-phone probing/automatic redirect and the
+  explicit open-anyway fallback remain.
+- **Autofill this phone on LUMA page** uses a distinct native-owned `phone`
+  choice and types only the host from the current receiver listener, such as
+  `192.168.68.24`, then sends Matter Enter/Go. The full
+  `http://PHONE:PORT/tv/connect.html` value remains only under the separate
+  direct browser-address fallback.
+- Focused launcher/setup browser tests pass 10/10, and Android app plus
+  AndroidTest Java compilation passes. The actual Philips field/JSON behavior
+  still needs physical confirmation after deployment.
+
 ## Released 0.4.14: Philips typing rebind and one-speed-dial setup
 
 - A saved JointSPACE typing credential no longer dead-ends after the Matter TV

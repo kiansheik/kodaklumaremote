@@ -31,13 +31,14 @@ async function localNetwork(page, candidate = '192.168.68.55', probeAlive = true
   }, { candidate, probeAlive });
 }
 
-test('first visit infers the subnet, asks only for the phone IP and remembers it', async ({ page }) => {
+test('first visit focuses an empty phone IP field and remembers the submitted IP', async ({ page }) => {
   const visits = [];
   await localNetwork(page);
   await serve(page, visits);
   await page.goto(LAUNCHER);
-  await expect(page.locator('#status')).toHaveText('Network found. Enter only your phone’s final number.');
-  await expect(page.locator('#phone-ip')).toHaveValue('192.168.68.');
+  await expect(page.locator('#status')).toHaveText('Leave the field empty, then use Autofill this phone in LUMA Remote.');
+  await expect(page.locator('#phone-ip')).toHaveValue('');
+  await expect(page.locator('#phone-ip')).toBeFocused();
   await page.locator('#phone-ip').fill('192.168.68.24');
   await page.getByRole('button', { name: 'Connect to phone' }).click();
   await page.waitForURL(/^http:\/\/192\.168\.68\.24:4178\/tv\/connect\.html/);
@@ -48,7 +49,7 @@ test('first visit infers the subnet, asks only for the phone IP and remembers it
   expect(visits).toHaveLength(2);
 });
 
-test('focused launcher field accepts the exact direct URL filled by the phone', async ({ page }) => {
+test('launcher rejects a full direct URL and accepts only a private IP', async ({ page }) => {
   const visits = [];
   await localNetwork(page);
   await serve(page, visits);
@@ -56,8 +57,9 @@ test('focused launcher field accepts the exact direct URL filled by the phone', 
   await expect(page.locator('#phone-ip')).toBeFocused();
   await page.locator('#phone-ip').fill('http://192.168.68.24:49153/tv/connect.html');
   await page.locator('#phone-ip').press('Enter');
-  await page.waitForURL(/^http:\/\/192\.168\.68\.24:49153\/tv\/connect\.html/);
-  expect(visits).toHaveLength(1);
+  await expect(page.locator('#status')).toHaveText('Enter only a private IP such as 192.168.68.24.');
+  expect(page.url()).toBe(LAUNCHER);
+  expect(visits).toHaveLength(0);
 });
 
 test('an unavailable saved phone opens the editable address with an open-anyway fallback', async ({ page }) => {
@@ -68,7 +70,7 @@ test('an unavailable saved phone opens the editable address with an open-anyway 
   await page.evaluate(() => localStorage.setItem('luma-phones', JSON.stringify([{ address: '192.168.68.24:4178', name: 'Phone 24', at: 1 }])));
   await page.reload();
   await expect(page.locator('#status')).toContainText('saved phone did not answer');
-  await expect(page.locator('#phone-ip')).toHaveValue('192.168.68.24');
+  await expect(page.locator('#phone-ip')).toHaveValue('');
   await expect(page.getByRole('button', { name: 'Open saved phone anyway' })).toBeVisible();
   expect(visits).toEqual([]);
 });
@@ -106,7 +108,7 @@ test('malformed or public phone fragments are ignored', async ({ page }) => {
   await serve(page, visits);
   for (const bad of ['8.8.8.8:4178', '192.168.1.5:80', '192.168.1.500:4178', '192.168.01.5:4178', 'evil.example:4178']) {
     await page.goto(`${LAUNCHER}#phone=${bad}`);
-    await expect(page.locator('#phone-ip')).toHaveValue('192.168.68.');
+    await expect(page.locator('#phone-ip')).toHaveValue('');
   }
   expect(visits).toHaveLength(0);
 });
