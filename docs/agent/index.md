@@ -36,6 +36,7 @@ Latest: [playback reattachment and subtitle readiness](session-handoffs/2026-10-
 Current: [system volume, confirmed power and Kodi error receipts](session-handoffs/2026-10-18-phone-volume-power.md).
 Distribution: [signed releases and optional updates](../releasing.md),
 [GitHub/Pages handoff](session-handoffs/2026-10-18-github-release-updates.md).
+Current release: [0.4.23 receiver-first cold start and disconnected casting](session-handoffs/2026-10-23-receiver-first-cast-release.md).
 Dual receiver: [Philips MSX and LUMA selection](msx-receiver.md),
 [implementation handoff](session-handoffs/2026-10-18-dual-receiver-msx.md).
 Current local Android update: [phone receiver, address entry and layout](session-handoffs/2026-10-20-phone-msx-native-text.md).

@@ -1,5 +1,32 @@
 # Current state
 
+## Released 0.4.23: receiver-first cold start and disconnected casting
+
+- A physical check showed LUMA Receiver 0.3.2 already answering authenticated
+  requests at `192.168.68.55:4191` immediately after projector startup, while
+  the phone UI treated the saved but temporarily disconnected projector as
+  unavailable. Library casting therefore stopped before its existing bounded
+  reconnect/wake handoff could run.
+- A saved LUMA target now remains selectable while offline. Cast enters the
+  handoff, restores the encrypted receiver host/token in a fresh Android service
+  process, connects directly to the receiver, and treats unavailable native
+  EShare launch as an optional wake hint. Hardware controls still require their
+  real live connection and authentication failures still return to pairing.
+- Receiver 0.3.3 starts its foreground listener and brings `MainActivity` to
+  the front for both `BOOT_COMPLETED` and package replacement. The release gate
+  passed all 164 browser tests, receiver unit tests and phone AndroidTest service
+  instrumentation 19/19 (after two unrelated timing-flake reruns).
+- Published phone 0.4.23/code 33 and receiver 0.3.3/code 17 from
+  `224a878b7a17c96dd97c0547d3e44c0953899dcb`. The exact 1,134,601-byte receiver
+  APK (`3250643ef08f221c6176b3b0775f57bd3caef9ac6cc7b626f0c57c11f26bcafb`)
+  was downloaded through the receiver's signed public updater, confirmed over
+  EShare and installed on the physical projector. It returned healthy on port
+  4191, and `app.snapshot` proved the foreground activity was attached after
+  replacement. A true power-off cold boot remains the final startup acceptance
+  check. No phone ADB endpoint was available, so the Samsung still needs to
+  accept the normal in-app 0.4.23 update before the phone-side cast repair is
+  physically exercised.
+
 ## Released 0.4.22: stable Philips scrubbing and restart reconnect
 
 - A live phone capture on 0.4.20 reproduced the reported blinking while a

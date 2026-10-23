@@ -1122,3 +1122,16 @@
   247/247 and browser 163/163. Published commit `6ee4a17`; the exact signed APK
   is installed on the Samsung. Phone lock and absence of a fresh TV request left
   the final physical no-strobe/reconnect confirmation pending.
+- 2026-10-23 receiver-first boot/cast repair and 0.4.23 release: the physical
+  receiver was already alive on port 4191, isolating the failure to the phone's
+  disconnected UI/cast gate and a boot receiver that started only the service.
+  Saved LUMA targets now cast through a bounded direct reconnect even when
+  native EShare is late; a fresh phone service restores the saved encrypted
+  pairing before connecting. Receiver 0.3.3 also foregrounds itself on boot and
+  package replacement. Guarded deploy passed browser 164/164, receiver unit
+  tests and service instrumentation 19/19 and published commit `224a878`.
+  Receiver 0.3.3/code17 was then downloaded, verified and installed through the
+  real projector's updater; it returned healthy and foreground-attached. Phone
+  0.4.23/code33 is published but not physically installed because no phone ADB
+  endpoint was available. A real projector power cycle and phone Library cast
+  after accepting the in-app update remain.
