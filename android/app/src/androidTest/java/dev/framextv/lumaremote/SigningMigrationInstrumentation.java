@@ -22,7 +22,7 @@ public final class SigningMigrationInstrumentation {
     private static final String PACKAGE = "dev.framextv.lumaremote";
     private static final String MARKER = "signing-migration-fixture-v1";
     private static final byte[] MARKER_BYTES = "LUMA signing migration fixture v1".getBytes(StandardCharsets.UTF_8);
-    private static final String USER = "signing-fixture-user", PASSWORD = "signing-fixture-secret";
+    private static final String TOKEN = "signing_fixture_receiver_token_0123";
 
     private static void require(boolean value) { if (!value) throw new AssertionError(); }
     private static boolean emulator() {
@@ -70,7 +70,7 @@ public final class SigningMigrationInstrumentation {
                 stage = "seed_settings";
                 SettingsStore store = new SettingsStore(context);
                 store.saveReceiver("10.0.2.2", "Signing migration fixture");
-                store.saveKodi(new JSONObject().put("username", USER).put("password", PASSWORD).put("port", 8080));
+                store.savePairing(TOKEN);
                 stage = "seed_marker";
                 try (FileOutputStream output = context.openFileOutput(MARKER, Context.MODE_PRIVATE)) { output.write(MARKER_BYTES); }
             }
@@ -83,11 +83,11 @@ public final class SigningMigrationInstrumentation {
             result.putString("currentSignerSha256", current);
             stage = "settings_decryption";
             SettingsStore restored = new SettingsStore(context);
-            JSONObject metadata = restored.metadata(), credentials = restored.readKodi(), receiver = restored.readReceiver();
-            boolean hasReceiver = metadata.getBoolean("hasReceiver"), hasKodi = metadata.getBoolean("hasKodi");
-            require(hasReceiver == (receiver != null) && hasKodi == (credentials != null));
-            result.putBoolean("hasReceiver", hasReceiver); result.putBoolean("hasKodi", hasKodi);
-            result.putBoolean("decrypted", credentials != null);
+            JSONObject metadata = restored.metadata(), pairing = restored.readPairing(), receiver = restored.readReceiver();
+            boolean hasReceiver = metadata.getBoolean("hasReceiver"), hasPairing = metadata.getBoolean("hasPairing");
+            require(hasReceiver == (receiver != null) && hasPairing == (pairing != null));
+            result.putBoolean("hasReceiver", hasReceiver); result.putBoolean("hasPairing", hasPairing);
+            result.putBoolean("decrypted", pairing != null);
             stage = "private_marker";
             boolean present = marker(context);
             result.putBoolean("markerPresent", present);
@@ -95,10 +95,9 @@ public final class SigningMigrationInstrumentation {
             result.putBoolean("fixtureChecked", fixture);
             if (fixture) {
                 stage = "fixture_preservation";
-                require(present && hasReceiver && hasKodi && "10.0.2.2".equals(receiver.getString("host"))
+                require(present && hasReceiver && hasPairing && "10.0.2.2".equals(receiver.getString("host"))
                     && "Signing migration fixture".equals(receiver.getString("name"))
-                    && USER.equals(credentials.getString("username")) && PASSWORD.equals(credentials.getString("password"))
-                    && credentials.getInt("port") == 8080);
+                    && TOKEN.equals(pairing.getString("token")));
                 result.putBoolean("fixtureMatched", true);
             }
             result.putString("migrationMode", seed ? "seed" : "check");

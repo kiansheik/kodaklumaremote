@@ -47,7 +47,9 @@ public final class SubtitleInstrumentation {
     }
     private void trustedResolver(String preparedUrl) {
         backend.setPreparedSubtitleResolver((id, source, original, peer) -> {
-            require(ID.equals(id) && SOURCE.equals(source) && ORIGINAL.equals(original) && args.getString("targetHost").equals(peer), "Prepared identity was not preserved");
+            // Like SubtitleDelivery: a ticket bound to another source/subtitle/peer never resolves.
+            if (!SOURCE.equals(source)) throw NativeBackend.fail("SUBTITLE_EXPIRED");
+            require(ID.equals(id) && ORIGINAL.equals(original) && args.getString("targetHost").equals(peer), "Prepared identity was not preserved");
             return preparedUrl;
         });
     }
@@ -100,27 +102,29 @@ public final class SubtitleInstrumentation {
                 require(normalized.cueCount == 273 && normalized.discardedCueCount == 1, "Isolated malformed cue was not bounded and reported");
             });
             backend = new NativeBackend(runner.getTargetContext()); backend.setSourceGuard(token -> "current".equals(token));
-            int port = Integer.parseInt(args.getString("kodiPort"));
+            int port = Integer.parseInt(args.getString("receiverPort"));
             String prepared = "http://10.0.2.2:" + port + "/prepared/first.srt";
             check("captured LAN URLs cannot bypass the public subtitle boundary", () -> {
                 require(call("device.connect", "host", args.getString("targetHost")).getBoolean("connected"), "Fixture receiver connection failed");
-                call("kodi.configure", "username", "fixture", "password", "fixture", "port", port);
-                rejectsBackend("INVALID_MEDIA", "kodi.addSubtitle", "track", object("url", prepared), "expectedSourceUrl", SOURCE);
-                rejectsBackend("INVALID_MEDIA", "kodi.addSubtitle", "track", object("url", prepared), "preparedId", ID, "expectedSourceUrl", SOURCE);
+                call("receiver.configure", "token", "fixture_receiver_token_0123456789", "port", port);
+                rejectsBackend("INVALID_MEDIA", "receiver.addSubtitle", "track", object("url", prepared), "expectedSourceUrl", SOURCE);
+                rejectsBackend("INVALID_MEDIA", "receiver.addSubtitle", "track", object("url", prepared), "preparedId", ID, "expectedSourceUrl", SOURCE);
             });
             check("only a trusted source and receiver bound ticket supplies a private prepared URL", () -> {
                 trustedResolver(prepared);
-                require(call("kodi.addSubtitle", "track", object("url", ORIGINAL), "preparedId", ID, "expectedSourceUrl", SOURCE, "sourceToken", "current").getBoolean("accepted"), "Prepared subtitle Add was not accepted");
-                rejectsBackend("INVALID_SUBTITLE", "kodi.addSubtitle", "track", object("url", ORIGINAL), "preparedId", "short", "expectedSourceUrl", SOURCE);
-                rejectsBackend("INVALID_SUBTITLE", "kodi.addSubtitle", "track", object("url", ORIGINAL), "preparedId", ID);
-                rejectsBackend("SOURCE_CHANGED", "kodi.addSubtitle", "track", object("url", ORIGINAL), "preparedId", ID, "expectedSourceUrl", "https://media.example/other.m3u8");
+                require(call("receiver.addSubtitle", "track", object("url", ORIGINAL), "preparedId", ID, "expectedSourceUrl", SOURCE, "sourceToken", "current").getBoolean("accepted"), "Prepared subtitle Add was not accepted");
+                rejectsBackend("INVALID_SUBTITLE", "receiver.addSubtitle", "track", object("url", ORIGINAL), "preparedId", "short", "expectedSourceUrl", SOURCE);
+                rejectsBackend("INVALID_SUBTITLE", "receiver.addSubtitle", "track", object("url", ORIGINAL), "preparedId", ID);
+                rejectsBackend("SUBTITLE_EXPIRED", "receiver.addSubtitle", "track", object("url", ORIGINAL), "preparedId", ID, "expectedSourceUrl", "https://media.example/other.m3u8");
+                // The receiver applies the forwarded source guard atomically with the write.
+                rejectsBackend("SOURCE_CHANGED", "receiver.addSubtitle", "track", object("url", ORIGINAL), "expectedSourceUrl", "https://media.example/other.m3u8", "sourceToken", "current");
             });
             check("expired prepared ticket is a prewrite rejection and an explicit fresh request can succeed", () -> {
                 backend.setPreparedSubtitleResolver((id, source, original, peer) -> { throw NativeBackend.fail("SUBTITLE_EXPIRED"); });
-                rejectsBackend("SUBTITLE_EXPIRED", "kodi.addSubtitle", "track", object("url", ORIGINAL), "preparedId", ID, "expectedSourceUrl", SOURCE, "sourceToken", "current");
+                rejectsBackend("SUBTITLE_EXPIRED", "receiver.addSubtitle", "track", object("url", ORIGINAL), "preparedId", ID, "expectedSourceUrl", SOURCE, "sourceToken", "current");
                 trustedResolver("http://10.0.2.2:" + port + "/prepared/second.srt");
-                rejectsBackend("SOURCE_CHANGED", "kodi.addSubtitle", "track", object("url", ORIGINAL), "preparedId", ID, "expectedSourceUrl", SOURCE, "sourceToken", "stale");
-                require(call("kodi.addSubtitle", "track", object("url", ORIGINAL), "preparedId", ID, "expectedSourceUrl", SOURCE, "sourceToken", "current").getBoolean("accepted"), "Fresh explicit Add failed after expiry");
+                rejectsBackend("SOURCE_CHANGED", "receiver.addSubtitle", "track", object("url", ORIGINAL), "preparedId", ID, "expectedSourceUrl", SOURCE, "sourceToken", "stale");
+                require(call("receiver.addSubtitle", "track", object("url", ORIGINAL), "preparedId", ID, "expectedSourceUrl", SOURCE, "sourceToken", "current").getBoolean("accepted"), "Fresh explicit Add failed after expiry");
             });
             result.putInt("passed", checks); result.putInt("failures", 0); runner.finish(Activity.RESULT_OK, result);
         } catch (Throwable error) {

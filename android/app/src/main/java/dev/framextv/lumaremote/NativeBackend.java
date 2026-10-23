@@ -51,9 +51,9 @@ public final class NativeBackend {
         public final String code;
         private BackendException(String code, String message) { super(message); this.code = code; }
     }
-    private static final int TCP_TIMEOUT = 2500, KODI_CALL_TIMEOUT = 5000, MAX_REPLY = 65536, MAX_APPS_BYTES = 16 * 1024 * 1024;
+    private static final int TCP_TIMEOUT = 2500, RECEIVER_CALL_TIMEOUT = 5000, RECEIVER_PORT = 4191, MAX_RECEIVER_REPLY = 1024 * 1024, MAX_APPS_BYTES = 16 * 1024 * 1024;
+    static final String RECEIVER_PACKAGE = "dev.framextv.lumareceiver";
     private static final Pattern PACKAGE = Pattern.compile("[A-Za-z][A-Za-z0-9_]*(?:\\.[A-Za-z][A-Za-z0-9_]*)+");
-    private static final String KODI_METADATA_ADDON = "script.lumaremote.metadata";
     private static final Pattern LUMA_MOVIE_ID = Pattern.compile("^v1:(framextv:movie:([1-9][0-9]{0,9}))$");
     private static final Pattern LUMA_EPISODE_ID = Pattern.compile("^v1:(framextv:tv:([1-9][0-9]{0,9}):(0|[1-9][0-9]{0,3}):([1-9][0-9]{0,3}))$");
     private static final Map<String, Integer> KEYS = new LinkedHashMap<>();
@@ -70,21 +70,21 @@ public final class NativeBackend {
     private volatile Socket luma;
     private volatile DatagramSocket discovering;
     private volatile HttpURLConnection activeHttp;
-    private String host, deviceName, username, password, activeToken;
-    private int kodiPort = 8080, rpcId;
-    private long kodiDeadline;
+    private String host, deviceName, token, activeToken;
+    private long receiverDeadline;
+    private int receiverPort = RECEIVER_PORT;
     private Map<String, String> apps;
 
     public NativeBackend(Context context) { this.context = context.getApplicationContext(); }
     public void setSourceGuard(SourceGuard guard) { sourceGuard = guard; }
     public void setPreparedSubtitleResolver(PreparedSubtitleResolver resolver) { subtitleResolver = resolver; }
-    /** Service worker only: forgetting Kodi does not close projector controls. */
-    public synchronized void clearKodiConfiguration() { username = password = null; }
+    /** Service worker only: forgetting the receiver pairing does not close projector controls. */
+    public synchronized void clearReceiverConfiguration() { token = null; }
 
     /** Read on the service's network queue; never includes credentials. */
     public synchronized JSONObject connectionSnapshot() {
         try { return object("connected", !closed && luma != null && !luma.isClosed(),
-                "configured", !closed && username != null && password != null,
+                "configured", !closed && token != null,
                 "host", host == null ? "" : host, "name", deviceName == null ? "" : deviceName); }
         catch (Exception ignored) { return new JSONObject(); }
     }
@@ -101,13 +101,14 @@ public final class NativeBackend {
             case "PAIRING_UNKNOWN": message = "The projector pairing requirement could not be verified. No control commands were sent."; break;
             case "INVALID_TEXT": message = "Send a single line of up to 1,000 characters."; break;
             case "APP_NOT_AVAILABLE": message = "That app was not found in the projector’s current app list."; break;
-            case "KODI_CONFIG": message = "Enter the username, password and HTTP port configured in Kodi."; break;
-            case "KODI_AUTH": message = "Kodi rejected the username or password."; break;
-            case "KODI_UNAVAILABLE": message = "Could not reach Kodi. Open Kodi and check HTTP control and your home network."; break;
-            case "KODI_RESPONSE": message = "Kodi did not accept this control command."; break;
-            case "KODI_REJECTED": message = "Kodi rejected this request before it could be applied. Try casting again."; break;
-            case "KODI_ADDON_UNAVAILABLE": message = "The optional Kodi metadata add-on is not available."; break;
-            case "NO_VIDEO": message = "Kodi has no active video. Start a video first."; break;
+            case "RECEIVER_CONFIG": message = "Pair this phone with LUMA Receiver on the projector first."; break;
+            case "RECEIVER_AUTH": message = "LUMA Receiver no longer recognizes this phone. Pair it again."; break;
+            case "RECEIVER_UNAVAILABLE": message = "Could not reach LUMA Receiver. Check that the projector is on and on your home network."; break;
+            case "RECEIVER_RESPONSE": message = "LUMA Receiver did not accept this control command."; break;
+            case "RECEIVER_REJECTED": message = "LUMA Receiver rejected this request before applying it. Try casting again."; break;
+            case "PAIRING_CODE_WRONG": message = "That code does not match the one on the projector. Check it and try again."; break;
+            case "PAIRING_EXPIRED": message = "The pairing code expired. Show a new code on the projector."; break;
+            case "NO_VIDEO": message = "Nothing is playing on the projector. Start a video first."; break;
             case "SOURCE_CHANGED": message = "The video source changed. Choose Cast again before controlling this video."; break;
             case "INVALID_MEDIA": message = "The page does not expose a supported public HTTP media source."; break;
             case "INVALID_SUBTITLE": message = "Choose an available subtitle track or turn subtitles off."; break;
@@ -116,8 +117,8 @@ public final class NativeBackend {
             case "SUBTITLE_INVALID": message = "This subtitle file has no valid timed captions. Choose another subtitle."; break;
             case "SUBTITLE_TOO_LARGE": message = "This subtitle file is too large. Choose another subtitle."; break;
             case "SUBTITLE_EXPIRED": message = "The prepared subtitle is no longer available. Choose it again."; break;
-            case "SUBTITLE_DELIVERY": message = "Kodi could not retrieve the prepared subtitles. Check that the phone and projector share the same Wi-Fi."; break;
-            case "CANNOT_SEEK": message = "Kodi reports that this video cannot seek."; break;
+            case "SUBTITLE_DELIVERY": message = "The projector could not retrieve the prepared subtitles. Check that the phone and projector share the same Wi-Fi."; break;
+            case "CANNOT_SEEK": message = "This video cannot seek."; break;
             default: code = "CONNECTION_FAILED"; message = "Could not reach the projector. Check its power, Wi-Fi and IP address.";
         }
         return new BackendException(code, message);
@@ -176,26 +177,17 @@ public final class NativeBackend {
             if ("device.discover".equals(method)) return object("devices", discover());
             if ("device.connect".equals(method)) return connectDevice(text(params, "host", 64));
             if ("device.disconnect".equals(method)) {
-                closeLuma(); host = null; username = password = null; return object("connected", false);
-            }
-            if ("kodi.configure".equals(method)) {
-                requireHost();
-                String user, secret; int port;
-                try { user = text(params, "username", 256); secret = text(params, "password", 256); port = params.has("port") ? integer(params.opt("port"), 1, 65535) : 8080; }
-                catch (BackendException ignored) { throw fail("KODI_CONFIG"); }
-                if (user.matches("(?s).*[:\\r\\n\\x00].*") || secret.matches("(?s).*[\\r\\n\\x00].*")) throw fail("KODI_CONFIG");
-                kodiPort = port;
-                username = user; password = secret; return object("configured", true);
+                closeLuma(); host = null; token = null; return object("connected", false);
             }
             if (method != null && method.startsWith("luma.")) return lumaAction(method.substring(5), params);
-            if (method != null && method.startsWith("kodi.")) return kodiAction(method.substring(5), params);
+            if (method != null && method.startsWith("receiver.")) return receiverAction(method.substring(9), params);
             throw fail("INVALID_INPUT");
         } catch (BackendException failure) {
-            if ("KODI_AUTH".equals(failure.code)) username = password = null;
+            if ("RECEIVER_AUTH".equals(failure.code)) token = null;
             throw failure;
         }
         catch (Exception ignored) { throw fail("CONNECTION_FAILED"); }
-        finally { activeToken = null; kodiDeadline = 0; }
+        finally { activeToken = null; receiverDeadline = 0; }
     }
 
     private void requireHost() throws BackendException { if (!privateAddress(host)) throw fail("NOT_CONNECTED"); }
@@ -204,7 +196,7 @@ public final class NativeBackend {
     private JSONObject connectDevice(String selected) throws Exception {
         if (!privateAddress(selected)) throw fail("INVALID_HOST");
         closeLuma();
-        if (!selected.equals(host)) username = password = null;
+        if (!selected.equals(host)) { token = null; receiverPort = RECEIVER_PORT; }
         host = selected;
         try {
             Socket socket = new Socket(); luma = socket;
@@ -310,7 +302,7 @@ public final class NativeBackend {
             int maximum = fresh.getInt("max"), value = integer(params.opt("value"), 0, maximum);
             int level = Math.max(0, Math.min(30, (int) Math.round((double) value * 30 / maximum)));
             if (params.has("expectedSourceUrl")) {
-                Integer player = player(); if (player == null) throw fail("NO_VIDEO"); expectedSource(player, params);
+                requireCurrent(params);
             }
             tcpWrite("MediaControl\r\nsetVolume " + level + "\r\n\r\n", true);
             return lumaAction("status", new JSONObject());
@@ -324,15 +316,15 @@ public final class NativeBackend {
             String named = text(params, "key", 32);
             Integer key = KEYS.get(named); if (key == null) throw fail("INVALID_INPUT");
             if (params.has("expectedSourceUrl") && (named.equals("volume-up") || named.equals("volume-down") || named.equals("mute"))) {
-                Integer player = player(); if (player == null) throw fail("NO_VIDEO"); expectedSource(player, params);
+                requireCurrent(params);
             }
             tcpWrite("KEYEVENT\r\n" + key + "\r\n\r\n", true);
         } else if ("text".equals(action)) {
             Object value = params.opt("text");
             if (!(value instanceof String) || ((String) value).isEmpty() || ((String) value).length() > 1000 || ((String) value).getBytes(StandardCharsets.UTF_8).length > 4096 || ((String) value).matches("(?s).*[\\x00-\\x1f\\x7f].*")) throw fail("INVALID_TEXT");
             tcpWrite("CONTENT\r\n1\r\n0 " + value + "\r\n\r\n", true);
-        } else if ("launchKodi".equals(action) || "launchApp".equals(action)) {
-            String packageName = "launchKodi".equals(action) ? "org.xbmc.kodi" : text(params, "packageName", 255);
+        } else if ("launchReceiver".equals(action) || "launchApp".equals(action)) {
+            String packageName = "launchReceiver".equals(action) ? RECEIVER_PACKAGE : text(params, "packageName", 255);
             if (!PACKAGE.matcher(packageName).matches()) throw fail("INVALID_INPUT");
             if (apps == null) getApps(); if (!apps.containsKey(packageName)) throw fail("APP_NOT_AVAILABLE");
             tcpWrite("STARTAPPEVNET\r\n" + packageName + "\r\n\r\n", true);
@@ -394,88 +386,68 @@ public final class NativeBackend {
             return uri.toASCIIString();
         } catch (Exception ignored) { throw fail("INVALID_MEDIA"); }
     }
-    private Object rpc(String method, JSONObject params, boolean mutation) throws Exception {
-        requireHost(); if (username == null || password == null) throw fail("KODI_CONFIG");
-        // One public operation can require several RPCs. A fresh five seconds
-        // per RPC used to hold the service queue for 15-20 seconds, outliving
-        // the bridge request and delaying lock-screen actions behind it.
-        if (kodiDeadline == 0) kodiDeadline = SystemClock.elapsedRealtime() + KODI_CALL_TIMEOUT;
-        long remaining = kodiDeadline - SystemClock.elapsedRealtime();
-        if (remaining <= 0) throw fail("KODI_UNAVAILABLE");
+    // ---- LUMA Receiver (android-receiver/) LAN control API ----
+    // One public operation may need two receiver calls; they share one budget so
+    // a stalled projector cannot hold the service queue for longer than this.
+    private JSONObject receiverInfo() throws Exception { return call("GET", "info", null, false); }
+    private JSONObject call(String method, JSONObject params, boolean mutation) throws Exception { return call("POST", method, params, mutation); }
+    private JSONObject call(String verb, String method, JSONObject params, boolean mutation) throws Exception {
+        requireHost();
+        boolean open = "info".equals(method) || method.startsWith("pair.");
+        if (!open && token == null) throw fail("RECEIVER_CONFIG");
+        if (receiverDeadline == 0) receiverDeadline = SystemClock.elapsedRealtime() + RECEIVER_CALL_TIMEOUT;
+        long remaining = receiverDeadline - SystemClock.elapsedRealtime();
+        if (remaining <= 0) throw fail("RECEIVER_UNAVAILABLE");
         HttpURLConnection connection = null; ScheduledFuture<?> deadline = null;
+        int status;
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
         try {
-            connection = (HttpURLConnection) new URL("http", host, kodiPort, "/jsonrpc").openConnection(Proxy.NO_PROXY); activeHttp = connection;
+            connection = (HttpURLConnection) new URL("http", host, receiverPort, "/api/v1/" + method).openConnection(Proxy.NO_PROXY); activeHttp = connection;
             final HttpURLConnection owned = connection; deadline = deadlines.schedule(owned::disconnect, remaining, TimeUnit.MILLISECONDS);
             connection.setConnectTimeout((int) remaining); connection.setReadTimeout((int) remaining); connection.setInstanceFollowRedirects(false);
-            connection.setRequestMethod("POST"); connection.setDoOutput(true); connection.setUseCaches(false);
-            connection.setRequestProperty("Content-Type", "application/json");
-            connection.setRequestProperty("Authorization", "Basic " + Base64.encodeToString((username + ":" + password).getBytes(StandardCharsets.UTF_8), Base64.NO_WRAP));
-            int id = ++rpcId; byte[] body = object("jsonrpc", "2.0", "id", id, "method", method, "params", params).toString().getBytes(StandardCharsets.UTF_8);
-            connection.setFixedLengthStreamingMode(body.length);
-            try (OutputStream stream = connection.getOutputStream()) { if (mutation) guard(); stream.write(body); }
-            int status = connection.getResponseCode();
-            if (status != 200) android.util.Log.i("LumaKodi", method + " HTTP_" + status);
-            if (status == 401 || status == 403) throw fail("KODI_AUTH"); if (status != 200) throw fail("KODI_RESPONSE");
-            if (connection.getContentLength() > MAX_REPLY) throw fail("KODI_RESPONSE");
-            ByteArrayOutputStream out = new ByteArrayOutputStream(); byte[] chunk = new byte[4096];
-            try (InputStream stream = connection.getInputStream()) { int count; while ((count = stream.read(chunk)) >= 0) { if (out.size() + count > MAX_REPLY) throw fail("KODI_RESPONSE"); out.write(chunk, 0, count); } }
-            JSONObject reply;
-            try {
-                JSONTokener json = new JSONTokener(decode(out.toByteArray())); Object value = json.nextValue();
-                if (!(value instanceof JSONObject) || json.nextClean() != 0) throw fail("KODI_RESPONSE");
-                reply = (JSONObject) value;
+            connection.setRequestMethod(verb); connection.setUseCaches(false);
+            if (!open) connection.setRequestProperty("Authorization", "Bearer " + token);
+            if ("POST".equals(verb)) {
+                byte[] body = (params == null ? new JSONObject() : params).toString().getBytes(StandardCharsets.UTF_8);
+                connection.setDoOutput(true); connection.setRequestProperty("Content-Type", "application/json");
+                connection.setFixedLengthStreamingMode(body.length);
+                try (OutputStream stream = connection.getOutputStream()) { if (mutation) guard(); stream.write(body); }
             }
-            catch (Exception invalid) { android.util.Log.i("LumaKodi", method + " MALFORMED_JSON"); throw fail("KODI_RESPONSE"); }
-            Object replyId = reply.opt("id");
-            if (!"2.0".equals(reply.opt("jsonrpc")) || !(replyId instanceof Number) || ((Number) replyId).doubleValue() != id) {
-                android.util.Log.i("LumaKodi", method + " INVALID_ENVELOPE"); throw fail("KODI_RESPONSE");
+            status = connection.getResponseCode();
+            if (connection.getContentLength() > MAX_RECEIVER_REPLY) throw fail("RECEIVER_RESPONSE");
+            byte[] chunk = new byte[8192];
+            try (InputStream stream = status >= 400 ? connection.getErrorStream() : connection.getInputStream()) {
+                int count; while (stream != null && (count = stream.read(chunk)) >= 0) { if (out.size() + count > MAX_RECEIVER_REPLY) throw fail("RECEIVER_RESPONSE"); out.write(chunk, 0, count); }
             }
-            if (reply.has("error")) {
-                JSONObject error = reply.optJSONObject("error"); Object code = error == null ? null : error.opt("code");
-                if (!reply.has("result") && error != null && error.opt("message") instanceof String && code instanceof Number
-                        && ((Number) code).doubleValue() == ((Number) code).intValue()) {
-                    int number = ((Number) code).intValue();
-                    // Fixed method + numeric status only: never log receiver messages, URLs or credentials.
-                    android.util.Log.i("LumaKodi", method + " RPC_ERROR_" + number);
-                    // Kodi's Addons implementation returns InvalidParams before
-                    // dispatch when the requested add-on is absent or disabled.
-                    // Method-not-found is equally pre-dispatch on older Kodi.
-                    if (("Addons.GetAddonDetails".equals(method) || "Addons.ExecuteAddon".equals(method))
-                            && (number == -32601 || number == -32602)) throw fail("KODI_ADDON_UNAVAILABLE");
-                    boolean receipt = "Player.AddSubtitle".equals(method) || "Player.Open".equals(method);
-                    // Kodi21.2 rejects these before dispatch; AddSubtitle's FailedToExecute
-                    // also precedes appPlayer->AddSubtitle. Other errors remain uncertain.
-                    if (receipt && (number == -32601 || number == -32602 || number == -32099
-                            || ("Player.AddSubtitle".equals(method) && number == -32100))) throw fail("KODI_REJECTED");
-                }
-                throw fail("KODI_RESPONSE");
-            }
-            if (!reply.has("result")) throw fail("KODI_RESPONSE");
-            return reply.get("result");
-        } catch (BackendException failure) {
-            android.util.Log.i("LumaKodi", method + " " + failure.code);
-            throw failure;
-        }
-        catch (Exception ignored) {
-            android.util.Log.i("LumaKodi", method + " KODI_UNAVAILABLE");
-            throw fail("KODI_UNAVAILABLE");
-        }
+        } catch (BackendException failure) { android.util.Log.i("LumaReceiver", method + " " + failure.code); throw failure; }
+        catch (Exception unreachable) { android.util.Log.i("LumaReceiver", method + " RECEIVER_UNAVAILABLE"); throw fail("RECEIVER_UNAVAILABLE"); }
         finally { if (deadline != null) deadline.cancel(false); if (connection != null) connection.disconnect(); activeHttp = null; }
+        JSONObject reply;
+        try {
+            JSONTokener json = new JSONTokener(decode(out.toByteArray())); Object value = json.nextValue();
+            if (!(value instanceof JSONObject) || json.nextClean() != 0) throw new Exception();
+            reply = (JSONObject) value;
+        } catch (Exception invalid) { android.util.Log.i("LumaReceiver", method + " MALFORMED_JSON"); throw fail("RECEIVER_RESPONSE"); }
+        if (reply.optBoolean("ok") && status == 200) {
+            if ("info".equals(method)) return reply.optJSONObject("result") == null ? fail0() : reply.getJSONObject("result");
+            JSONObject result = reply.optJSONObject("result"); if (result == null) throw fail("RECEIVER_RESPONSE");
+            return result;
+        }
+        JSONObject error = reply.optJSONObject("error"); String code = error == null ? "" : error.optString("code");
+        // Fixed method + code only: never log receiver URLs or tokens.
+        android.util.Log.i("LumaReceiver", method + " " + (code.matches("[A-Z_]{1,40}") ? code : "HTTP_" + status));
+        if ("UNAUTHORIZED".equals(code)) throw fail("RECEIVER_AUTH");
+        if ("INVALID_CONTENT".equals(code)) throw fail("INVALID_MEDIA");
+        switch (code) {
+            case "SOURCE_CHANGED": case "NO_VIDEO": case "CANNOT_SEEK": case "INVALID_SUBTITLE": case "INVALID_MEDIA":
+            case "PAIRING_CODE_WRONG": case "PAIRING_EXPIRED": throw fail(code);
+            default:
+                // The receiver validates every request before acting, so any other 4xx
+                // was rejected without effect; 5xx/unknown outcomes stay ambiguous.
+                throw fail(status >= 400 && status < 500 ? "RECEIVER_REJECTED" : "RECEIVER_RESPONSE");
+        }
     }
-    private JSONObject rpcObject(String method, JSONObject params) throws Exception {
-        Object result = rpc(method, params, false); if (!(result instanceof JSONObject)) throw fail("KODI_RESPONSE"); return (JSONObject) result;
-    }
-    private void rpcAccepted(String method, JSONObject params) throws Exception {
-        // These Kodi methods acknowledge with exactly "OK". A valid envelope
-        // containing null/false/another result is still an unknown write outcome.
-        if (!"OK".equals(rpc(method, params, true))) throw fail("KODI_RESPONSE");
-    }
-    private Integer player() throws Exception {
-        Object result = rpc("Player.GetActivePlayers", new JSONObject(), false); if (!(result instanceof JSONArray)) throw fail("KODI_RESPONSE");
-        JSONArray list = (JSONArray) result; if (list.length() > 32) throw fail("KODI_RESPONSE");
-        for (int i = 0; i < list.length(); i++) { JSONObject item = list.optJSONObject(i); if (item != null && "video".equals(item.optString("type"))) return integer(item.opt("playerid"), 0, 1024); }
-        return null;
-    }
+    private static JSONObject fail0() throws BackendException { throw fail("RECEIVER_RESPONSE"); }
     private static JSONObject validatedLumaContent(JSONObject media) {
         try {
             JSONObject value = media == null ? null : media.optJSONObject("content");
@@ -494,170 +466,100 @@ public final class NativeBackend {
             return safe;
         } catch (Exception invalid) { return null; }
     }
-    private static JSONObject metadataPayload(String url, String type, JSONObject content) throws Exception {
-        String title = label(content.optString("title"), 200);
-        boolean tv = "tv".equals(content.optString("kind"));
-        String showTitle = "";
-        if (tv) {
-            String suffix = " · S" + content.optInt("season") + " E" + content.optInt("episode");
-            showTitle = title;
-            if (showTitle.endsWith(suffix) && showTitle.length() > suffix.length()) showTitle = showTitle.substring(0, showTitle.length() - suffix.length()).trim();
-            showTitle = label(showTitle, 200);
-            if (showTitle.isEmpty()) showTitle = "Series " + content.optString("contentId");
-            showTitle = showTitle.substring(0, Math.min(showTitle.length(), 200 - suffix.length()));
-            title = showTitle + suffix;
-        } else if (title.isEmpty()) title = "Movie " + content.optString("contentId");
-        JSONObject identity = object("key", content.getString("key"), "kind", content.getString("kind"),
-                "contentId", content.getString("contentId"), "season", content.opt("season"),
-                "episode", content.opt("episode"), "watchUrl", content.getString("watchUrl"));
-        return object("version", 1, "source", url, "contentType", type, "title", title, "showTitle", showTitle, "content", identity);
-    }
-    private boolean metadataAddonAvailable() throws Exception {
-        JSONObject result;
+    /** Canonical identity reported by the receiver, re-derived exactly like a fresh catalog item. */
+    private static JSONObject receiverContent(JSONObject value) {
         try {
-            result = rpcObject("Addons.GetAddonDetails", object("addonid", KODI_METADATA_ADDON,
-                    "properties", new JSONArray().put("enabled")));
-        } catch (BackendException unavailable) {
-            if ("KODI_ADDON_UNAVAILABLE".equals(unavailable.code)) return false;
-            throw unavailable;
-        }
-        JSONObject addon = result.optJSONObject("addon");
-        if (addon == null || !KODI_METADATA_ADDON.equals(addon.optString("addonid")) || !(addon.opt("enabled") instanceof Boolean)) throw fail("KODI_RESPONSE");
-        return addon.getBoolean("enabled");
-    }
-    private void expectedReplacement(JSONObject expected, boolean onlyIfInactive) throws Exception {
-        Integer current = player();
-        if (onlyIfInactive) {
-            if (current != null) throw fail("SOURCE_CHANGED");
-        } else if (expected != null) {
-            if (current == null) throw fail("SOURCE_CHANGED");
-            expectedSource(current, expected);
-        }
-    }
-    private void openMedia(String url, String type, JSONObject content, boolean onlyIfInactive, JSONObject expected) throws Exception {
-        if (content != null && metadataAddonAvailable()) {
-            // The capability probe is a separate round trip. Another controller
-            // may have changed videos while it was in flight, so recheck the
-            // exact replacement identity immediately before the possible write.
-            expectedReplacement(expected, onlyIfInactive);
-            JSONObject payload = metadataPayload(url, type, content);
-            String encoded = Base64.encodeToString(payload.toString().getBytes(StandardCharsets.UTF_8), Base64.URL_SAFE | Base64.NO_WRAP | Base64.NO_PADDING);
-            if (encoded.length() > 16384) throw fail("INVALID_MEDIA");
-            try {
-                rpcAccepted("Addons.ExecuteAddon", object("addonid", KODI_METADATA_ADDON,
-                        "params", new JSONArray().put(encoded), "wait", true));
-                return;
-            } catch (BackendException unavailable) {
-                // InvalidParams/method-not-found are emitted by Kodi before its
-                // ExecuteAddon dispatch. All later/ambiguous failures stay final.
-                if (!"KODI_ADDON_UNAVAILABLE".equals(unavailable.code)) throw unavailable;
-            }
-        }
-        // ExecuteAddon can also fail before dispatch. Recheck before the legacy
-        // fallback so an acknowledged launch from another phone is not replaced.
-        expectedReplacement(expected, onlyIfInactive);
-        rpcAccepted("Player.Open", object("item", object("file", url)));
-    }
-    private static final class KodiItem {
-        final String source; final JSONObject content;
-        KodiItem(String source, JSONObject content) { this.source = source; this.content = content; }
-    }
-    private static String metadataText(Object value) {
-        if (!(value instanceof String)) return null;
-        String text = (String) value;
-        return !text.isEmpty() && text.length() <= 200 && text.equals(label(text, 200)) ? text : null;
-    }
-    private static JSONObject lumaContent(JSONObject item) {
-        try {
-            JSONObject ids = item.optJSONObject("uniqueid"); Object raw = ids == null ? null : ids.opt("luma");
-            if (!(raw instanceof String)) return null;
-            String unique = (String) raw, type = item.optString("type");
-            Matcher movie = LUMA_MOVIE_ID.matcher(unique);
-            if (movie.matches()) {
-                String title = metadataText(item.opt("title")); if (!"movie".equals(type) || title == null) return null;
-                JSONObject content = WatchHistory.contentFromCatalog("movie", movie.group(2), null, null, title);
-                return content != null && movie.group(1).equals(content.optString("key")) ? content : null;
-            }
-            Matcher episode = LUMA_EPISODE_ID.matcher(unique);
-            if (!episode.matches() || !"episode".equals(type) || metadataText(item.opt("title")) == null) return null;
-            String showTitle = metadataText(item.opt("showtitle")); if (showTitle == null) return null;
-            int season = integer(item.opt("season"), 0, 9999), number = integer(item.opt("episode"), 1, 9999);
-            if (season != Integer.parseInt(episode.group(3)) || number != Integer.parseInt(episode.group(4))) return null;
-            String title = showTitle + " · S" + season + " E" + number;
-            JSONObject content = WatchHistory.contentFromCatalog("tv", episode.group(2), season, number, title);
-            return content != null && episode.group(1).equals(content.optString("key")) ? content : null;
+            if (value == null) return null;
+            String kind = value.getString("kind");
+            Integer season = "tv".equals(kind) ? integer(value.opt("season"), 0, 9999) : null;
+            Integer episode = "tv".equals(kind) ? integer(value.opt("episode"), 1, 9999) : null;
+            String title = value.optString("title", "");
+            if (!title.equals(label(title, 200))) return null;
+            JSONObject safe = WatchHistory.contentFromCatalog(kind, value.getString("contentId"), season, episode, title);
+            return safe != null && safe.optString("key").equals(value.optString("key")) ? safe : null;
         } catch (Exception invalid) { return null; }
     }
-    private KodiItem currentItem(int player) throws Exception {
-        JSONArray properties = new JSONArray().put("file").put("title").put("showtitle").put("season").put("episode").put("uniqueid");
-        JSONObject item = rpcObject("Player.GetItem", object("playerid", player, "properties", properties)).optJSONObject("item");
-        if (item == null || !(item.opt("file") instanceof String) || item.optString("file").isEmpty() || item.optString("file").length() > 8192) throw fail("KODI_RESPONSE");
-        return new KodiItem(item.getString("file"), lumaContent(item));
+    private static String contentKey(Object raw) throws BackendException {
+        if (!(raw instanceof String) || !LUMA_MOVIE_ID.matcher("v1:" + raw).matches() && !LUMA_EPISODE_ID.matcher("v1:" + raw).matches()) throw fail("INVALID_INPUT");
+        return (String) raw;
     }
-    private String currentSource(int player) throws Exception {
-        JSONObject item = rpcObject("Player.GetItem", object("playerid", player, "properties", new JSONArray().put("file"))).optJSONObject("item");
-        if (item == null || !(item.opt("file") instanceof String) || item.optString("file").isEmpty() || item.optString("file").length() > 8192) throw fail("KODI_RESPONSE"); return item.getString("file");
+    /** Copies validated source guards; the receiver applies them atomically with the write. */
+    private static JSONObject guarded(JSONObject params, JSONObject command) throws Exception {
+        if (params.has("expectedSourceUrl")) command.put("expectedSourceUrl", publicUrl(params.opt("expectedSourceUrl")));
+        if (params.has("expectedContentKey")) command.put("expectedContentKey", contentKey(params.opt("expectedContentKey")));
+        return command;
     }
-    private void expectedSource(int player, JSONObject params) throws Exception {
-        if (!params.has("expectedSourceUrl") && !params.has("expectedContentKey")) return;
-        Object rawKey = params.opt("expectedContentKey");
-        String expectedKey = null;
-        if (params.has("expectedContentKey")) {
-            if (!(rawKey instanceof String)) throw fail("INVALID_INPUT");
-            expectedKey = (String) rawKey;
-            if (!LUMA_MOVIE_ID.matcher("v1:" + expectedKey).matches() && !LUMA_EPISODE_ID.matcher("v1:" + expectedKey).matches()) throw fail("INVALID_INPUT");
+    private JSONObject playback() throws Exception {
+        JSONObject data = call("player.status", new JSONObject(), false);
+        if (!(data.opt("active") instanceof Boolean)) throw fail("RECEIVER_RESPONSE");
+        if (!data.getBoolean("active")) {
+            JSONObject idle = object("active", false, "playing", false);
+            if (data.opt("error") instanceof String) idle.put("error", label(data.getString("error"), 64));
+            return idle;
         }
-        if (expectedKey == null) {
-            if (!publicUrl(params.opt("expectedSourceUrl")).equals(currentSource(player))) throw fail("SOURCE_CHANGED");
-            return;
-        }
-        KodiItem item = currentItem(player);
-        if (params.has("expectedSourceUrl") && !publicUrl(params.opt("expectedSourceUrl")).equals(item.source)) throw fail("SOURCE_CHANGED");
-        if (item.content == null || !expectedKey.equals(item.content.optString("key"))) throw fail("SOURCE_CHANGED");
-    }
-    private static int seconds(JSONObject time) throws Exception {
-        if (time == null) throw fail("KODI_RESPONSE");
-        return integer(time.opt("hours"), 0, 10000) * 3600 + integer(time.opt("minutes"), 0, 59) * 60 + integer(time.opt("seconds"), 0, 59);
-    }
-    private JSONObject playback(Integer player) throws Exception {
-        if (player == null) return object("active", false, "playing", false);
-        KodiItem before = currentItem(player);
-        JSONObject data = rpcObject("Player.GetProperties", object("playerid", player, "properties", new JSONArray().put("speed").put("time").put("totaltime").put("canseek")));
-        if (!(data.opt("speed") instanceof Number) || !(data.opt("canseek") instanceof Boolean)) throw fail("KODI_RESPONSE");
-        KodiItem after = currentItem(player); if (!before.source.equals(after.source)) throw fail("SOURCE_CHANGED");
-        JSONObject result = object("active", true, "playing", data.getDouble("speed") != 0, "positionSeconds", seconds(data.optJSONObject("time")), "durationSeconds", seconds(data.optJSONObject("totaltime")), "canSeek", data.getBoolean("canseek"), "sourceUrl", before.source);
-        if (before.content != null && after.content != null && before.content.toString().equals(after.content.toString())) result.put("content", before.content);
+        Object position = data.opt("positionSeconds"), duration = data.opt("durationSeconds");
+        if (!(position instanceof Number) || !(duration instanceof Number) || !(data.opt("canSeek") instanceof Boolean) || !(data.opt("sourceUrl") instanceof String)) throw fail("RECEIVER_RESPONSE");
+        JSONObject result = object("active", true, "playing", data.optBoolean("playing"), "paused", data.optBoolean("paused"),
+            "positionSeconds", Math.max(0, ((Number) position).doubleValue()), "durationSeconds", Math.max(0, ((Number) duration).doubleValue()),
+            "canSeek", data.getBoolean("canSeek"), "sourceUrl", data.getString("sourceUrl"),
+            "state", label(data.optString("state", ""), 16), "revision", data.optLong("revision"));
+        JSONObject content = receiverContent(data.optJSONObject("content"));
+        if (content != null) result.put("content", content);
         return result;
     }
-    private JSONObject subtitles(Integer player) throws Exception {
-        if (player == null) return object("active", false, "enabled", false, "currentIndex", JSONObject.NULL, "tracks", new JSONArray());
-        JSONObject data = rpcObject("Player.GetProperties", object("playerid", player, "properties", new JSONArray().put("subtitles").put("currentsubtitle").put("subtitleenabled")));
-        JSONArray list = data.optJSONArray("subtitles"); if (list == null || list.length() > 128 || !(data.opt("subtitleenabled") instanceof Boolean)) throw fail("KODI_RESPONSE");
-        // Kodi21.2 returns null here until appPlayer->HasPlayer(), whereas a
-        // ready player with no selected subtitles returns an empty object.
-        // GetActivePlayers alone therefore does not authorize AddSubtitle yet.
-        if (!data.has("currentsubtitle")) throw fail("KODI_RESPONSE");
-        if (data.isNull("currentsubtitle")) return object("active", false, "enabled", false, "currentIndex", JSONObject.NULL, "tracks", new JSONArray());
-        JSONObject selected = data.optJSONObject("currentsubtitle"); if (selected == null) throw fail("KODI_RESPONSE");
+    private void requireCurrent(JSONObject params) throws Exception {
+        JSONObject current = playback();
+        if (!current.getBoolean("active")) throw fail("NO_VIDEO");
+        if (params.has("expectedSourceUrl") && !publicUrl(params.opt("expectedSourceUrl")).equals(current.getString("sourceUrl"))) throw fail("SOURCE_CHANGED");
+        if (params.has("expectedContentKey") && !contentKey(params.opt("expectedContentKey")).equals(current.optJSONObject("content") == null ? "" : current.getJSONObject("content").optString("key"))) throw fail("SOURCE_CHANGED");
+    }
+    private JSONObject subtitles(JSONObject params) throws Exception {
+        JSONObject data = call("player.subtitles", guarded(params, new JSONObject()), false);
+        JSONArray list = data.optJSONArray("tracks"); if (list == null || list.length() > 128 || !(data.opt("enabled") instanceof Boolean)) throw fail("RECEIVER_RESPONSE");
+        if (!data.optBoolean("active")) return object("active", false, "enabled", false, "currentIndex", JSONObject.NULL, "tracks", new JSONArray());
         JSONArray tracks = new JSONArray(); List<Integer> indices = new ArrayList<>();
         for (int i = 0; i < list.length(); i++) {
-            JSONObject entry = list.optJSONObject(i); if (entry == null) throw fail("KODI_RESPONSE");
-            int index = integer(entry.opt("index"), 0, 1024); if (indices.contains(index)) throw fail("KODI_RESPONSE"); indices.add(index);
+            JSONObject entry = list.optJSONObject(i); if (entry == null) throw fail("RECEIVER_RESPONSE");
+            int index = integer(entry.opt("index"), 0, 1024); if (indices.contains(index)) throw fail("RECEIVER_RESPONSE"); indices.add(index);
             tracks.put(object("index", index, "name", label(entry.optString("name", ""), 200), "language", label(entry.optString("language", ""), 64)));
         }
-        Object current = JSONObject.NULL;
-        if (selected.opt("index") instanceof Number) {
-            double index = ((Number) selected.opt("index")).doubleValue();
-            if (index >= 0 && index <= 1024 && index == Math.floor(index) && indices.contains((int) index)) current = (int) index;
-        }
-        return object("active", true, "enabled", data.getBoolean("subtitleenabled"), "currentIndex", current, "tracks", tracks);
+        Object current = data.opt("currentIndex") instanceof Number && indices.contains(((Number) data.opt("currentIndex")).intValue()) ? ((Number) data.opt("currentIndex")).intValue() : JSONObject.NULL;
+        return object("active", true, "enabled", data.getBoolean("enabled"), "currentIndex", current, "tracks", tracks);
     }
-    private JSONObject kodiAction(String action, JSONObject params) throws Exception {
+    /** Optional fixture port (tests only); the shipped UI never sends one, so 4191 is used. */
+    private void receiverPort(JSONObject params) throws BackendException {
+        if (params.has("port")) receiverPort = integer(params.opt("port"), 1024, 65535);
+    }
+    private JSONObject receiverAction(String action, JSONObject params) throws Exception {
+        if ("configure".equals(action) || "pairBegin".equals(action) || "pairComplete".equals(action)) receiverPort(params);
+        if ("configure".equals(action)) {
+            requireHost();
+            String saved = text(params, "token", 200);
+            if (!saved.matches("[A-Za-z0-9_-]{20,200}")) throw fail("RECEIVER_CONFIG");
+            token = saved; return object("configured", true);
+        }
+        if ("pairBegin".equals(action)) {
+            JSONObject info = receiverInfo();
+            if (!"lumareceiver".equals(info.optString("app"))) throw fail("RECEIVER_RESPONSE");
+            String name = label("LUMA Remote · " + android.os.Build.MODEL, 60);
+            JSONObject begun = call("pair.begin", object("clientName", name), true);
+            return object("pairingId", text(begun, "pairingId", 64), "expiresInSeconds", begun.optInt("expiresInSeconds", 120));
+        }
+        if ("pairComplete".equals(action)) {
+            String id = text(params, "pairingId", 64), code = text(params, "code", 12).replaceAll("\\s", "");
+            if (!id.matches("[A-Za-z0-9_-]{8,64}") || !code.matches("[0-9]{6}")) throw fail("PAIRING_CODE_WRONG");
+            JSONObject paired = call("pair.complete", object("pairingId", id, "code", code), true);
+            String issued = text(paired, "token", 200); if (!issued.matches("[A-Za-z0-9_-]{20,200}")) throw fail("RECEIVER_RESPONSE");
+            token = issued;
+            // The service persists this token encrypted and strips it before replying to the page.
+            return object("configured", true, "token", issued);
+        }
         if ("connect".equals(action)) {
-            if (!"pong".equals(rpc("JSONRPC.Ping", new JSONObject(), false))) throw fail("KODI_RESPONSE");
-            JSONObject data = rpcObject("Application.GetProperties", object("properties", new JSONArray().put("name").put("version")));
-            JSONObject version = data.optJSONObject("version"); if (!"Kodi".equals(data.optString("name")) || version == null) throw fail("KODI_RESPONSE");
-            return object("ready", true, "name", "Kodi", "version", integer(version.opt("major"), 0, 1000) + "." + integer(version.opt("minor"), 0, 1000));
+            JSONObject info = receiverInfo();
+            if (!"lumareceiver".equals(info.optString("app"))) throw fail("RECEIVER_RESPONSE");
+            playback(); // proves the saved token
+            return object("ready", true, "name", "LUMA Receiver", "version", label(info.optString("versionName"), 32),
+                "receiverId", label(info.optString("receiverId"), 64));
         }
         if ("open".equals(action)) {
             JSONObject media = params.optJSONObject("media"); if (media == null) throw fail("INVALID_MEDIA");
@@ -665,73 +567,89 @@ public final class NativeBackend {
             if (!(type.equals("video/mp4") || type.equals("video/webm") || type.equals("application/vnd.apple.mpegurl") || type.equals("application/x-mpegurl") || type.equals("application/dash+xml"))) throw fail("INVALID_MEDIA");
             if (params.has("expectedSourceUrl") && !url.equals(publicUrl(params.opt("expectedSourceUrl")))) throw fail("SOURCE_CHANGED");
             JSONObject content = validatedLumaContent(media);
-            if (params.has("expectedContentKey")) {
-                Object rawKey = params.opt("expectedContentKey");
-                if (!(rawKey instanceof String) || !LUMA_MOVIE_ID.matcher("v1:" + rawKey).matches()
-                        && !LUMA_EPISODE_ID.matcher("v1:" + rawKey).matches()) throw fail("INVALID_INPUT");
-                if (content == null || !rawKey.equals(content.optString("key"))) throw fail("SOURCE_CHANGED");
-            }
+            if (params.has("expectedContentKey") && (content == null || !contentKey(params.opt("expectedContentKey")).equals(content.optString("key")))) throw fail("SOURCE_CHANGED");
             if (params.has("onlyIfInactive") && !(params.opt("onlyIfInactive") instanceof Boolean)) throw fail("INVALID_INPUT");
             boolean hasCurrentSource = params.has("expectedCurrentSourceUrl"), hasCurrentKey = params.has("expectedCurrentContentKey");
             if (hasCurrentSource != hasCurrentKey || params.optBoolean("onlyIfInactive") && hasCurrentSource) throw fail("INVALID_INPUT");
-            JSONObject expected = null;
-            if (hasCurrentSource) {
-                Object rawKey = params.opt("expectedCurrentContentKey");
-                if (!(rawKey instanceof String) || !LUMA_MOVIE_ID.matcher("v1:" + rawKey).matches()
-                        && !LUMA_EPISODE_ID.matcher("v1:" + rawKey).matches()) throw fail("INVALID_INPUT");
-                expected = object("expectedSourceUrl", publicUrl(params.opt("expectedCurrentSourceUrl")),
-                        "expectedContentKey", rawKey);
-            }
-            openMedia(url, type, content, params.optBoolean("onlyIfInactive"), expected); return object("accepted", true);
+            JSONObject request = object("url", url, "contentType", type);
+            if (content != null) request.put("content", content).put("title", label(content.optString("title"), 200));
+            if (media.opt("resumeSeconds") instanceof Number && ((Number) media.opt("resumeSeconds")).doubleValue() > 0)
+                request.put("resumeSeconds", Math.min(17280000, ((Number) media.opt("resumeSeconds")).doubleValue()));
+            JSONObject command = object("media", request, "onlyIfInactive", params.optBoolean("onlyIfInactive"));
+            if (hasCurrentSource) command.put("expectedCurrentSourceUrl", publicUrl(params.opt("expectedCurrentSourceUrl")))
+                .put("expectedCurrentContentKey", contentKey(params.opt("expectedCurrentContentKey")));
+            call("player.open", command, true);
+            return object("accepted", true);
         }
-        Integer player = player();
-        if ("status".equals(action)) return playback(player);
-        if ("getSubtitles".equals(action)) {
-            if (player != null) expectedSource(player, params);
-            JSONObject result = subtitles(player);
-            if (player != null) expectedSource(player, params);
-            return result;
-        }
-        if (player == null) throw fail("NO_VIDEO");
+        if ("status".equals(action)) return playback();
+        if ("getSubtitles".equals(action)) return subtitles(params);
         if ("addSubtitle".equals(action)) {
             JSONObject track = params.optJSONObject("track"); if (track == null) throw fail("INVALID_SUBTITLE");
-            String url = publicUrl(track.opt("url")); expectedSource(player, params);
+            String url = publicUrl(track.opt("url"));
             if (params.has("preparedId")) {
                 String id = text(params, "preparedId", 128);
                 if (!id.matches("[A-Za-z0-9_-]{16,128}") || subtitleResolver == null || !params.has("expectedSourceUrl")) throw fail("INVALID_SUBTITLE");
-                // Only a service-owned ticket can resolve to a private URL.
-                // Captured/bridge URLs still pass the public-source validator.
+                // Only a service-owned ticket can resolve to a private, receiver-pinned URL.
                 url = subtitleResolver.resolve(id, publicUrl(params.opt("expectedSourceUrl")), url, host);
             }
-            rpcAccepted("Player.AddSubtitle", object("playerid", player, "subtitle", url)); return object("accepted", true);
+            JSONObject subtitle = object("url", url, "mimeType", params.has("preparedId") ? "application/x-subrip" : "", "select", true);
+            String language = track.optString("language", "");
+            if (language.matches("[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*")) subtitle.put("language", language);
+            String name = label(track.optString("label", track.optString("name", "")), 120);
+            if (!name.isEmpty()) subtitle.put("label", name);
+            if (((String) subtitle.get("mimeType")).isEmpty()) subtitle.remove("mimeType");
+            call("player.addSubtitle", guarded(params, object("track", subtitle)), true);
+            return object("accepted", true);
         }
         if ("setSubtitle".equals(action)) {
-            Object index = params.opt("index"); JSONObject command = object("playerid", player);
-            if ("off".equals(index)) command.put("subtitle", "off");
-            else {
-                int selected = integer(index, 0, 1024); JSONArray tracks = subtitles(player).getJSONArray("tracks"); boolean found = false;
-                for (int i = 0; i < tracks.length(); i++) if (tracks.getJSONObject(i).getInt("index") == selected) found = true;
-                if (!found) throw fail("INVALID_SUBTITLE"); command.put("subtitle", selected).put("enable", true);
-            }
-            expectedSource(player, params); rpcAccepted("Player.SetSubtitle", command); return object("accepted", true);
+            Object index = params.opt("index");
+            if (!"off".equals(index)) integer(index, 0, 1024);
+            call("player.setSubtitle", guarded(params, object("index", index)), true);
+            return object("accepted", true);
         }
         if ("seek".equals(action)) {
             Object raw = params.opt("position"); if (!(raw instanceof Number)) throw fail("INVALID_INPUT"); double value = ((Number) raw).doubleValue();
             if (Double.isNaN(value) || Double.isInfinite(value) || value < 0 || value > 86399) throw fail("INVALID_INPUT");
-            JSONObject current = playback(player); if (!current.getBoolean("canSeek")) throw fail("CANNOT_SEEK");
-            int target = (int) Math.floor(Math.min(value, current.getInt("durationSeconds") > 0 ? current.getInt("durationSeconds") : value));
-            expectedSource(player, params); rpc("Player.Seek", object("playerid", player, "value", object("time", object("hours", target / 3600, "minutes", target % 3600 / 60, "seconds", target % 60, "milliseconds", 0))), true);
-        } else if ("pause".equals(action) || "resume".equals(action)) {
-            expectedSource(player, params); rpc("Player.PlayPause", object("playerid", player, "play", "resume".equals(action)), true);
-        } else if ("stop".equals(action)) {
-            expectedSource(player, params); rpcAccepted("Player.Stop", object("playerid", player));
-        } else throw fail("INVALID_INPUT");
-        return object("accepted", true);
+            call("player.seek", guarded(params, object("position", value)), true);
+            return object("accepted", true);
+        }
+        if ("pause".equals(action) || "resume".equals(action) || "stop".equals(action)) {
+            call("player." + action, guarded(params, new JSONObject()), true);
+            return object("accepted", true);
+        }
+        if ("scrub".equals(action)) {
+            if (!(params.opt("active") instanceof Boolean)) throw fail("INVALID_INPUT");
+            JSONObject command = object("active", params.getBoolean("active"));
+            if (params.getBoolean("active")) {
+                Object position = params.opt("positionSeconds");
+                if (!(position instanceof Number) || ((Number) position).doubleValue() < 0 || ((Number) position).doubleValue() > 86399) throw fail("INVALID_INPUT");
+                command.put("positionSeconds", ((Number) position).doubleValue());
+                if (params.opt("durationSeconds") instanceof Number) command.put("durationSeconds", Math.max(0, Math.min(86399, ((Number) params.opt("durationSeconds")).doubleValue())));
+                Object image = params.opt("image");
+                if (image instanceof String && ((String) image).startsWith("data:image/jpeg;base64,") && ((String) image).length() <= 200_000) command.put("image", image);
+            }
+            return call("player.scrub", command, false);
+        }
+        if ("display".equals(action)) {
+            JSONObject changes = new JSONObject();
+            for (String key : new String[] {"brightness", "contrast", "gamma", "subtitleScale"}) if (params.opt(key) instanceof Number) changes.put(key, params.get(key));
+            if ("box".equals(params.opt("subtitleStyle")) || "outline".equals(params.opt("subtitleStyle"))) changes.put("subtitleStyle", params.get("subtitleStyle"));
+            if (Boolean.TRUE.equals(params.opt("reset"))) changes.put("reset", true);
+            return changes.length() == 0 ? call("display.get", new JSONObject(), false) : call("display.set", changes, true);
+        }
+        if ("libraryPull".equals(action)) {
+            return call("library.pull", object("since", integer(params.opt("since"), 0, Integer.MAX_VALUE), "limit", 200), false);
+        }
+        if ("libraryPush".equals(action)) {
+            JSONArray records = params.optJSONArray("records"); if (records == null || records.length() > 200) throw fail("INVALID_INPUT");
+            return call("library.push", object("records", records), true);
+        }
+        throw fail("INVALID_INPUT");
     }
 
     public void close() {
         closed = true; closeLuma(); DatagramSocket udp = discovering; if (udp != null) udp.close();
         HttpURLConnection http = activeHttp; if (http != null) http.disconnect(); deadlines.shutdownNow();
-        username = password = null;
+        token = null;
     }
 }

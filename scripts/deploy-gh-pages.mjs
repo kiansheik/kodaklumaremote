@@ -9,7 +9,7 @@ import { MAX_MANIFEST_BYTES, RELEASE_REPOSITORY } from '../site/update-manifest.
 
 const execFile = promisify(execFileCallback);
 const root = fileURLToPath(new URL('../', import.meta.url));
-const files = ['.nojekyll', 'index.html', 'styles.css', 'app.js', 'update-manifest.js', 'projector.svg', 'update.json'];
+const files = ['.nojekyll', 'index.html', 'styles.css', 'app.js', 'update-manifest.js', 'projector.svg', 'update.json', 'receiver-update.json'];
 class DeploymentError extends Error {}
 
 export function repositoryOrigin(value) {
@@ -59,11 +59,21 @@ export async function deployGhPages({ sourceDirectory = root, tag, run = execFil
   if (Buffer.byteLength(downloaded.stdout, 'utf8') > MAX_MANIFEST_BYTES) throw new DeploymentError('The release manifest exceeds 16 KiB.');
   let manifest;
   try { manifest = JSON.parse(downloaded.stdout); } catch { throw new DeploymentError('The release manifest is invalid JSON.'); }
+  // Releases from 0.4.9 on also carry the LUMA Receiver feed; older ones do not.
+  const receiverAssets = release.assets?.filter(asset => asset.name === 'receiver-update.json') ?? [];
+  let receiverManifest;
+  if (receiverAssets.length > 1) throw new DeploymentError('The release has more than one receiver-update.json.');
+  if (receiverAssets.length === 1) {
+    const asset = receiverAssets[0];
+    if (!Number.isSafeInteger(asset.id) || asset.id < 1 || !Number.isInteger(asset.size) || asset.size < 1 || asset.size > MAX_MANIFEST_BYTES || asset.state !== 'uploaded') throw new DeploymentError('The release receiver-update.json must be uploaded and at most 16 KiB.');
+    const receiverDownload = await tool('gh', ['api', '-H', 'Accept: application/octet-stream', `repos/${RELEASE_REPOSITORY}/releases/assets/${asset.id}`], 'Could not download the receiver manifest.', { ...options, maxBuffer: MAX_MANIFEST_BYTES });
+    try { receiverManifest = JSON.parse(receiverDownload.stdout); } catch { throw new DeploymentError('The receiver manifest is invalid JSON.'); }
+  }
   const temporary = await mkdtemp(path.join(os.tmpdir(), 'luma-gh-pages-'));
   try {
     const output = path.join(temporary, 'site'), checkout = path.join(temporary, 'checkout');
     let built;
-    try { built = await buildPages({ manifest, release, out: output }); }
+    try { built = await buildPages({ manifest, receiverManifest, release, out: output }); }
     catch { throw new DeploymentError('The release manifest and published APK must match before deploying.'); }
     const git = (args, message = 'The temporary Git checkout could not be prepared.') => tool('git', ['-C', checkout, ...args], message);
     await tool('git', ['init', '--initial-branch=gh-pages', checkout], 'Could not create the temporary Git checkout.');
@@ -78,10 +88,11 @@ export async function deployGhPages({ sourceDirectory = root, tag, run = execFil
       reviewedTree((await git(['ls-tree', '-r', '-z', '--full-tree', 'FETCH_HEAD'])).stdout);
       await git(['checkout', '-B', 'gh-pages', 'FETCH_HEAD']);
     }
-    for (const file of files) await copyFile(path.join(output, file), path.join(checkout, file));
+    const published = files.filter(file => file !== 'receiver-update.json' || receiverManifest !== undefined);
+    for (const file of published) await copyFile(path.join(output, file), path.join(checkout, file));
     const changed = (await git(['status', '--porcelain', '--untracked-files=all'])).stdout.trim() !== '';
     if (changed) {
-      await git(['add', '--', ...files]);
+      await git(['add', '--', ...published]);
       const tree = (await git(['write-tree'])).stdout.trim();
       reviewedTree((await git(['ls-tree', '-r', '-z', '--full-tree', tree])).stdout);
       await git(['commit', '-m', `Deploy Luma Remote ${built.versionName}`], 'Could not create the deployment commit.');

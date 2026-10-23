@@ -1,0 +1,60 @@
+apply plugin: 'com.android.application'
+
+def media3 = '1.11.1'
+
+android {
+    namespace 'dev.framextv.lumareceiver'
+    compileSdk 36
+    buildToolsVersion '36.0.0'
+    defaultConfig {
+        applicationId 'dev.framextv.lumareceiver'
+        // The Kodak LUMA runs Android 9 (API 28) with a 32-bit armeabi-v7a
+        // userspace. Keep the APK free of native code so any ABI installs it.
+        minSdk 23
+        targetSdk 35
+        versionCode 7
+        versionName '0.2.0'
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    signingConfigs {
+        // Same production identity as the phone app (see ../.luma-release.json).
+        // Every installed receiver build, including dev deploys, must share it
+        // or Android refuses the in-place update.
+        release {
+            def signingPath = System.getenv('LUMA_KEYSTORE_PATH')
+            if (signingPath) {
+                storeFile file(signingPath)
+                storePassword System.getenv('LUMA_KEYSTORE_PASSWORD')
+                keyAlias System.getenv('LUMA_KEY_ALIAS')
+                keyPassword System.getenv('LUMA_KEY_PASSWORD')
+            }
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            if (System.getenv('LUMA_KEYSTORE_PATH')) signingConfig signingConfigs.release
+        }
+    }
+    lint {
+        // Media3 marks its data-source/media-source factories @UnstableApi; we
+        // pin the exact version above instead of annotating every call site.
+        disable 'UnsafeOptInUsageError'
+    }
+    testOptions { unitTests.returnDefaultValues = true }
+}
+
+dependencies {
+    implementation "androidx.media3:media3-exoplayer:$media3"
+    implementation "androidx.media3:media3-exoplayer-hls:$media3"
+    implementation "androidx.media3:media3-exoplayer-dash:$media3"
+    implementation "androidx.media3:media3-ui:$media3"
+    implementation "androidx.media3:media3-effect:$media3"
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.json:json:20240303'
+}

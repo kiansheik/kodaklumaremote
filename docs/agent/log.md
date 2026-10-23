@@ -1,5 +1,16 @@
 # Work log
 
+- 2026-10-23 Android fixtures → LUMA Receiver: replaced every Kodi JSON-RPC
+  fixture in the backend/service/subtitles/multi-receiver runners with LUMA
+  Receiver API fixtures (pairing, Bearer auth, guard-applying writes, receipt
+  failure injection, Library pull/push; service fixture on default port 4191 so
+  the saved-pairing restore path is real). Migrated Settings/Signing/LiveControls
+  instrumentation to the pairing token. Emulator: backend 14, service 18,
+  settings 6, subtitles 9, multi-receiver 5 all pass. Fixed `ConnectionService`
+  so failed `receiver.status` reads are observed again. Host idle sleep on
+  battery froze long runs; `caffeinate -i -u` was needed.
+  [Handoff](session-handoffs/2026-10-23-android-receiver-fixture-migration.md).
+
 - 2026-10-22 one-command release staging: the release target now automatically
   stages bounded allowlisted new source, test, documentation and release-note
   text files. It leaves unrelated files such as `headers.txt` untouched and
@@ -946,7 +957,17 @@
   the 8,426-byte add-on ZIP is
   `a4aa9fe6513395520d8073c13177e5d44946bd7cd8c17e80540742bc71950b8e`.
   Kodi lacks atomic compare-and-open, so a second controller can still switch in
-  the narrow final-read/write gap. Neither artifact was published or installed,
+  the narrow final-read/write gap. Commit `b59e15b` was pushed and public release
+  `v0.4.8` exposes the matching three assets; the Pages feed was read back as
+  0.4.8/code18 with the exact APK hash. Neither artifact was physically installed,
   and no physical Kodi/two-phone validation is claimed. [Metadata](kodi-metadata-sync.md),
   [preview profile](scrub-preview-profile.md),
   [handoff](session-handoffs/2026-10-22-cross-phone-metadata-and-scrub-previews.md).
+
+- 2026-10-23 Kodi replaced by LUMA Receiver in the phone app, tooling and release
+  pipeline (unreleased 0.4.9/receiver 0.2.0). Receiver hello world, first
+  install via TV Bro, ExoPlayer playback, captions, dev-channel self-update and
+  on-device history were verified on the physical projector; picture effects
+  showed no visible change. `npm run check` Node241/browser157 and emulator
+  groups pass. [Receiver](luma-receiver.md),
+  [handoff](session-handoffs/2026-10-23-kodi-to-luma-receiver.md).

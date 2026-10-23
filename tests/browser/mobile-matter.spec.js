@@ -43,7 +43,7 @@ async function openApp(page, { paired = false, connected = paired, msx = false, 
     function result({ method, params }) {
       if (method === 'app.ready') return {
         selectedTarget: 'philips', connection: { connected: true, configured: true, host: '192.168.1.50', name: 'LUMA fixture' },
-        settings: { hasReceiver: true, hasKodi: true, autoConnect: true }, volume: { current: 6, max: 30 },
+        settings: { hasReceiver: true, hasPairing: true, autoConnect: true }, volume: { current: 6, max: 30 },
         playback: { active: true, sourceUrl: lumaMedia.url, playing: true, positionSeconds: 20, durationSeconds: 700, canSeek: true },
         remote: { media: lumaMedia, tracks: [], catalog: [], selectedIndex: null, subtitlesEnabled: false }, receivers: { philips: tv },
       };

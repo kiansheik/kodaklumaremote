@@ -4,31 +4,27 @@ import { readFile } from 'node:fs/promises';
 import { basename, dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
-import { validateUpdateManifest } from '../site/update-manifest.js';
-import { KODI_ADDON_FILES, KODI_ADDON_ID, validatePreparedKodiAddonAsset } from './package-kodi-addon.mjs';
+import { receiverAssetName, validateReceiverManifest, validateUpdateManifest } from '../site/update-manifest.js';
 
 const run = promisify(execFile);
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-export const KODI_ADDON_GIT_PATHS = Object.freeze(KODI_ADDON_FILES.map(file => `kodi-addon/${KODI_ADDON_ID}/${file}`));
-
-export function releaseAssetPaths(folder, metadata, kodiAddon) {
+export function releaseAssetPaths(folder, metadata, receiver) {
   const directory = resolve(folder);
   const apk = resolve(directory, `luma-remote-${metadata.versionName}.apk`);
-  if (!kodiAddon || dirname(kodiAddon.path) !== directory || basename(kodiAddon.path) !== kodiAddon.assetName) {
-    throw new Error('The prepared Kodi add-on asset is outside the release directory.');
-  }
-  return [apk, resolve(directory, 'update.json'), kodiAddon.path];
+  if (!receiver || !/^\d+\.\d+\.\d+$/u.test(receiver.versionName)) throw new Error('The prepared LUMA Receiver manifest is missing.');
+  return [apk, resolve(directory, 'update.json'), resolve(directory, receiverAssetName(receiver.versionName)), resolve(directory, 'receiver-update.json')];
 }
 
-export async function verifyCommittedKodiAddon(runCommand = run, cwd = root) {
-  try { await runCommand('git', ['ls-files', '--error-unmatch', '--', ...KODI_ADDON_GIT_PATHS], { cwd }); }
-  catch { throw new Error('Every packaged Kodi add-on source file must be committed before publication.'); }
-  try { await runCommand('git', ['diff', '--quiet', 'HEAD', '--', ...KODI_ADDON_GIT_PATHS], { cwd }); }
-  catch { throw new Error('The packaged Kodi add-on source must exactly match HEAD before publication.'); }
+async function verifySignedApk(apk, manifest, certificate, sdk) {
+  const bytes = await readFile(apk);
+  if (bytes.length !== manifest.sizeBytes || createHash('sha256').update(bytes).digest('hex') !== manifest.sha256) throw new Error(`${basename(apk)} does not match its update manifest.`);
+  const { stdout: signature } = await run(resolve(sdk, 'build-tools/36.0.0/apksigner'), ['verify', '--print-certs', apk]);
+  const signers = [...signature.matchAll(/^Signer #\d+ certificate SHA-256 digest: ([a-f0-9]+)$/gmu)].map(match => match[1]);
+  if (signers.length !== 1 || signers[0] !== certificate || !/^[a-f0-9]{64}$/u.test(certificate)) throw new Error(`${basename(apk)} is not signed with the configured release certificate.`);
 }
 
 export function releaseCreateArguments({ tag, assets, head, versionName, notesFile }) {
-  if (!Array.isArray(assets) || assets.length !== 3) throw new Error('A release must upload the APK, update manifest, and Kodi add-on.');
+  if (!Array.isArray(assets) || assets.length !== 4) throw new Error('A release must upload the phone APK, its manifest, the LUMA Receiver APK and its manifest.');
   return ['release', 'create', tag, ...assets, '--repo', 'kiansheik/kodaklumaremote',
     '--target', head, '--title', `LUMA Remote ${versionName}`, '--notes-file', notesFile, '--draft'];
 }
@@ -38,25 +34,23 @@ export async function publishAndroidRelease(input = process.argv.slice(2)) {
   const folder = resolve(input[1]);
   const metadata = validateUpdateManifest(JSON.parse(await readFile(resolve(folder, 'update.json'), 'utf8')));
   const tag = `v${metadata.versionName}`;
-  const kodiAddon = await validatePreparedKodiAddonAsset(folder);
-  const assets = releaseAssetPaths(folder, metadata, kodiAddon);
-  const apk = assets[0], bytes = await readFile(apk);
-  if (bytes.length !== metadata.sizeBytes || createHash('sha256').update(bytes).digest('hex') !== metadata.sha256) throw new Error('The prepared APK does not match its update manifest.');
+  const receiver = validateReceiverManifest(JSON.parse(await readFile(resolve(folder, 'receiver-update.json'), 'utf8')), tag);
+  const assets = releaseAssetPaths(folder, metadata, receiver);
   const sdk = process.env.ANDROID_HOME || process.env.ANDROID_SDK_ROOT;
-  if (!sdk) throw new Error('Set ANDROID_HOME to verify the signed APK before publication.');
+  if (!sdk) throw new Error('Set ANDROID_HOME to verify the signed APKs before publication.');
   const certificate = (await readFile(resolve(root, 'android/release-certificate.sha256'), 'utf8')).trim();
-  const { stdout: signature } = await run(resolve(sdk, 'build-tools/36.0.0/apksigner'), ['verify', '--print-certs', apk]);
-  const signers = [...signature.matchAll(/^Signer #\d+ certificate SHA-256 digest: ([a-f0-9]+)$/gmu)].map(match => match[1]);
-  if (signers.length !== 1 || signers[0] !== certificate || !/^[a-f0-9]{64}$/u.test(certificate)) throw new Error('The APK is not signed with the configured release certificate.');
+  await verifySignedApk(assets[0], metadata, certificate, sdk);
+  await verifySignedApk(assets[2], receiver, certificate, sdk);
   const invoke = (args, options = {}) => run('gh', args, { cwd: root, maxBuffer: 1024 * 1024, ...options });
   const { stdout: status } = await run('git', ['status', '--porcelain', '--untracked-files=no'], { cwd: root });
   if (status.trim()) throw new Error('Commit the release source before publishing.');
-  await verifyCommittedKodiAddon();
   const { stdout: head } = await run('git', ['rev-parse', 'HEAD'], { cwd: root });
   const { stdout: remote } = await invoke(['api', 'repos/kiansheik/kodaklumaremote/commits/main', '--jq', '.sha']);
   if (head.trim() !== remote.trim()) throw new Error('Push this exact committed source to main before publishing.');
   const { stdout: manifestCommit } = await run('git', ['show', 'HEAD:android/app/build.gradle'], { cwd: root });
   if (!manifestCommit.includes(`versionName '${metadata.versionName}'`) || !new RegExp(`versionCode\\s+${metadata.versionCode}\\b`, 'u').test(manifestCommit)) throw new Error('The release version does not match committed Android source.');
+  const { stdout: receiverCommit } = await run('git', ['show', 'HEAD:android-receiver/app/build.gradle'], { cwd: root });
+  if (!receiverCommit.includes(`versionName '${receiver.versionName}'`) || !new RegExp(`versionCode\\s+${receiver.versionCode}\\b`, 'u').test(receiverCommit)) throw new Error('The LUMA Receiver version does not match committed receiver source.');
   await invoke(releaseCreateArguments({ tag, assets, head: head.trim(), versionName: metadata.versionName,
     notesFile: resolve(folder, 'notes.txt') }));
   // Publish only after all uploads finish, so the Pages event cannot race them.

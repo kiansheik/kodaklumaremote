@@ -49,7 +49,7 @@ async function instrument(mode) {
   assert.equal(field('failures'), '0', 'Migration instrumentation did not pass.');
   assert.equal(field('passed'), '1', 'Migration instrumentation did not complete.');
   assert.match(stdout, /^INSTRUMENTATION_CODE: -1\s*$/mu, 'Migration instrumentation was not successful.');
-  for (const name of ['hasReceiver', 'hasKodi', 'decrypted', 'markerPresent', 'fixtureChecked', 'fixtureMatched']) assert.equal(field(name), 'true', 'Saved migration fixture was not preserved.');
+  for (const name of ['hasReceiver', 'hasPairing', 'decrypted', 'markerPresent', 'fixtureChecked', 'fixtureMatched']) assert.equal(field(name), 'true', 'Saved migration fixture was not preserved.');
   const current = field('currentSignerSha256');
   assert.match(current || '', /^[a-f0-9]{64}$/u, 'Current signer proof missing.');
   if (mode === 'migration-check') assert.equal(current, expected, 'The expected production signer was not active.');

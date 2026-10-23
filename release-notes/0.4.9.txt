@@ -1,0 +1,13 @@
+LUMA Remote 0.4.9
+
+Replaces Kodi with LUMA Receiver, our own projector player. Install it once on the projector (open this release page in the projector's browser and download LUMA Receiver), then pair from the phone with the 6-digit code shown on the projector. Kodi logins and the Kodi metadata add-on are no longer used, and saved Kodi passwords are deleted from the phone on upgrade.
+
+LUMA Receiver plays HLS, DASH and MP4 directly on the projector's hardware video path, starts in the background when the projector boots and comes on screen as soon as you cast. Source checks for casting, Next episode and controls now happen on the projector in one step, so two phones can no longer replace each other's video between a check and an open.
+
+Captions use a new outlined style kept to the centre of the screen on a nearly transparent panel. Change their size from the phone's Subtitles sheet or with Up/Down on the projector remote; the size is saved on the projector for every phone.
+
+Scrubbing on the phone now shows the same position and preview frame on the projector at the same time.
+
+The projector keeps its own watch history, even when every phone is off. Phones sync Resume positions with it every minute while connected, so every phone in the house sees the same progress.
+
+LUMA Receiver updates itself from the release feed and asks before installing. Physical phone acceptance of pairing, casting, Library sync and synced scrubbing is still pending.

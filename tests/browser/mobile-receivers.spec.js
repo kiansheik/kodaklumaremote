@@ -58,7 +58,7 @@ async function openApp(page, { selectedTarget = 'luma', tvConnected = true, text
     const result = ({ method, params }) => {
       if (method === 'app.ready') return {
         selectedTarget, browserUrl: 'https://framextv.xyz/watch/284833/1/1', connection: { connected: true, configured: true, host: '192.168.1.50', name: 'Test LUMA' },
-        settings: { hasReceiver: true, hasKodi: true, autoConnect: true }, volume: { current: 6, max: 30 },
+        settings: { hasReceiver: true, hasPairing: true, autoConnect: true }, volume: { current: 6, max: 30 },
         playback: { active: true, sourceUrl: lumaMedia.url, playing: true, positionSeconds: 12, durationSeconds: 600, canSeek: true },
         remote: { media: lumaMedia, tracks: [{ index: 0, language: 'pt-BR', label: 'LUMA Portuguese' }], catalog: [], selectedIndex: 0, subtitlesEnabled: true }, receivers: { philips: tv },
       };
@@ -117,13 +117,15 @@ async function openApp(page, { selectedTarget = 'luma', tvConnected = true, text
       if (method === 'msx.seek') { if(!window.__seekNoEffect) tv.playback.positionSeconds = params.seconds; if(window.__disconnectAfterSeek)tv.connected=false; return tv; }
       if (method === 'msx.stop') { tv.playback.active = false; return tv; }
       if (method === 'msx.disconnect') { tv.connected = false; return tv; }
-      if (method === 'luma.launchKodi') return {accepted:true};
-      if (method === 'kodi.connect') return {ready:true};
-      if (method === 'kodi.open') {window.__kodiSource=params.media.url;return {accepted:true};}
-      if (method === 'kodi.seek') {window.__kodiPosition=params.position;return {accepted:true};}
-      if (method === 'kodi.pause') return { accepted: true };
+      if (method === 'luma.launchReceiver') return {accepted:true};
+      if (method === 'receiver.connect') return {ready:true};
+      if (method === 'receiver.open') {window.__lumaSource=params.media.url;return {accepted:true};}
+      if (method === 'receiver.seek') {window.__lumaPosition=params.position;return {accepted:true};}
+      if (method === 'receiver.pause') return { accepted: true };
+      if (method === 'receiver.scrub') return { accepted: true };
+      if (method === 'receiver.display') return { subtitleScale: 1 };
       if (method === 'luma.key') return { accepted: true };
-      if (method === 'kodi.status') return { active: true, sourceUrl: window.__kodiSource||lumaMedia.url, playing: !!window.__kodiSource, positionSeconds: window.__kodiPosition??12, durationSeconds: 600, canSeek: true };
+      if (method === 'receiver.status') return { active: true, sourceUrl: window.__lumaSource||lumaMedia.url, playing: !!window.__lumaSource, positionSeconds: window.__lumaPosition??12, durationSeconds: 600, canSeek: true };
       throw new Error(`Unexpected fixture request: ${method}`);
     };
     const respond = request => {
@@ -549,7 +551,7 @@ test('sample stays inside the connected Philips app flow and waits for its real 
   await page.locator('#play-toggle').click();
   await expect(page.locator('#play-toggle')).toHaveText('Resume');
   expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'msx.playPause').map(call => call.params))).toEqual([{ play: false, expectedSourceUrl: 'https://media.example.org/public-sample.mp4' }]);
-  expect(await page.evaluate(() => window.__calls.some(call => /^(kodi|luma)\./u.test(call.method)))).toBe(false);
+  expect(await page.evaluate(() => window.__calls.some(call => /^(receiver|luma)\./u.test(call.method)))).toBe(false);
 });
 
 test('sample is unavailable without a connected Philips receiver and failed autoplay is never called success', async ({ page }) => {
@@ -607,7 +609,7 @@ test('both receivers stay connected and switching isolates playback, subtitles a
   await expect(page.locator('#media-title')).toHaveText('LUMA episode');
   await expect(page.locator('#volume-level')).toHaveText('6 / 30');
   const calls = await page.evaluate(() => window.__calls);
-  expect(calls.filter(call => /disconnect|open|kodi\.|luma\./u.test(call.method))).toEqual([]);
+  expect(calls.filter(call => /disconnect|open|receiver\.|luma\./u.test(call.method))).toEqual([]);
   expect(calls.filter(call => call.method === 'msx.playPause').map(call => call.params)).toEqual([{ play: false, expectedSourceUrl: 'https://media.example.org/existing-tv.mp4' }]);
   expect(calls.filter(call => call.method === 'msx.volume').map(call => call.params)).toEqual([{ value: 41, expectedSourceUrl: 'https://media.example.org/existing-tv.mp4' }]);
 });
@@ -651,7 +653,7 @@ test('Philips capture binds its attempt, sends all language metadata and locks d
   expect(calls.find(call => call.method === 'msx.open').params).toEqual({ sourceToken: 'attempt-tv', source: tvMedia.url, mimeType: tvMedia.contentType, title: tvMedia.title, subtitles: tvMedia.tracks, preferredLanguage: 'pt-BR', autoSubtitles: false });
   expect(calls.find(call => call.method === 'app.handoffReady').params).toEqual({ target: 'philips', sourceToken: 'attempt-tv', resumeApplied:true });
   expect(calls.find(call => call.method === 'msx.subtitle').params).toEqual({ index: 0, enabled: true, expectedSourceUrl: tvMedia.url });
-  expect(calls.some(call => /^(kodi|luma)\./u.test(call.method))).toBe(false);
+  expect(calls.some(call => /^(receiver|luma)\./u.test(call.method))).toBe(false);
 });
 
 test('offline Library opens from Remote and Browse and shows exact episode progress without changing playback', async ({page}) => {
@@ -683,7 +685,7 @@ test('offline Library opens from Remote and Browse and shows exact episode progr
   await page.locator('#history-season').selectOption('2'); await page.locator('#history-episodes button').click();
   await expect(page.locator('#history-resume')).toHaveText('Play S2 E1');
   await expect(page.locator('#history-progress')).toHaveText('S2 E1 · Not watched yet');
-  expect(await page.evaluate(()=>window.__calls.some(call=>['app.chooseCatalog','msx.open','kodi.open'].includes(call.method)))).toBe(false);
+  expect(await page.evaluate(()=>window.__calls.some(call=>['app.chooseCatalog','msx.open','receiver.open'].includes(call.method)))).toBe(false);
   expect(await page.evaluate(()=>window.__tv.playback.source)).toBe('https://media.example.org/existing-tv.mp4');
   expect(network.every(url=>new URL(url).origin===origin)).toBe(true);
   await page.locator('#close-sheet').click(); await page.getByRole('tab',{name:'Browse',exact:true}).click(); await page.locator('#show-history').click();
@@ -698,7 +700,7 @@ test('Library Start over explicitly skips saved resume and sends one Philips Ope
   const calls=await page.evaluate(()=>window.__calls);
   expect(calls.find(call=>call.method==='app.chooseCatalog').params).toEqual({kind:'tv',id:'84',season:1,episode:2,resume:false});
   expect(calls.filter(call=>call.method==='msx.open')).toHaveLength(1);
-  expect(calls.some(call=>call.method==='msx.seek'||call.method==='kodi.open')).toBe(false);
+  expect(calls.some(call=>call.method==='msx.seek'||call.method==='receiver.open')).toBe(false);
 });
 
 test('Library next episode uses the known typed selection and the selected Kodak target', async ({page}) => {
@@ -710,7 +712,7 @@ test('Library next episode uses the known typed selection and the selected Kodak
   await expect(page.locator('#message')).toHaveText('Video is playing. Choose a language in Subtitles.');
   const calls=await page.evaluate(()=>window.__calls);
   expect(calls.find(call=>call.method==='app.chooseCatalog').params).toEqual({kind:'tv',id:'84',season:2,episode:1,resume:true});
-  expect(calls.filter(call=>call.method==='kodi.open')).toHaveLength(1);
+  expect(calls.filter(call=>call.method==='receiver.open')).toHaveLength(1);
   expect(calls.some(call=>call.method==='msx.open')).toBe(false);
 });
 
@@ -846,7 +848,7 @@ test('a late native bind restores the saved Philips target before the next captu
   await expect(page.locator('#message')).toHaveText('Ready on Philips TV. You can use the remote.');
   expect(await page.evaluate(() => window.__calls.some(call => call.method === 'app.selectTarget'))).toBe(false);
   expect(await page.evaluate(() => window.__calls.some(call => call.method === 'msx.open'))).toBe(true);
-  expect(await page.evaluate(() => window.__calls.some(call => /^(kodi|luma)\./u.test(call.method)))).toBe(false);
+  expect(await page.evaluate(() => window.__calls.some(call => /^(receiver|luma)\./u.test(call.method)))).toBe(false);
 });
 
 test('unknown MSX open outcome is observed before another open can be sent', async ({ page }) => {
@@ -904,6 +906,26 @@ test('native target restoration waits until an in-flight command updates its ori
   await expect(page.locator('#play-toggle')).toHaveText('Pause');
   await page.locator('#target-philips').click();
   await expect(page.locator('#play-toggle')).toHaveText('Resume');
+});
+
+test('Philips scrubbing and subtitles never mirror to or configure LUMA Receiver', async ({ page }) => {
+  await openApp(page, { selectedTarget: 'philips' });
+  const range = page.getByLabel('Playback position');
+  await expect(range).toBeEnabled();
+  await range.evaluate(element => { element.value = '120'; element.dispatchEvent(new Event('input', { bubbles: true })); });
+  await expect(page.locator('#scrub-preview')).toBeVisible();
+  await expect(page.locator('#scrub-preview-time')).toHaveText('2:00');
+  await range.evaluate(element => element.dispatchEvent(new Event('pointerup', { bubbles: true })));
+  await expect(page.locator('#scrub-preview')).toBeHidden();
+  await page.locator('#show-subtitles').click();
+  await expect(page.locator('#subtitle-size')).toBeHidden();
+  await page.locator('#close-sheet').click();
+  expect(await page.evaluate(() => window.__calls.filter(call => ['receiver.scrub', 'receiver.display'].includes(call.method)))).toEqual([]);
+  // The same gesture on LUMA does mirror, so the absence above is target-specific.
+  await page.locator('#target-luma').click();
+  await expect(page.locator('#target-luma')).toHaveAttribute('aria-pressed', 'true');
+  await range.evaluate(element => { element.value = '60'; element.dispatchEvent(new Event('input', { bubbles: true })); });
+  await expect.poll(() => page.evaluate(() => window.__calls.filter(call => call.method === 'receiver.scrub').map(call => call.params))).toEqual([{ active: true, positionSeconds: 60, durationSeconds: 600 }]);
 });
 
 test('Philips setup, approval and remote panels fit a narrow phone without scrolling', async ({ page }) => {

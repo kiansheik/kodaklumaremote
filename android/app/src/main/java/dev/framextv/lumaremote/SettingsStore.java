@@ -13,10 +13,12 @@ import javax.crypto.KeyGenerator;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.GCMParameterSpec;
 
-/** Saved receiver address plus app-private, Keystore-encrypted Kodi credentials. */
+/** Saved projector address plus the app-private, Keystore-encrypted LUMA Receiver pairing token. */
 public final class SettingsStore {
-    private static final String KEY_ALIAS = "luma.kodi.credentials.v1";
-    private static final String RECEIVER = "receiver", KODI = "kodi.encrypted.v1";
+    private static final String KEY_ALIAS = "luma.receiver.pairing.v1";
+    private static final String RECEIVER = "receiver", PAIRING = "receiverPairing.encrypted.v1";
+    // Kodi credentials saved by 0.4.8 and earlier; deleted on first use, never read.
+    private static final String LEGACY_KODI = "kodi.encrypted.v1", LEGACY_KODI_ALIAS = "luma.kodi.credentials.v1";
     private final SharedPreferences preferences;
 
     public static final class SettingsException extends Exception {
@@ -30,10 +32,19 @@ public final class SettingsStore {
 
     public SettingsStore(Context context) {
         preferences = context.getApplicationContext().getSharedPreferences("luma_settings", Context.MODE_PRIVATE);
+        forgetLegacyKodi();
+    }
+
+    private void forgetLegacyKodi() {
+        try {
+            if (preferences.contains(LEGACY_KODI)) preferences.edit().remove(LEGACY_KODI).commit();
+            KeyStore keys = KeyStore.getInstance("AndroidKeyStore"); keys.load(null);
+            if (keys.containsAlias(LEGACY_KODI_ALIAS)) keys.deleteEntry(LEGACY_KODI_ALIAS);
+        } catch (Exception ignored) { /* Best effort: the old secret is never read again. */ }
     }
 
     public synchronized JSONObject metadata() {
-        return object("hasReceiver", readReceiver() != null, "hasKodi", preferences.contains(KODI));
+        return object("hasReceiver", readReceiver() != null, "hasPairing", preferences.contains(PAIRING));
     }
 
     public synchronized JSONObject readReceiver() {
@@ -53,9 +64,9 @@ public final class SettingsStore {
         }
     }
 
-    public synchronized JSONObject readKodi() throws SettingsException {
+    public synchronized JSONObject readPairing() throws SettingsException {
         try {
-            String saved = preferences.getString(KODI, null);
+            String saved = preferences.getString(PAIRING, null);
             if (saved == null) return null;
             if (saved.length() > 16384) throw new Exception();
             JSONObject envelope = new JSONObject(saved);
@@ -65,33 +76,32 @@ public final class SettingsStore {
             if (iv.length != 12 || ciphertext.length > 8192) throw new Exception();
             Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
             cipher.init(Cipher.DECRYPT_MODE, key(false), new GCMParameterSpec(128, iv));
-            JSONObject credentials = new JSONObject(new String(cipher.doFinal(ciphertext), StandardCharsets.UTF_8));
-            validateKodi(credentials);
-            return object("username", credentials.getString("username"), "password", credentials.getString("password"), "port", credentials.getInt("port"));
+            String token = new String(cipher.doFinal(ciphertext), StandardCharsets.UTF_8);
+            if (!validToken(token)) throw new Exception();
+            return object("token", token);
         } catch (Exception ignored) { throw new SettingsException("STORAGE_UNAVAILABLE"); }
     }
 
-    public synchronized void saveKodi(JSONObject credentials) throws SettingsException {
-        validateKodi(credentials);
+    public synchronized void savePairing(String token) throws SettingsException {
+        if (!validToken(token)) throw new SettingsException("INVALID_INPUT");
         try {
-            JSONObject bounded = object("username", credentials.getString("username"), "password", credentials.getString("password"), "port", credentials.getInt("port"));
             Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
             cipher.init(Cipher.ENCRYPT_MODE, key(true));
-            byte[] ciphertext = cipher.doFinal(bounded.toString().getBytes(StandardCharsets.UTF_8));
+            byte[] ciphertext = cipher.doFinal(token.getBytes(StandardCharsets.UTF_8));
             JSONObject envelope = object("version", 1, "iv", Base64.encodeToString(cipher.getIV(), Base64.NO_WRAP),
                 "data", Base64.encodeToString(ciphertext, Base64.NO_WRAP));
-            if (!preferences.edit().putString(KODI, envelope.toString()).commit()) throw new Exception();
+            if (!preferences.edit().putString(PAIRING, envelope.toString()).commit()) throw new Exception();
         } catch (Exception ignored) { throw new SettingsException("STORAGE_UNAVAILABLE"); }
     }
 
     public synchronized void clear(String scope) throws SettingsException {
-        if (scope == null || !scope.equals("all") && !scope.equals("kodi") && !scope.equals("receiver")) throw new SettingsException("INVALID_INPUT");
+        if (scope == null || !scope.equals("all") && !scope.equals("pairing") && !scope.equals("receiver")) throw new SettingsException("INVALID_INPUT");
         try {
             SharedPreferences.Editor edit = preferences.edit();
             if (scope.equals("all") || scope.equals("receiver")) edit.remove(RECEIVER);
-            if (scope.equals("all") || scope.equals("kodi")) edit.remove(KODI);
+            if (scope.equals("all") || scope.equals("pairing")) edit.remove(PAIRING);
             if (!edit.commit()) throw new Exception();
-            if (scope.equals("all") || scope.equals("kodi")) {
+            if (scope.equals("all") || scope.equals("pairing")) {
                 KeyStore keys = KeyStore.getInstance("AndroidKeyStore"); keys.load(null);
                 if (keys.containsAlias(KEY_ALIAS)) keys.deleteEntry(KEY_ALIAS);
             }
@@ -109,17 +119,7 @@ public final class SettingsStore {
         return generator.generateKey();
     }
 
-    private static void validateKodi(JSONObject value) throws SettingsException {
-        try {
-            Object rawUser = value.get("username"), rawPassword = value.get("password"), rawPort = value.get("port");
-            if (!(rawUser instanceof String) || !(rawPassword instanceof String) || !(rawPort instanceof Number)) throw new Exception();
-            String user = (String) rawUser, password = (String) rawPassword;
-            double port = ((Number) rawPort).doubleValue();
-            if (user.isEmpty() || user.length() > 256 || user.matches("(?s).*[:\\r\\n\\x00].*")
-                || password.isEmpty() || password.length() > 256 || password.matches("(?s).*[\\r\\n\\x00].*")
-                || Double.isNaN(port) || Double.isInfinite(port) || port != Math.floor(port) || port < 1 || port > 65535) throw new Exception();
-        } catch (Exception ignored) { throw new SettingsException("INVALID_INPUT"); }
-    }
+    private static boolean validToken(String token) { return token != null && token.matches("[A-Za-z0-9_-]{20,200}"); }
     private static boolean privateHost(String host) {
         if (host == null || !host.matches("(?:0|[1-9][0-9]{0,2})(?:\\.(?:0|[1-9][0-9]{0,2})){3}")) return false;
         String[] parts = host.split("\\."); int[] bytes = new int[4];

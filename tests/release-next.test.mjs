@@ -27,42 +27,37 @@ test('agent-only release records do not create another APK version', () => {
   assert.equal(releaseRelevant('docs/releasing.md'), false);
   assert.equal(releaseRelevant('release-notes/0.4.7.txt'), false);
   for (const file of ['src/mobile/app.js','android/app/build.gradle','Makefile',
-    'kodi-addon/script.lumaremote.metadata/addon.xml']) assert.equal(releaseRelevant(file), true);
+    'android-receiver/app/build.gradle']) assert.equal(releaseRelevant(file), true);
 });
 
 test('new reviewed text files auto-stage while unrelated and sensitive files do not', () => {
   for (const file of [
     'docs/agent/session-handoffs/release.md',
     'scripts/release-config.mjs',
+    'scripts/receiver-dev.mjs',
     'tests/release-next.test.mjs',
     'release-notes/0.4.7.txt',
     'android/app/src/main/java/example/Feature.java',
-    'tests/fixtures/kodi_addon_fixture.py',
-    'kodi-addon/README.md',
-    'kodi-addon/script.lumaremote.metadata/addon.xml',
-    'kodi-addon/script.lumaremote.metadata/default.py',
-    'kodi-addon/script.lumaremote.metadata/resources/__init__.py',
-    'kodi-addon/script.lumaremote.metadata/resources/lib/__init__.py',
-    'kodi-addon/script.lumaremote.metadata/resources/lib/luma_metadata.py',
+    'android-receiver/.gitignore',
+    'android-receiver/app/build.gradle',
+    'android-receiver/README.md',
+    'android-receiver/app/proguard-rules.pro',
+    'android-receiver/app/src/main/AndroidManifest.xml',
+    'android-receiver/app/src/main/java/dev/framextv/lumareceiver/MainActivity.java',
+    'android-receiver/app/src/main/res/layout/main.xml',
   ]) assert.equal(untrackedReleaseDisposition(file), 'stage');
   for (const file of [
-    'android-receiver/app/src/main/java/dev/framextv/lumareceiver/MainActivity.java',
-    'docs/agent/luma-web-receiver.md',
-    'docs/agent/session-handoffs/2026-10-22-luma-web-receiver-assessment.md',
     'headers.txt',
-    'scripts/receiver-dev.mjs',
+    'kodi-addon/script.lumaremote.metadata/addon.xml',
   ]) assert.equal(untrackedReleaseDisposition(file), 'ignore');
   for (const file of [
     '.env',
     'docs/private-credentials.md',
     'android/app/release.keystore',
+    'android-receiver/release.keystore',
+    'android-receiver/app/src/main/res/drawable/banner.png',
     'android/local.properties',
     'scripts/generated.bin',
-    'kodi-addon/script.lumaremote.metadata/package.zip',
-    'kodi-addon/script.lumaremote.metadata/resources/lib/cache.pyc',
-    'kodi-addon/script.lumaremote.metadata/resources/lib/unreviewed.py',
-    'kodi-addon/another-addon/addon.xml',
-    'kodi-addon/private-key.pem',
     '../outside.mjs',
   ]) assert.equal(untrackedReleaseDisposition(file), 'reject');
 });

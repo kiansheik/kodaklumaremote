@@ -41,6 +41,7 @@ public final class ServiceInstrumentation {
     private static final String FIRST = "https://media.example/first.m3u8";
     private static final String OTHER = "https://media.example/other.m3u8";
     private static final String NEXT = "https://media.example/next.m3u8";
+    private static final String TOKEN = "fixture_receiver_token_0123456789", WRONG_TOKEN = "fixture_revoked_token_0123456789", CODE = "123456";
     private final Instrumentation runner;
     private final Bundle args;
     private final Context context;
@@ -114,7 +115,7 @@ public final class ServiceInstrumentation {
         require(pending.failure.get() == null, "Service request failed: " + pending.failure.get()); return pending.result.get();
     }
     private JSONObject fixture(String query) throws Exception {
-        HttpURLConnection connection = (HttpURLConnection) new URL("http", args.getString("targetHost"), Integer.parseInt(args.getString("kodiPort")), "/fixture" + query).openConnection();
+        HttpURLConnection connection = (HttpURLConnection) new URL("http", args.getString("targetHost"), Integer.parseInt(args.getString("receiverPort")), "/fixture" + query).openConnection();
         connection.setConnectTimeout(2000); connection.setReadTimeout(2000); connection.setInstanceFollowRedirects(false);
         try (InputStream input = connection.getInputStream()) {
             ByteArrayOutputStream output = new ByteArrayOutputStream(); byte[] chunk = new byte[1024]; int count;
@@ -218,7 +219,7 @@ public final class ServiceInstrumentation {
     private void waitPlaying(boolean playing) throws Exception {
         long end = SystemClock.elapsedRealtime() + 4000;
         while (SystemClock.elapsedRealtime() < end) {
-            JSONObject playback = call("kodi.status");
+            JSONObject playback = call("receiver.status");
             if (playback.getBoolean("active") && playback.getBoolean("playing") == playing) return;
             Thread.sleep(100);
         }
@@ -312,27 +313,37 @@ public final class ServiceInstrumentation {
             notificationAction(waitNotification(true), "disconnect");
             SettingsStore settings = new SettingsStore(context);
             require(args.getString("targetHost").equals(settings.readReceiver().getString("host")), "Verified projector was not cached");
-            call("kodi.configure", "username", "fixture", "password", "wrong-fixture", "port", Integer.parseInt(args.getString("kodiPort")));
-            require(settings.readKodi() == null, "Unauthenticated credentials were persisted");
-            PendingCall denied = submit("kodi.connect");
-            require(denied.ready.await(8, TimeUnit.SECONDS) && "KODI_AUTH".equals(denied.failure.get()), "Wrong credentials did not produce a fixed authentication failure");
-            require(!service.snapshot().getJSONObject("connection").getBoolean("configured"), "Rejected Kodi credentials remained configured");
-            require(settings.readKodi() == null, "Rejected credentials were persisted");
-            call("kodi.configure", "username", "fixture", "password", "fixture", "port", Integer.parseInt(args.getString("kodiPort")));
-            require(settings.readKodi() == null, "Candidate credentials were saved before authentication");
-            call("kodi.connect");
-            require("fixture".equals(settings.readKodi().getString("password")), "Authenticated credentials were not saved");
-            call("kodi.configure", "username", "fixture", "password", "wrong-fixture", "port", Integer.parseInt(args.getString("kodiPort")));
-            PendingCall replacementDenied = submit("kodi.connect");
-            require(replacementDenied.ready.await(8, TimeUnit.SECONDS) && "KODI_AUTH".equals(replacementDenied.failure.get()), "Replacement credentials were not authenticated");
-            require("fixture".equals(settings.readKodi().getString("password")) && !service.snapshot().getJSONObject("connection").getBoolean("configured"), "Rejected replacement changed saved credentials or remained configured");
-            call("kodi.configure", "username", "fixture", "password", "fixture", "port", Integer.parseInt(args.getString("kodiPort")));
-            call("kodi.connect");
+            // The fixture serves the shipped default port, so the saved-pairing restore path below is real.
+            int receiverPort = Integer.parseInt(args.getString("receiverPort"));
+            require(receiverPort == 4191, "The service fixture must use LUMA Receiver's default port");
+            PendingCall unpaired = submit("receiver.connect");
+            require(unpaired.ready.await(8, TimeUnit.SECONDS) && "RECEIVER_CONFIG".equals(unpaired.failure.get()), "An unpaired phone did not report missing pairing");
+            call("receiver.configure", "token", WRONG_TOKEN, "port", receiverPort);
+            require(settings.readPairing() == null, "A directly configured token was persisted");
+            PendingCall denied = submit("receiver.connect");
+            require(denied.ready.await(8, TimeUnit.SECONDS) && "RECEIVER_AUTH".equals(denied.failure.get()), "A revoked token did not produce a fixed authentication failure");
+            require(!service.snapshot().getJSONObject("connection").getBoolean("configured"), "A rejected receiver token remained configured");
+            require(settings.readPairing() == null && !settings.metadata().getBoolean("hasPairing"), "A rejected token was persisted");
+            String pairingId = call("receiver.pairBegin", "port", receiverPort).getString("pairingId");
+            PendingCall wrongCode = submit("receiver.pairComplete", "pairingId", pairingId, "code", "000000");
+            require(wrongCode.ready.await(8, TimeUnit.SECONDS) && "PAIRING_CODE_WRONG".equals(wrongCode.failure.get()), "A wrong pairing code was not rejected");
+            require(settings.readPairing() == null && !service.snapshot().getJSONObject("connection").getBoolean("configured"), "A wrong pairing code saved or configured a token");
+            JSONObject pairedReply = call("receiver.pairComplete", "pairingId", pairingId, "code", CODE);
+            require(pairedReply.getBoolean("configured") && !pairedReply.has("token") && !service.snapshot().toString().contains(TOKEN), "The pairing token reached the WebView reply or service snapshot");
+            require(TOKEN.equals(settings.readPairing().getString("token")) && settings.metadata().getBoolean("hasPairing"), "The issued pairing token was not saved encrypted");
+            require(service.snapshot().getJSONObject("connection").getBoolean("configured"), "Pairing did not configure the live receiver connection");
+            call("receiver.connect");
+            call("receiver.configure", "token", WRONG_TOKEN, "port", receiverPort);
+            PendingCall replacementDenied = submit("receiver.connect");
+            require(replacementDenied.ready.await(8, TimeUnit.SECONDS) && "RECEIVER_AUTH".equals(replacementDenied.failure.get()), "A replacement token was not authenticated");
+            require(TOKEN.equals(settings.readPairing().getString("token")) && !service.snapshot().getJSONObject("connection").getBoolean("configured"), "A rejected replacement changed the saved pairing or remained configured");
+            call("receiver.configure", "token", TOKEN, "port", receiverPort);
+            call("receiver.connect");
             service.authorizeToken("prepared-handoff-fixture");
             require(!service.prepareHandoff(preparedMedia(), "obsolete-handoff-fixture") && !service.snapshot().has("remote"), "An obsolete token retained or exposed a pending subtitle catalog");
             require(service.prepareHandoff(preparedMedia(), "prepared-handoff-fixture") && !service.snapshot().has("remote"), "Preparation exposed controls before this source was submitted");
-            call("kodi.open", "media", preparedMedia(), "expectedSourceUrl", FIRST, "sourceToken", "prepared-handoff-fixture");
-            require(call("kodi.status").getBoolean("active"), "Fixture media not active");
+            call("receiver.open", "media", preparedMedia(), "expectedSourceUrl", FIRST, "sourceToken", "prepared-handoff-fixture");
+            require(call("receiver.status").getBoolean("active"), "Fixture media not active");
             JSONObject pendingRemote = service.snapshot().getJSONObject("remote");
             require(pendingRemote.getJSONArray("catalog").length() == 1 && pendingRemote.getJSONArray("tracks").length() == 0
                     && pendingRemote.getJSONArray("catalog").getJSONObject(0).isNull("index"), "The in-progress handoff lost its declared subtitle catalog");
@@ -389,7 +400,7 @@ public final class ServiceInstrumentation {
             activity = (MainActivity) replacement; quietBrowser(activity); bind();
             require(service == original && token.equals(service.getMediaSessionToken()), "Activity recreation replaced the service/session");
             JSONObject saved = service.snapshot(); JSONObject connection = saved.getJSONObject("connection");
-            require(connection.getBoolean("connected") && connection.getBoolean("configured"), "Connection or Kodi configuration was lost");
+            require(connection.getBoolean("connected") && connection.getBoolean("configured"), "Connection or receiver pairing was lost");
             require(FIRST.equals(saved.getJSONObject("remote").getJSONObject("media").getString("url")), "Remote handoff state was lost");
             unbind(); finishActivity(); bind();
             require(service == original && service.snapshot().getJSONObject("connection").getBoolean("connected"), "Closing the Activity ended the background connection");
@@ -410,11 +421,11 @@ public final class ServiceInstrumentation {
             service.authorizeToken("active-handoff-fixture");
             JSONObject restored = call("app.settings.autoConnect");
             require(restored.getBoolean("connected") && !restored.has("devices"), "Saved projector did not take the cached connection path");
-            require(service.snapshot().getJSONObject("connection").getBoolean("configured"), "Cached connection did not restore encrypted Kodi configuration");
-            call("kodi.connect");
+            require(service.snapshot().getJSONObject("connection").getBoolean("configured"), "Cached connection did not restore the encrypted receiver pairing");
+            call("receiver.connect");
             require(fixture("").getInt("connections") == 2 && fixture("").getInt("mutations") == beforeRestore, "Restoring saved setup replayed media or opened extra sockets");
             require(fixture("").getInt("volumeSets") == 2 && fixture("").getInt("volume") == 7, "A destroyed/disconnected service sent its old queued volume");
-            require(call("kodi.status").getBoolean("active") && !service.snapshot().has("remote"), "An active handoff job was replaced by playback adoption");
+            require(call("receiver.status").getBoolean("active") && !service.snapshot().has("remote"), "An active handoff job was replaced by playback adoption");
             ordinaryCard(waitNotification(true)); waitCard(42, false);
             java.util.List<String> catalogRequests = new java.util.concurrent.CopyOnWriteArrayList<>();
             AtomicReference<String> nextStream = new AtomicReference<>(NEXT);
@@ -448,14 +459,14 @@ public final class ServiceInstrumentation {
             });
             runner.waitForIdleSync();
             java.lang.reflect.Field handoffField = ConnectionService.class.getDeclaredField("handoffInProgress"); handoffField.setAccessible(true);
-            require(!handoffField.getBoolean(service), "A rejected handoffReady left passive Kodi adoption suppressed");
-            require(call("kodi.status").getBoolean("active"), "Continuing receiver playback was lost during reconnect");
+            require(!handoffField.getBoolean(service), "A rejected handoffReady left passive receiver adoption suppressed");
+            require(call("receiver.status").getBoolean("active"), "Continuing receiver playback was lost during reconnect");
             JSONObject adopted = waitCanonicalRemote(FIRST, "framextv:tv:42:1:3", "Shared series · S1 E3", "https://media.example/catalog-pt.vtt");
             JSONObject adoptedMedia = adopted.getJSONObject("media"), adoptedContent = adoptedMedia.getJSONObject("content");
             require(FIRST.equals(adoptedMedia.getString("url")) && "framextv:tv:42:1:3".equals(adoptedContent.getString("key"))
                     && "Shared series · S1 E3".equals(adoptedContent.getString("title")), "Fresh playback did not adopt the exact source and canonical episode identity");
             require(adopted.getJSONArray("tracks").length() == 0 && "https://media.example/catalog-pt.vtt".equals(
-                    adopted.getJSONArray("catalog").getJSONObject(0).getString("url")), "Hydrated catalog subtitle did not appear without claiming a Kodi track");
+                    adopted.getJSONArray("catalog").getJSONObject(0).getString("url")), "Hydrated catalog subtitle did not appear without claiming a receiver track");
             require(catalogRequests.equals(java.util.Arrays.asList(
                     "https://api.framextv.tech/api/details?id=42&type=tv",
                     "https://api.framextv.tech/api/subtitles?type=tv&id=42&season=1&episode=3"))
@@ -466,14 +477,38 @@ public final class ServiceInstrumentation {
             JSONObject historyAtAdoption = history.find("framextv:tv:42:1:3"), libraryAtAdoption = library.findProgress(adoptedContent);
             require(historyAtAdoption != null && historyAtAdoption.getDouble("positionSeconds") == 321
                     && libraryAtAdoption != null && libraryAtAdoption.getDouble("positionSeconds") == 321,
-                    "Canonical adoption did not persist the current Kodi position to history and library");
-            fixture("?position=444"); require(call("kodi.status").getBoolean("active"), "Subsequent canonical status update failed");
+                    "Canonical adoption did not persist the current receiver position to history and library");
+            fixture("?position=444"); require(call("receiver.status").getBoolean("active"), "Subsequent canonical status update failed");
             JSONObject updatedHistory = history.find("framextv:tv:42:1:3"), updatedLibrary = library.findProgress(adoptedContent);
             require(updatedHistory != null && updatedHistory.getDouble("positionSeconds") == 444
                     && updatedLibrary != null && updatedLibrary.getDouble("positionSeconds") == 444,
-                    "Subsequent Kodi status did not advance canonical history and library progress");
+                    "Subsequent receiver status did not advance canonical history and library progress");
             require(fixture("").getInt("mutations") == beforeAdoption && beforeAdoption == beforeRestore,
-                    "Adopting or updating receiver playback replayed the video or mutated Kodi");
+                    "Adopting or updating receiver playback replayed the video or mutated the receiver");
+
+            phase = "library_sync";
+            // Pull: the receiver's own progress row (recorded while no phone was on) lands in the Library.
+            JSONObject receiverMovie = WatchHistory.contentFromCatalog("movie", "77", null, null, "");
+            JSONObject pulledMovie = null;
+            long pulledBy = SystemClock.elapsedRealtime() + 6000;
+            while (SystemClock.elapsedRealtime() < pulledBy && ((pulledMovie = library.findProgress(receiverMovie)) == null
+                    || pulledMovie.optDouble("positionSeconds", -1) != 500)) Thread.sleep(50);
+            require(pulledMovie != null && pulledMovie.optDouble("positionSeconds", -1) == 500 && "luma".equals(pulledMovie.optString("lastReceiver")),
+                    "The receiver's Library progress was not pulled into this phone's Library");
+            // Push: force the next 60 s round now; this phone's newer progress must reach the receiver.
+            java.lang.reflect.Field syncField = ConnectionService.class.getDeclaredField("lastLibrarySync"); syncField.setAccessible(true);
+            syncField.setLong(service, 0);
+            JSONObject pushed = null;
+            long pushedBy = SystemClock.elapsedRealtime() + 8000;
+            while (SystemClock.elapsedRealtime() < pushedBy) {
+                pushed = fixture("").getJSONObject("libraryPushed").optJSONObject("framextv:tv:42:1:3");
+                if (pushed != null && pushed.optDouble("positionSeconds", -1) == 444) break;
+                Thread.sleep(80);
+            }
+            require(pushed != null && pushed.optDouble("positionSeconds", -1) == 444 && pushed.optString("origin").startsWith("phone-"),
+                    "This phone's newer Library progress was not pushed to the receiver");
+            require(fixture("").getInt("mutations") == beforeAdoption, "Library sync changed receiver playback");
+            passed("two-way Library sync pulls receiver progress by cursor and pushes this phone's newer progress");
 
             phase = "canonical_source_transition";
             PendingIntent episodeThreePause = currentAction("pause");
@@ -481,7 +516,7 @@ public final class ServiceInstrumentation {
             String episodeThreeRevision = (String) revisionField.get(service);
             long episodeThreeUpdatedAt = updatedHistory.getLong("updatedAt"), episodeThreeLibraryUpdatedAt = updatedLibrary.getLong("updatedAt");
             fixture("?source=other&episode=4&position=33");
-            require(call("kodi.status").getBoolean("active"), "Kodi next-episode source transition was not observed");
+            require(call("receiver.status").getBoolean("active"), "Receiver next-episode source transition was not observed");
             JSONObject episodeFourRemote = waitCanonicalRemote(OTHER, "framextv:tv:42:1:4", "Shared series · S1 E4", "https://media.example/catalog-pt.vtt");
             JSONObject episodeFourContent = episodeFourRemote.getJSONObject("media").getJSONObject("content");
             String episodeFourRevision = (String) revisionField.get(service);
@@ -504,7 +539,7 @@ public final class ServiceInstrumentation {
             JSONObject episodeFourBeforeKeyChange = history.find("framextv:tv:42:1:4"), episodeFourLibraryBeforeKeyChange = library.findProgress(episodeFourContent);
             long episodeFourUpdatedAt = episodeFourBeforeKeyChange.getLong("updatedAt"), episodeFourLibraryUpdatedAt = episodeFourLibraryBeforeKeyChange.getLong("updatedAt");
             int mutationsBeforeUntaggedWindow = fixture("?lumaMetadata=0&position=77").getInt("mutations");
-            require(call("kodi.status").getBoolean("active"), "Same-source untagged transition window was not observed");
+            require(call("receiver.status").getBoolean("active"), "Same-source untagged transition window was not observed");
             JSONObject historyDuringUntagged = history.find("framextv:tv:42:1:4"), libraryDuringUntagged = library.findProgress(episodeFourContent);
             require(historyDuringUntagged.getDouble("positionSeconds") == 33 && historyDuringUntagged.getLong("updatedAt") == episodeFourUpdatedAt
                     && libraryDuringUntagged.getDouble("positionSeconds") == 33 && libraryDuringUntagged.getLong("updatedAt") == episodeFourLibraryUpdatedAt,
@@ -513,7 +548,7 @@ public final class ServiceInstrumentation {
             require(fixture("").getInt("mutations") == mutationsBeforeUntaggedWindow && fixture("").getBoolean("playing"),
                     "A canonical control remained verified during a same-source contentless transition window");
             fixture("?lumaMetadata=1&episode=5&position=77");
-            require(call("kodi.status").getBoolean("active"), "Same-source canonical episode transition was not observed");
+            require(call("receiver.status").getBoolean("active"), "Same-source canonical episode transition was not observed");
             JSONObject episodeFiveRemote = waitCanonicalRemote(OTHER, "framextv:tv:42:1:5", "Shared series · S1 E5", "https://media.example/catalog-pt.vtt");
             JSONObject episodeFiveContent = episodeFiveRemote.getJSONObject("media").getJSONObject("content");
             String episodeFiveRevision = (String) revisionField.get(service);
@@ -592,8 +627,11 @@ public final class ServiceInstrumentation {
                     "Replacing a stale system Next scope did not rotate its bounded wake lock");
             java.lang.reflect.Method cancelSystemNext = ConnectionService.class.getDeclaredMethod("cancelSystemNext");
             cancelSystemNext.setAccessible(true);
+            java.lang.reflect.Method publishState = ConnectionService.class.getDeclaredMethod("publish"); publishState.setAccessible(true);
             runner.runOnMainSync(() -> {
-                try { cancelSystemNext.invoke(service); revisionField.set(service, activeRevision); }
+                // A 2 s poll may have published while the fixture's reflective scope was set;
+                // republish the restored state, as production paths do after changing scope.
+                try { cancelSystemNext.invoke(service); revisionField.set(service, activeRevision); publishState.invoke(service); }
                 catch (Exception error) { throw new RuntimeException(error); }
             });
             require(!replacementWake.isHeld(), "Cleaning up the replacement system Next scope retained its wake lock");
@@ -639,7 +677,7 @@ public final class ServiceInstrumentation {
                     "MediaSession Next unexpectedly woke or unlocked the emulator");
 
             fixture("?episode=5&position=77");
-            require(call("kodi.status").getBoolean("active"), "Could not restore the verified episode before testing system Next");
+            require(call("receiver.status").getBoolean("active"), "Could not restore the verified episode before testing system Next");
             JSONObject restoredFive = waitCanonicalRemote(OTHER, "framextv:tv:42:1:5", "Shared series · S1 E5", "https://media.example/catalog-pt.vtt");
             JSONObject restoredFiveContent = restoredFive.getJSONObject("media").getJSONObject("content");
             String restoredFiveRevision = (String) revisionField.get(service);
@@ -651,28 +689,30 @@ public final class ServiceInstrumentation {
             require(restoredNextState != null && (restoredNextState.getActions() & PlaybackState.ACTION_SKIP_TO_NEXT) != 0,
                     "MediaSession did not restore Next after adopting the original episode again");
 
-            int beforeProbeRace = fixture("?switchOnAddonProbe=7").getInt("mutations");
+            // The fixture switches episodes just before evaluating the forwarded
+            // expectedCurrent* guard, so the receiver must reject the atomic open.
+            int beforeProbeRace = fixture("?switchBeforeOpen=7").getInt("mutations");
             nextController.getTransportControls().skipToNext();
             long probeRejectedBy = SystemClock.elapsedRealtime() + 8000;
             JSONObject probeState = null;
             while (SystemClock.elapsedRealtime() < probeRejectedBy) {
                 probeState = fixture("");
-                if (probeState.optInt("switchOnAddonProbe") == 0 && systemNextField.get(service) == null) break;
+                if (probeState.optInt("switchBeforeOpen") == 0 && systemNextField.get(service) == null) break;
                 Thread.sleep(40);
             }
-            require(probeState != null && probeState.optInt("switchOnAddonProbe") == 0 && systemNextField.get(service) == null,
-                    "System Next did not start and finish rejecting the metadata add-on probe race");
-            JSONObject probeObserved = call("kodi.status"), probeContent = probeObserved.optJSONObject("content");
+            require(probeState != null && probeState.optInt("switchBeforeOpen") == 0 && systemNextField.get(service) == null,
+                    "System Next did not start and finish its guarded open against the switched episode");
+            JSONObject probeObserved = call("receiver.status"), probeContent = probeObserved.optJSONObject("content");
             require(probeContent != null && "framextv:tv:42:1:7".equals(probeContent.optString("key")),
-                    "Kodi fixture did not expose the canonical switch made during the add-on probe");
+                    "Receiver fixture did not expose the canonical switch made before the guarded open");
             require(fixture("").getInt("mutations") == beforeProbeRace,
-                    "MediaSession Next overwrote a canonical switch made during Kodi's metadata add-on probe");
+                    "MediaSession Next overwrote a canonical switch the receiver rejected atomically");
             require(nextMonitor.getHits() == 0 && !context.getSystemService(PowerManager.class).isInteractive()
                     && context.getSystemService(KeyguardManager.class).isKeyguardLocked(),
-                    "A rejected metadata-probe race launched the Activity, woke, or unlocked the emulator");
+                    "A rejected guarded-open race launched the Activity, woke, or unlocked the emulator");
 
             fixture("?episode=5&position=77");
-            require(call("kodi.status").getBoolean("active"), "Could not restore the verified episode after the add-on probe race");
+            require(call("receiver.status").getBoolean("active"), "Could not restore the verified episode after the guarded-open race");
             JSONObject finalFive = waitCanonicalRemote(OTHER, "framextv:tv:42:1:5", "Shared series · S1 E5", "https://media.example/catalog-pt.vtt");
             JSONObject finalFiveContent = finalFive.getJSONObject("media").getJSONObject("content");
             String finalFiveRevision = (String) revisionField.get(service);
@@ -682,9 +722,9 @@ public final class ServiceInstrumentation {
             });
             PlaybackState finalNextState = nextController.getPlaybackState();
             require(finalNextState != null && (finalNextState.getActions() & PlaybackState.ACTION_SKIP_TO_NEXT) != 0,
-                    "MediaSession did not restore Next after rejecting the add-on probe race");
+                    "MediaSession did not restore Next after rejecting the guarded-open race");
             JSONObject previousEpisodeSixHistory = history.find("framextv:tv:42:1:6");
-            int beforeSystemNext = fixture("").getInt("addonOpens");
+            int beforeSystemNext = fixture("").getInt("contentOpens");
             nextController.getTransportControls().skipToNext();
             long openedBy = SystemClock.elapsedRealtime() + 25000;
             JSONObject opened = null;
@@ -694,11 +734,11 @@ public final class ServiceInstrumentation {
                 Thread.sleep(40);
             }
             require(opened != null && NEXT.equals(opened.optString("source")) && opened.optInt("lumaEpisode") == 6,
-                    "MediaSession Next did not open the retained canonical episode on Kodi");
+                    "MediaSession Next did not open the retained canonical episode on the receiver");
             JSONObject episodeSixRemote = waitCanonicalRemote(NEXT, "framextv:tv:42:1:6", "Shared series · S1 E6", "https://media.example/catalog-pt.vtt");
             JSONObject episodeSixContent = episodeSixRemote.getJSONObject("media").getJSONObject("content");
-            require(fixture("").getInt("addonOpens") == beforeSystemNext + 1,
-                    "MediaSession Next did not perform exactly one guarded Kodi launch");
+            require(fixture("").getInt("contentOpens") == beforeSystemNext + 1,
+                    "MediaSession Next did not perform exactly one guarded receiver open");
             long differentSourceBoundBy = SystemClock.elapsedRealtime() + 5000;
             JSONObject differentSourceHistory = null, differentSourceLibrary = null, differentSourceReceiver = null;
             while (SystemClock.elapsedRealtime() < differentSourceBoundBy) {
@@ -716,10 +756,10 @@ public final class ServiceInstrumentation {
                     && differentSourceHistory.optDouble("positionSeconds", -1) == differentSourcePosition
                     && differentSourceLibrary.optDouble("positionSeconds", -1) == differentSourcePosition
                     && (previousEpisodeSixHistory == null || differentSourceHistory.optLong("lastStartedAt") > previousEpisodeSixHistory.optLong("lastStartedAt")),
-                    "A different-source service Next did not bind its accepted canonical episode at Kodi's observed position");
+                    "A different-source service Next did not bind its accepted canonical episode at the receiver's observed position");
 
             fixture("?source=other&episode=5&position=77");
-            require(call("kodi.status").getBoolean("active"), "Could not restore episode five before the same-source resume failure");
+            require(call("receiver.status").getBoolean("active"), "Could not restore episode five before the same-source resume failure");
             JSONObject sameSourceFive = waitCanonicalRemote(OTHER, "framextv:tv:42:1:5", "Shared series · S1 E5", "https://media.example/catalog-pt.vtt");
             JSONObject sameSourceFiveContent = sameSourceFive.getJSONObject("media").getJSONObject("content");
             String sameSourceFiveRevision = (String) revisionField.get(service);
@@ -741,7 +781,7 @@ public final class ServiceInstrumentation {
             require((nextController.getPlaybackState().getActions() & PlaybackState.ACTION_SKIP_TO_NEXT) != 0,
                     "MediaSession did not advertise the same-source next episode");
             JSONObject sameSourceSetup = fixture("?nextSource=other&failNextSeek=1");
-            int beforeSameSourceOpen = sameSourceSetup.getInt("addonOpens"), beforeFailedSeek = sameSourceSetup.getInt("seekFailures");
+            int beforeSameSourceOpen = sameSourceSetup.getInt("contentOpens"), beforeFailedSeek = sameSourceSetup.getInt("seekFailures");
             nextController.getTransportControls().skipToNext();
             boolean sameSourceResolving = sameSourceResolveStarted.await(8, TimeUnit.SECONDS);
             JSONObject episodeFiveBeforeNext = history.find("framextv:tv:42:1:5");
@@ -756,7 +796,7 @@ public final class ServiceInstrumentation {
                 sameSourceReceiver = fixture("");
                 sameSourceHistory = history.find("framextv:tv:42:1:6");
                 sameSourceLibrary = library.findProgress(episodeSixContent);
-                if (systemNextField.get(service) == null && sameSourceReceiver.optInt("addonOpens") == beforeSameSourceOpen + 1
+                if (systemNextField.get(service) == null && sameSourceReceiver.optInt("contentOpens") == beforeSameSourceOpen + 1
                         && sameSourceReceiver.optInt("seekFailures") == beforeFailedSeek + 1
                         && OTHER.equals(sameSourceReceiver.optString("source")) && sameSourceReceiver.optInt("lumaEpisode") == 6
                         && sameSourceHistory != null && sameSourceLibrary != null
@@ -767,15 +807,15 @@ public final class ServiceInstrumentation {
             waitCanonicalRemote(OTHER, "framextv:tv:42:1:6", "Shared series · S1 E6", "https://media.example/catalog-pt.vtt");
             JSONObject episodeFiveAfterNext = history.find("framextv:tv:42:1:5");
             JSONObject episodeFiveLibraryAfterNext = library.findProgress(sameSourceFiveContent);
-            require(sameSourceReceiver != null && sameSourceReceiver.optInt("addonOpens") == beforeSameSourceOpen + 1
+            require(sameSourceReceiver != null && sameSourceReceiver.optInt("contentOpens") == beforeSameSourceOpen + 1
                     && sameSourceReceiver.optInt("seekFailures") == beforeFailedSeek + 1
                     && !sameSourceReceiver.optBoolean("failNextSeek") && OTHER.equals(sameSourceReceiver.optString("source"))
                     && sameSourceReceiver.optInt("lumaEpisode") == 6 && sameSourceReceiver.optDouble("position", -1) == 20,
-                    "Same-source service Next did not keep accepted playback at Kodi's actual position after its resume failed");
+                    "Same-source service Next did not keep accepted playback at the receiver's actual position after its resume failed");
             require(sameSourceHistory != null && sameSourceLibrary != null
                     && sameSourceHistory.optDouble("positionSeconds", -1) == 20
                     && sameSourceLibrary.optDouble("positionSeconds", -1) == 20,
-                    "An unconfirmed resume did not bind the accepted same-source episode to Kodi's actual position");
+                    "An unconfirmed resume did not bind the accepted same-source episode to the receiver's actual position");
             require(episodeFiveAfterNext != null && episodeFiveLibraryAfterNext != null
                     && episodeFiveAfterNext.optDouble("positionSeconds", -1) == episodeFiveBeforeNext.optDouble("positionSeconds", -1)
                     && episodeFiveAfterNext.optLong("updatedAt") == episodeFiveBeforeNext.optLong("updatedAt")
@@ -788,7 +828,7 @@ public final class ServiceInstrumentation {
             require(!context.getSystemService(PowerManager.class).isInteractive()
                     && context.getSystemService(KeyguardManager.class).isKeyguardLocked(),
                     "A successful MediaSession Next woke or unlocked the emulator");
-            passed("stale races reject system Next, while locked-screen different- and same-source episodes bind actual Kodi progress without launching the Activity");
+            passed("stale races reject system Next, while locked-screen different- and same-source episodes bind actual receiver progress without launching the Activity");
             ordinaryCard(currentCard(41, "pause")); volumeLayout(currentCard(41, "pause"), "Pause"); currentCard(42, "pause");
             token = service.getMediaSessionToken();
             ConnectionService restoredService = service; unbind(); bind();
@@ -800,16 +840,16 @@ public final class ServiceInstrumentation {
             require(rewindState != null && (rewindState.getActions() & PlaybackState.ACTION_REWIND) != 0, "MediaSession Back 30 action missing");
             PlaybackState.CustomAction backThirty = customAction(controller, "back 30");
             phase = "custom_back_30";
-            fixture("?position=75"); call("kodi.status"); fixture("?hold=1");
+            fixture("?position=75"); call("receiver.status"); fixture("?hold=1");
             controller.getTransportControls().sendCustomAction(backThirty.getAction(), backThirty.getExtras());
             long rewindHeldBy = SystemClock.elapsedRealtime() + 3000;
             while (fixture("").getInt("held") == 0 && SystemClock.elapsedRealtime() < rewindHeldBy) Thread.sleep(20);
             require(fixture("").getInt("held") > 0, "Fixture did not hold the locked-screen rewind's fresh observation");
             waitMediaWake(true); fixture("?hold=0"); waitReceiverPosition(45); waitMediaWake(false);
             phase = "ordinary_back_30";
-            fixture("?position=20"); call("kodi.status"); currentAction("back 30").send(); waitReceiverPosition(0); waitMediaWake(false);
+            fixture("?position=20"); call("receiver.status"); currentAction("back 30").send(); waitReceiverPosition(0); waitMediaWake(false);
             require(!context.getSystemService(PowerManager.class).isInteractive() && context.getSystemService(KeyguardManager.class).isKeyguardLocked(), "Back 30 opened or unlocked the phone");
-            fixture("?position=20"); call("kodi.status");
+            fixture("?position=20"); call("receiver.status");
             passed("notification and custom MediaSession Back 30 use fresh source-bound playback while standard rewind remains advertised");
             phase = "ordinary_pause";
             fixture("?hold=1");
@@ -823,15 +863,15 @@ public final class ServiceInstrumentation {
             phase = "ordinary_play";
             volumeLayout(currentCard(41, "play"), "Play");
             JSONObject beforeOutage = fixture("?failStatus=1");
-            PendingCall failedRead = submit("kodi.status");
-            require(failedRead.ready.await(8, TimeUnit.SECONDS) && "KODI_RESPONSE".equals(failedRead.failure.get()), "Fixture did not reject the transient status read");
+            PendingCall failedRead = submit("receiver.status");
+            require(failedRead.ready.await(8, TimeUnit.SECONDS) && "RECEIVER_RESPONSE".equals(failedRead.failure.get()), "Fixture did not reject the transient status read");
             require(service.snapshot().getJSONObject("playback").getBoolean("stale"), "A failed observation was not marked stale");
             PendingIntent retryPlay = currentAction("play"); retryPlay.send(); waitMediaWake(true);
             long failureBy = SystemClock.elapsedRealtime() + 3000;
             while (fixture("").getInt("failedStatusReads") < beforeOutage.getInt("failedStatusReads") + 3 && SystemClock.elapsedRealtime() < failureBy) Thread.sleep(30);
             waitMediaWake(false); currentCard(42, "play");
             require(controller.getPlaybackState().getState() == PlaybackState.STATE_PAUSED
-                    && fixture("").getInt("mutations") == beforeOutage.getInt("mutations"), "Unreachable Kodi erased the media session or sent an unverified write");
+                    && fixture("").getInt("mutations") == beforeOutage.getInt("mutations"), "An unreachable receiver erased the media session or sent an unverified write");
             fixture("?failStatus=0&failStatusOnce=1"); retryPlay.send(); waitReceiverPlaying(true); waitMediaWake(false); waitPlaying(true);
             require(!service.snapshot().getJSONObject("playback").optBoolean("stale"), "A successful observation did not clear the stale state");
             passed("failed reads preserve the locked-screen card without writes and a later button tap recovers with a read-only retry");
@@ -859,13 +899,13 @@ public final class ServiceInstrumentation {
             controller.getTransportControls().sendCustomAction(stop.getAction(), stop.getExtras());
             long stopBy = SystemClock.elapsedRealtime() + 4000;
             while (fixture("").getInt("stops") == 0 && SystemClock.elapsedRealtime() < stopBy) Thread.sleep(40);
-            require(fixture("").getInt("stops") == 1 && !call("kodi.status").getBoolean("active"), "The current custom Stop action did not stop the selected video");
+            require(fixture("").getInt("stops") == 1 && !call("receiver.status").getBoolean("active"), "The current custom Stop action did not stop the selected video");
             ordinaryCard(currentCard(41, "disconnect")); waitCard(42, false);
             notificationAction(waitNotification(true), "disconnect");
             phase = "restore_after_stop";
             fixture("?lumaMetadata=0");
-            call("kodi.open", "media", object("url", FIRST, "contentType", "application/vnd.apple.mpegurl"), "expectedSourceUrl", FIRST);
-            call("kodi.status"); remember(); runner.waitForIdleSync(); currentCard(41, "pause"); currentCard(42, "pause");
+            call("receiver.open", "media", object("url", FIRST, "contentType", "application/vnd.apple.mpegurl"), "expectedSourceUrl", FIRST);
+            call("receiver.status"); remember(); runner.waitForIdleSync(); currentCard(41, "pause"); currentCard(42, "pause");
             phase = "remote_volume";
             JSONObject beforeBurst = fixture(""); int setsBeforeBurst = beforeBurst.getInt("volumeSets");
             for (Object invalid : new Object[] {-1, 16, 1.5, "8", true}) {
@@ -956,23 +996,23 @@ public final class ServiceInstrumentation {
             controller.getTransportControls().sendCustomAction(staleVolumeDownCustom.getAction(), staleVolumeDownCustom.getExtras());
             controller.getTransportControls().sendCustomAction(staleVolumeUpCustom.getAction(), staleVolumeUpCustom.getExtras());
             controller.getTransportControls().sendCustomAction(staleBackCustom.getAction(), staleBackCustom.getExtras());
-            controller.getTransportControls().sendCustomAction(staleStop.getAction(), staleStop.getExtras()); Thread.sleep(2700); call("kodi.status");
+            controller.getTransportControls().sendCustomAction(staleStop.getAction(), staleStop.getExtras()); Thread.sleep(2700); call("receiver.status");
             JSONObject untouched = fixture("");
             require(untouched.getInt("mutations") == before && untouched.getInt("volumeKeys") == 0 && untouched.getInt("volume") == 8 && untouched.getBoolean("playing") && OTHER.equals(untouched.getString("source")), "A stale media control changed another source");
             phase = "stale_same_source";
-            fixture("?source=first"); call("kodi.status"); remember(); runner.waitForIdleSync();
+            fixture("?source=first"); call("receiver.status"); remember(); runner.waitForIdleSync();
             int renewed = fixture("").getInt("mutations");
             staleVolumeDown.send(); staleVolumeUp.send();
             controller.getTransportControls().sendCustomAction(staleVolumeDownCustom.getAction(), staleVolumeDownCustom.getExtras());
             controller.getTransportControls().sendCustomAction(staleVolumeUpCustom.getAction(), staleVolumeUpCustom.getExtras());
             controller.getTransportControls().sendCustomAction(staleBackCustom.getAction(), staleBackCustom.getExtras());
-            stalePause.send(); staleBack.send(); controller.getTransportControls().sendCustomAction(staleStop.getAction(), staleStop.getExtras()); Thread.sleep(250); call("kodi.status");
+            stalePause.send(); staleBack.send(); controller.getTransportControls().sendCustomAction(staleStop.getAction(), staleStop.getExtras()); Thread.sleep(250); call("receiver.status");
             require(fixture("").getInt("mutations") == renewed && fixture("").getInt("volumeKeys") == 0 && fixture("").getInt("volume") == 8, "A stale notification retargeted a renewed handoff of the same source");
             passed("MediaSession controls work in background and stale notification/session controls cannot alter another source");
 
-            phase = "independent_kodi_http";
+            phase = "independent_receiver_http";
             int beforeDisconnectedTransition = fixture("?source=first&lumaMetadata=1&episode=6&position=90").getInt("mutations");
-            call("kodi.status");
+            call("receiver.status");
             waitCanonicalRemote(FIRST, "framextv:tv:42:1:6", "Shared series · S1 E6", "https://media.example/catalog-pt.vtt");
             fixture("?dropTcp=1"); PendingCall hardwareLost = submit("luma.status");
             require(hardwareLost.ready.await(8, TimeUnit.SECONDS) && hardwareLost.failure.get() != null
@@ -992,27 +1032,27 @@ public final class ServiceInstrumentation {
             fixture("?lumaMetadata=1&episode=7&position=11");
             waitCanonicalRemote(OTHER, "framextv:tv:42:1:7", "Shared series · S1 E7", "https://media.example/catalog-pt.vtt");
             require(fixture("").getInt("mutations") == beforeDisconnectedTransition,
-                    "Disconnected canonical transition replayed or mutated Kodi");
+                    "Disconnected canonical transition replayed or mutated the receiver");
             fixture("?source=first&episode=8&position=12");
             waitCanonicalRemote(FIRST, "framextv:tv:42:1:8", "Shared series · S1 E8", "https://media.example/catalog-pt.vtt");
             Notification httpOnly = currentCard(41, "pause");
             long hardwareCardBy = SystemClock.elapsedRealtime() + 3000;
             while (httpOnly.actions.length != 2 && SystemClock.elapsedRealtime() < hardwareCardBy) { Thread.sleep(50); httpOnly = currentCard(41, "pause"); }
             require(httpOnly.actions.length == 2 && "Back 30 seconds".contentEquals(httpOnly.actions[0].title)
-                    && "Pause".contentEquals(httpOnly.actions[1].title), "Disconnected projector volume remained available or Kodi playback controls disappeared");
+                    && "Pause".contentEquals(httpOnly.actions[1].title), "Disconnected projector volume remained available or receiver playback controls disappeared");
             notificationAction(httpOnly, "pause").send(); waitReceiverPlaying(false); waitMediaWake(false); waitPlaying(false);
             controller.getTransportControls().play(); waitReceiverPlaying(true); waitMediaWake(false); waitPlaying(true); currentCard(42, "pause");
             require(context.getSystemService(KeyguardManager.class).isKeyguardLocked(), "Independent HTTP controls unlocked the device");
-            passed("disconnected polling survives a contentless source transition, then locked-screen Kodi controls remain available without hardware actions");
+            passed("disconnected polling survives a contentless source transition, then locked-screen receiver controls remain available without hardware actions");
 
             phase = "disconnect";
             int stops = fixture("").getInt("stops");
             PlaybackState.CustomAction disconnect = customAction(controller, "disconnect");
-            fixture("?hold=1"); PendingCall held = submit("kodi.status");
+            fixture("?hold=1"); PendingCall held = submit("receiver.status");
             long heldBy = SystemClock.elapsedRealtime() + 3000;
             while (fixture("").getInt("held") == 0 && SystemClock.elapsedRealtime() < heldBy) Thread.sleep(40);
             require(fixture("").getInt("held") > 0, "Fixture did not hold a native HTTP read");
-            PendingCall queued = submit("kodi.pause", "expectedSourceUrl", FIRST);
+            PendingCall queued = submit("receiver.pause", "expectedSourceUrl", FIRST);
             long disconnectStarted = SystemClock.elapsedRealtime();
             controller.getTransportControls().sendCustomAction(disconnect.getAction(), disconnect.getExtras());
             long disconnectedBy = disconnectStarted + 750;
@@ -1030,7 +1070,7 @@ public final class ServiceInstrumentation {
 
             phase = "power_off";
             require(call("device.connect", "host", args.getString("targetHost")).getBoolean("connected"), "Power fixture reconnect failed");
-            require(call("kodi.status").getBoolean("active"), "Power fixture did not retain independent playback");
+            require(call("receiver.status").getBoolean("active"), "Power fixture did not retain independent playback");
             currentCard(41, "pause"); currentCard(42, "pause");
             for (Object confirmation : new Object[] {JSONObject.NULL, false, "true"}) {
                 PendingCall unconfirmed = confirmation == JSONObject.NULL ? submit("luma.powerOff") : submit("luma.powerOff", "confirmed", confirmation);
@@ -1043,9 +1083,9 @@ public final class ServiceInstrumentation {
             JSONObject powered = service.snapshot();
             require(!powered.getJSONObject("connection").getBoolean("connected") && powered.getBoolean("autoConnectPaused"), "Power-off retained the control connection or automatic reconnect");
             JSONObject savedAfterPower = settings.metadata();
-            require(savedAfterPower.getBoolean("hasReceiver") && savedAfterPower.getBoolean("hasKodi")
+            require(savedAfterPower.getBoolean("hasReceiver") && savedAfterPower.getBoolean("hasPairing")
                     && args.getString("targetHost").equals(settings.readReceiver().getString("host"))
-                    && "fixture".equals(settings.readKodi().getString("password")), "Power-off erased or changed the saved setup");
+                    && TOKEN.equals(settings.readPairing().getString("token")), "Power-off erased or changed the saved setup");
             JSONObject paused = call("app.settings.autoConnect"), powerFixture = fixture("");
             require(paused.getBoolean("paused") && !paused.getBoolean("connected") && powerFixture.getInt("connections") == 3, "Power-off immediately reconnected to the projector");
             require(powerFixture.getInt("powerCommands") == 1 && powerFixture.getInt("mutations") == mutationsBeforePower

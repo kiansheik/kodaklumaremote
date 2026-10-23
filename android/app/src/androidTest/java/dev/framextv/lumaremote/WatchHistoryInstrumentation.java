@@ -63,17 +63,17 @@ public final class WatchHistoryInstrumentation {
             });
             check("latest same-content handoff owns progress across receivers without merging episodes", () -> {
                 MemoryStore store = new MemoryStore(); long[] clock = {100000}; WatchHistory history = new WatchHistory(store, () -> clock[0], () -> clock[0]);
-                String tv = "https://cdn.example/tv.m3u8?token=one", kodi = "https://different.example/kodi.m3u8?token=two";
+                String tv = "https://cdn.example/tv.m3u8?token=one", projector = "https://different.example/projector.m3u8?token=two";
                 history.bind("philips", media(content(1), tv)); history.observe("philips", playback(tv, 600, 1500, true, false));
-                clock[0]++; history.bind("luma", media(content(1), kodi)); history.observe("luma", playback(kodi, 605, 1500, true, false));
+                clock[0]++; history.bind("luma", media(content(1), projector)); history.observe("luma", playback(projector, 605, 1500, true, false));
                 require(!history.observe("philips", playback(tv, 120, 1500, true, false)), "Old receiver overwrote newer handoff progress");
-                history.observe("luma", playback(kodi, 620, 1500, true, true));
+                history.observe("luma", playback(projector, 620, 1500, true, true));
                 JSONObject shared = history.find("https://framextv.xyz/watch/284833/1/1");
                 require(shared.getDouble("positionSeconds") == 620 && "luma".equals(shared.getString("lastReceiver")) && history.snapshot().getJSONArray("items").length() == 1, "Same episode was split by stream/receiver");
                 clock[0]++; history.bind("philips", media(content(2), tv)); history.observe("philips", playback(tv, 5, 1400, true, false));
                 require(history.snapshot().getJSONArray("items").length() == 2 && history.find(content(1).getString("key")).getInt("episode") == 1 && history.find(content(2).getString("key")).getInt("episode") == 2, "Episodes were merged or latest episode lost");
                 long latestStart = clock[0]; clock[0] += 2000;
-                history.observe("luma", playback(kodi, 700, 1500, true, true));
+                history.observe("luma", playback(projector, 700, 1500, true, true));
                 JSONArray recent = history.snapshot().getJSONArray("items");
                 require(recent.getJSONObject(0).getInt("episode") == 2 && recent.getJSONObject(0).getLong("lastStartedAt") == latestStart
                         && recent.getJSONObject(1).getDouble("positionSeconds") == 700 && recent.getJSONObject(1).getLong("updatedAt") > latestStart,

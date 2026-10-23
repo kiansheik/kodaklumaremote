@@ -15,24 +15,24 @@ const appPackage = process.env.ANDROID_TEST_PACKAGE || 'dev.framextv.lumaremote'
 const androidSdk = process.env.ANDROID_HOME || `${homedir()}/Library/Android/sdk`;
 if (!/^dev\.framextv\.lumaremote(?:\.receiverfixture)?$/u.test(appPackage)) throw new Error('Unsupported Android fixture package.');
 if (!/^emulator-\d+$/u.test(serial)) throw new Error('Select an Android emulator test target.');
-const commands = [], mutations = [], sockets = new Set();
-let currentSource = '', currentMetadata = null, position = 0, playing = true, appLists = 0, connections = 0, addonProbes = 0;
-let openingRaceActive = false, openingRaceWrites = 0, fallbackRaceActive = false, fallbackRaceWrites = 0;
-function lumaMetadata(params) {
-  assert.equal(params.addonid, 'script.lumaremote.metadata');
-  assert.equal(params.wait, true); assert.ok(Array.isArray(params.params) && params.params.length === 1);
-  assert.match(params.params[0], /^[A-Za-z0-9_-]+$/u);
-  const payload = JSON.parse(Buffer.from(params.params[0], 'base64url').toString('utf8'));
-  assert.deepEqual(Object.keys(payload).sort(), ['content', 'contentType', 'showTitle', 'source', 'title', 'version']);
-  assert.deepEqual(Object.keys(payload.content).sort(), ['contentId', 'episode', 'key', 'kind', 'season', 'watchUrl']);
-  assert.equal(payload.version, 1); assert.equal(payload.source, currentSource || 'https://media.example/first.m3u8');
-  assert.equal(payload.content.key, 'framextv:tv:42:2:3'); assert.equal(payload.showTitle, 'Fixture Series');
-  return { type: 'episode', title: payload.title, showtitle: payload.showTitle,
-    season: payload.content.season, episode: payload.content.episode, uniqueid: { luma: `v1:${payload.content.key}` } };
+const commands = [], mutations = [], pairings = [], sockets = new Set();
+let currentSource = '', currentContent = null, position = 0, playing = true, appLists = 0, connections = 0;
+const TOKEN = 'fixture_receiver_token_0123456789', CODE = '123456', PAIRING = 'fixturePairing01';
+const FIRST = 'https://media.example/first.m3u8';
+const reply = (response, status, body) => { response.writeHead(status, { 'Content-Type': 'application/json' }); response.end(typeof body === 'string' ? body : JSON.stringify(body)); };
+const failure = (response, status, code) => reply(response, status, { ok: false, error: { code } });
+async function body(request) {
+  const chunks = []; let size = 0;
+  for await (const bytes of request) { size += bytes.length; assert.ok(size < 256 * 1024); chunks.push(bytes); }
+  return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+}
+function route(request) {
+  const match = /^\/api\/v1\/([a-z]+(?:\.[A-Za-z]+)?)$/u.exec(request.url);
+  return match ? match[1] : null;
 }
 function appFrame() {
   const fields = [];
-  for (const [name, pkg] of [['Kodi', 'org.xbmc.kodi'], ['Vídeo', 'example.video']]) {
+  for (const [name, pkg] of [['LUMA Receiver', 'dev.framextv.lumareceiver'], ['Vídeo', 'example.video']]) {
     for (const value of [name, pkg, '1', Buffer.from([1, 0, 0, 0]), Buffer.from([0])]) {
       const bytes = Buffer.isBuffer(value) ? value : Buffer.from(value);
       const length = Buffer.alloc(4); length.writeUInt32LE(bytes.length); fields.push(length, bytes);
@@ -60,150 +60,174 @@ const tcp = net.createServer(socket => {
     }
   });
 });
-const kodi = http.createServer(async (request, response) => {
+// Minimal LUMA Receiver LAN API (android-receiver ControlServer envelope and
+// PlaybackController guard semantics). Rejected and incomplete requests never mutate.
+const receiver = http.createServer(async (request, response) => {
   try {
-    assert.equal(request.url, '/jsonrpc'); assert.equal(request.headers.authorization, `Basic ${Buffer.from('fixture:fixture').toString('base64')}`);
-    const chunks = []; for await (const bytes of request) chunks.push(bytes);
-    const message = JSON.parse(Buffer.concat(chunks).toString());
-    const { method, params, id } = message; let result;
-    if (method === 'Player.Open' && /\/(?:rejected|unknown|false-result|null-result)\.m3u8$/u.test(params.item.file)) {
-      response.writeHead(200, { 'Content-Type': 'application/json' });
-      response.end(JSON.stringify({ jsonrpc: '2.0', id, ...(/\/(?:false|null)-result\.m3u8$/u.test(params.item.file)
-        ? { result: params.item.file.endsWith('/false-result.m3u8') ? false : null }
-        : { error: { code: params.item.file.endsWith('/rejected.m3u8') ? -32602 : -32100, message: 'Fixture rejection' } }) }));
+    const method = route(request);
+    if (request.method === 'GET' && method === 'info') { reply(response, 200, { ok: true, result: { app: 'lumareceiver', versionName: 'fixture-1.0', receiverId: 'fixture-receiver' } }); return; }
+    assert.equal(request.method, 'POST'); assert.ok(method);
+    if (method === 'pair.begin' || method === 'pair.complete') {
+      assert.equal(request.headers.authorization, undefined, 'Pairing must not send a bearer token.');
+      const params = await body(request); pairings.push({ method, params });
+      if (method === 'pair.begin') { assert.match(params.clientName, /^LUMA Remote · /u); reply(response, 200, { ok: true, result: { pairingId: PAIRING, expiresInSeconds: 120 } }); return; }
+      if (params.pairingId === 'expiredPairing01') { failure(response, 410, 'PAIRING_EXPIRED'); return; }
+      if (params.pairingId !== PAIRING || params.code !== CODE) { failure(response, 403, 'PAIRING_CODE_WRONG'); return; }
+      reply(response, 200, { ok: true, result: { token: TOKEN, clientId: 'fixture-client' } }); return;
+    }
+    if (request.headers.authorization !== `Bearer ${TOKEN}`) { failure(response, 401, 'UNAUTHORIZED'); return; }
+    const params = await body(request);
+    const expect = () => {
+      if (!currentSource) { failure(response, 409, 'NO_VIDEO'); return false; }
+      if ('expectedSourceUrl' in params && params.expectedSourceUrl !== currentSource
+        || 'expectedContentKey' in params && params.expectedContentKey !== currentContent?.key) { failure(response, 409, 'SOURCE_CHANGED'); return false; }
+      return true;
+    };
+    const accept = result => { mutations.push({ method, params }); reply(response, 200, { ok: true, result: result || { accepted: true } }); };
+    if (method === 'player.status') {
+      reply(response, 200, { ok: true, result: currentSource
+        ? { revision: mutations.length, active: true, playing, paused: !playing, state: playing ? 'playing' : 'paused', positionSeconds: position, durationSeconds: 1355, bufferedSeconds: 1355, canSeek: true, sourceUrl: currentSource, title: currentContent?.title || 'Fixture', ...(currentContent ? { content: currentContent } : {}) }
+        : { revision: mutations.length, active: false, playing: false, paused: false, state: 'idle', positionSeconds: 0, durationSeconds: 0, bufferedSeconds: 0, canSeek: false, sourceUrl: '' } });
       return;
     }
-    if (method === 'Player.AddSubtitle' && /\/(?:rejected|unknown|wrong-id|malformed|trailing|false-result|null-result)\.vtt$/u.test(params.subtitle)) {
-      const known = params.subtitle.endsWith('/rejected.vtt') || params.subtitle.endsWith('/trailing.vtt');
-      response.writeHead(200, { 'Content-Type': 'application/json' });
-      response.end(JSON.stringify({ jsonrpc: '2.0', id: params.subtitle.endsWith('/wrong-id.vtt') ? id + 1 : id,
-        ...(/\/(?:false|null)-result\.vtt$/u.test(params.subtitle)
-          ? { result: params.subtitle.endsWith('/false-result.vtt') ? false : null }
-          : { error: params.subtitle.endsWith('/malformed.vtt') ? { code: -32100 }
-            : { code: known ? -32100 : params.subtitle.endsWith('/wrong-id.vtt') ? -32602 : -32603, message: 'Fixture rejection' } }) })
-          + (params.subtitle.endsWith('/trailing.vtt') ? ' unexpected' : ''));
+    if (method === 'player.open') {
+      const url = params.media?.url || '';
+      const special = /\/(rejected|unknown|false-result|null-result|invalid-content)\.m3u8$/u.exec(url)?.[1];
+      if (special === 'rejected') { failure(response, 422, 'UNSUPPORTED_MEDIA'); return; }
+      if (special === 'unknown') { failure(response, 503, 'INTERNAL'); return; }
+      if (special === 'false-result') { reply(response, 200, { ok: false }); return; }
+      if (special === 'null-result') { reply(response, 200, { ok: true, result: null }); return; }
+      if (special === 'invalid-content') { failure(response, 400, 'INVALID_CONTENT'); return; }
+      assert.equal(typeof params.onlyIfInactive, 'boolean');
+      if (params.onlyIfInactive && currentSource) { failure(response, 409, 'SOURCE_CHANGED'); return; }
+      if ('expectedCurrentSourceUrl' in params && (params.expectedCurrentSourceUrl !== currentSource || params.expectedCurrentContentKey !== currentContent?.key)) { failure(response, 409, 'SOURCE_CHANGED'); return; }
+      currentSource = url; currentContent = params.media.content || null; position = params.media.resumeSeconds || 0; playing = true;
+      accept(); return;
+    }
+    if (method === 'player.subtitles') {
+      if (currentSource && !expect()) return;
+      reply(response, 200, { ok: true, result: currentSource
+        ? { active: true, enabled: false, currentIndex: null, tracks: [{ index: 0, name: 'English', language: 'en', supported: true }, { index: 1, name: 'Português', language: 'pt-br', supported: true }] }
+        : { active: false, enabled: false, currentIndex: null, tracks: [] } });
       return;
     }
-    if (method === 'JSONRPC.Ping') result = 'pong';
-    else if (method === 'Application.GetProperties') result = { name: 'Kodi', version: { major: 21, minor: 2 } };
-    else if (method === 'Addons.GetAddonDetails') {
-      addonProbes++;
-      if (addonProbes === 2) {
-        response.writeHead(200, { 'Content-Type': 'application/json' });
-        response.end(JSON.stringify({ jsonrpc: '2.0', id, error: { code: -32601, message: 'Method not found' } }));
-        return;
-      }
-      result = { addon: { addonid: 'script.lumaremote.metadata', type: 'xbmc.python.script', enabled: true } };
+    if (method === 'player.addSubtitle') {
+      const special = /\/(rejected|bare-4xx|unknown|missing-result|malformed|trailing|false-result|null-result|revoked)\.vtt$/u.exec(params.track?.url || '')?.[1];
+      if (special === 'rejected') { failure(response, 422, 'UNSUPPORTED_SUBTITLE'); return; }
+      if (special === 'bare-4xx') { reply(response, 400, {}); return; }
+      if (special === 'unknown') { failure(response, 500, 'INTERNAL'); return; }
+      if (special === 'missing-result') { reply(response, 200, { ok: true }); return; }
+      if (special === 'malformed') { reply(response, 200, 'not json'); return; }
+      if (special === 'trailing') { reply(response, 200, `${JSON.stringify({ ok: true, result: { accepted: true } })} unexpected`); return; }
+      if (special === 'false-result') { reply(response, 200, { ok: false, error: { code: 'X' } }); return; }
+      if (special === 'null-result') { reply(response, 200, { ok: true, result: null }); return; }
+      if (special === 'revoked') { failure(response, 401, 'UNAUTHORIZED'); return; }
+      if (!expect()) return;
+      accept({ accepted: true, index: 2 }); return;
     }
-    else if (method === 'Player.GetActivePlayers') result = currentSource ? [{ playerid: 1, type: 'video' }] : [];
-    else if (method === 'Player.GetItem') result = { item: { file: currentSource, ...(currentMetadata || {}) } };
-    else if (method === 'Addons.ExecuteAddon') {
-      mutations.push(message); currentMetadata = lumaMetadata(params); currentSource = 'https://media.example/first.m3u8'; position = 0; result = 'OK';
+    if (method === 'player.setSubtitle') {
+      if (!expect()) return;
+      if (params.index !== 'off' && !(params.index >= 0 && params.index <= 1)) { failure(response, 400, 'INVALID_SUBTITLE'); return; }
+      accept(); return;
     }
-    else if (method === 'Player.GetProperties') result = params.properties.includes('subtitles')
-      ? { subtitles: [{ index: 0, name: 'English', language: 'en' }, { index: 1, name: 'Português', language: 'pt-br' }], currentsubtitle: { index: -1 }, subtitleenabled: false }
-      : { speed: playing ? 1 : 0, time: { hours: 0, minutes: Math.floor(position / 60), seconds: position % 60 }, totaltime: { hours: 0, minutes: 22, seconds: 35 }, canseek: true };
-    else {
-      mutations.push(message); result = 'OK';
-      if (method === 'Player.Open') { currentSource = params.item.file; currentMetadata = null; position = 0; }
-      if (method === 'Player.PlayPause') playing = params.play;
-      if (method === 'Player.Seek') { const time = params.value.time; position = time.hours * 3600 + time.minutes * 60 + time.seconds; }
-      if (method === 'Player.Stop') { currentSource = ''; currentMetadata = null; }
+    if (['player.pause', 'player.resume', 'player.seek', 'player.stop'].includes(method)) {
+      if (!expect()) return;
+      if (method === 'player.seek' && params.position > 1355) { failure(response, 409, 'CANNOT_SEEK'); return; }
+      if (method === 'player.pause' || method === 'player.resume') playing = method === 'player.resume';
+      if (method === 'player.seek') position = params.position;
+      if (method === 'player.stop') { currentSource = ''; currentContent = null; }
+      accept(); return;
     }
-    response.writeHead(200, { 'Content-Type': 'application/json' }); response.end(JSON.stringify({ jsonrpc: '2.0', id, result }));
-  } catch { response.writeHead(400); response.end(); }
+    failure(response, 404, 'NOT_FOUND');
+  } catch { if (!response.headersSent) failure(response, 400, 'INVALID_INPUT'); }
 });
 const slow = http.createServer(request => request.resume());
-const deadline = http.createServer(async (request, response) => {
-  const chunks = []; for await (const bytes of request) chunks.push(bytes);
-  const { method, id } = JSON.parse(Buffer.concat(chunks).toString());
-  const result = method === 'Player.GetActivePlayers' ? [{ playerid: 1, type: 'video' }]
-    : method === 'Player.GetItem' ? { item: { file: 'https://media.example/first.m3u8' } }
-      : { speed: 1, time: { hours: 0, minutes: 0, seconds: 0 }, totaltime: { hours: 0, minutes: 22, seconds: 35 }, canseek: true };
-  setTimeout(() => { response.writeHead(200, { 'Content-Type': 'application/json' }); response.end(JSON.stringify({ jsonrpc: '2.0', id, result })); }, 1800);
-});
-let changed = false;
-const changing = http.createServer(async (request, response) => {
-  const chunks = []; for await (const bytes of request) chunks.push(bytes);
-  const { method, params, id } = JSON.parse(Buffer.concat(chunks).toString()); let result;
-  if (method === 'Player.GetActivePlayers') { changed = false; result = [{ playerid: 1, type: 'video' }]; }
-  else if (method === 'Player.GetItem') result = { item: { file: `https://media.example/${changed ? 'other' : 'first'}.m3u8` } };
-  else if (method === 'Player.GetProperties') {
-    changed = true;
-    result = params.properties.includes('subtitles')
-      ? { subtitles: [{ index: 0, name: 'Other movie', language: 'en' }], currentsubtitle: { index: 0 }, subtitleenabled: true }
-      : { speed: 1, time: { hours: 0, minutes: 0, seconds: 0 }, totaltime: { hours: 0, minutes: 22, seconds: 35 }, canseek: true };
-  }
-  response.writeHead(200, { 'Content-Type': 'application/json' }); response.end(JSON.stringify({ jsonrpc: '2.0', id, result }));
+// Every call takes 2.8 s, so the second call of one operation must hit the shared 5 s budget.
+let deadlineCalls = 0;
+const deadline = http.createServer((request, response) => {
+  deadlineCalls++; request.resume();
+  const method = route(request);
+  const result = method === 'info' ? { app: 'lumareceiver', versionName: 'slow', receiverId: 'slow' }
+    : { active: true, playing: true, paused: false, positionSeconds: 0, durationSeconds: 1355, canSeek: true, sourceUrl: FIRST };
+  const timer = setTimeout(() => { if (!response.destroyed) reply(response, 200, { ok: true, result }); }, 2800);
+  response.once('close', () => clearTimeout(timer));
 });
 let readinessReads = 0;
+const readinessSnapshots = [
+  { active: false, enabled: false, currentIndex: null, tracks: [] },
+  { active: true, enabled: false, currentIndex: null, tracks: [] },
+  { active: true, enabled: true, currentIndex: 5, tracks: [{ index: 0, name: 'English', language: 'en', supported: true }] },
+  { active: true, currentIndex: null, tracks: [] },
+  { active: true, enabled: false, currentIndex: null, tracks: 'invalid' },
+  { active: true, enabled: false, currentIndex: 0, tracks: [{ index: 0, name: 'A', language: 'en' }, { index: 0, name: 'B', language: 'en' }] },
+];
 const readiness = http.createServer(async (request, response) => {
-  const chunks = []; for await (const bytes of request) chunks.push(bytes);
-  const { method, id } = JSON.parse(Buffer.concat(chunks).toString()); let result;
-  if (method === 'Player.GetActivePlayers') result = [{ playerid: 1, type: 'video' }];
-  else if (method === 'Player.GetItem') result = { item: { file: 'https://media.example/first.m3u8' } };
-  else if (method === 'Player.GetProperties') {
-    readinessReads++;
-    result = { subtitles: [], subtitleenabled: false,
-      ...(readinessReads === 3 ? {} : { currentsubtitle: readinessReads === 1 ? null : readinessReads === 2 ? {} : 'invalid' }) };
-  }
-  response.writeHead(200, { 'Content-Type': 'application/json' }); response.end(JSON.stringify({ jsonrpc: '2.0', id, result }));
+  try {
+    assert.equal(route(request), 'player.subtitles'); assert.equal(request.headers.authorization, `Bearer ${TOKEN}`);
+    assert.equal((await body(request)).expectedSourceUrl, FIRST);
+    reply(response, 200, { ok: true, result: readinessSnapshots[readinessReads++] });
+  } catch { failure(response, 500, 'INTERNAL'); }
 });
-const openingRace = http.createServer(async (request, response) => {
-  const chunks = []; for await (const bytes of request) chunks.push(bytes);
-  const { method, id } = JSON.parse(Buffer.concat(chunks).toString()); let result;
-  if (method === 'Player.GetActivePlayers') result = openingRaceActive ? [{ playerid: 1, type: 'video' }] : [];
-  else if (method === 'Addons.GetAddonDetails') {
-    openingRaceActive = true;
-    result = { addon: { addonid: 'script.lumaremote.metadata', type: 'xbmc.python.script', enabled: true } };
-  } else if (method === 'Addons.ExecuteAddon' || method === 'Player.Open') {
-    openingRaceWrites++;
-    result = 'OK';
-  } else throw new Error(`Unexpected opening-race method ${method}`);
-  response.writeHead(200, { 'Content-Type': 'application/json' }); response.end(JSON.stringify({ jsonrpc: '2.0', id, result }));
-});
-const fallbackRace = http.createServer(async (request, response) => {
-  const chunks = []; for await (const bytes of request) chunks.push(bytes);
-  const { method, id } = JSON.parse(Buffer.concat(chunks).toString()); let result;
-  if (method === 'Player.GetActivePlayers') result = fallbackRaceActive ? [{ playerid: 1, type: 'video' }] : [];
-  else if (method === 'Addons.GetAddonDetails') {
-    fallbackRaceActive = true;
-    response.writeHead(200, { 'Content-Type': 'application/json' });
-    response.end(JSON.stringify({ jsonrpc: '2.0', id, error: { code: -32601, message: 'Method not found' } }));
-    return;
-  } else if (method === 'Addons.ExecuteAddon' || method === 'Player.Open') {
-    fallbackRaceWrites++;
-    result = 'OK';
-  } else throw new Error(`Unexpected fallback-race method ${method}`);
-  response.writeHead(200, { 'Content-Type': 'application/json' }); response.end(JSON.stringify({ jsonrpc: '2.0', id, result }));
+let malformedStatus = 0;
+const malformed = http.createServer(async (request, response) => {
+  try {
+    const method = route(request);
+    if (method === 'info') { reply(response, 200, { ok: true, result: { app: 'kodi', versionName: '21.2' } }); return; }
+    if (method === 'pair.complete') { await body(request); reply(response, 200, { ok: true, result: { token: 'not a valid token!', clientId: 'x' } }); return; }
+    assert.equal(method, 'player.status'); await body(request);
+    const snapshots = [
+      { active: true, playing: true, positionSeconds: 1, durationSeconds: 2, canSeek: true },
+      { active: 'true', playing: true, positionSeconds: 1, durationSeconds: 2, canSeek: true, sourceUrl: FIRST },
+      { active: true, playing: true, positionSeconds: 1, durationSeconds: 2, canSeek: true, sourceUrl: FIRST,
+        content: { key: 'framextv:tv:42:2:4', kind: 'tv', contentId: '42', season: 2, episode: 3, title: 'Spoofed' } },
+    ];
+    reply(response, 200, { ok: true, result: snapshots[malformedStatus++] });
+  } catch { failure(response, 500, 'INTERNAL'); }
 });
 function listen(server, port) { return new Promise((done, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', done); }); }
+const servers = [tcp, receiver, slow, deadline, readiness, malformed];
 try {
-  await listen(tcp, 8121); await listen(kodi, 0); await listen(slow, 0); await listen(deadline, 0); await listen(changing, 0); await listen(readiness, 0); await listen(openingRace, 0); await listen(fallbackRace, 0);
+  await listen(tcp, 8121); for (const server of servers.slice(1)) await listen(server, 0);
   for (const [apk, expected] of [['android/app/build/outputs/apk/debug/app-debug.apk', appPackage], ['android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk', `${appPackage}.test`]]) {
-  const { stdout: apkMetadata } = await run(resolve(androidSdk, 'build-tools/36.0.0/aapt2'), ['dump', 'badging', resolve(apk)], { timeout: 10000 });
-  assert.equal(apkMetadata.match(/^package: name='([^']+)'/mu)?.[1], expected, 'Build the intended fixture package before installing.');
+    const { stdout: apkMetadata } = await run(resolve(androidSdk, 'build-tools/36.0.0/aapt2'), ['dump', 'badging', resolve(apk)], { timeout: 10000 });
+    assert.equal(apkMetadata.match(/^package: name='([^']+)'/mu)?.[1], expected, 'Build the intended fixture package before installing.');
     await run(adb, ['-s', serial, 'install', '-r', resolve(apk)], { timeout: 60000 });
   }
-  const { stdout, stderr } = await run(adb, ['-s', serial, 'shell', 'am', 'instrument', '-w', '-e', 'targetHost', '10.0.2.2', '-e', 'kodiPort', String(kodi.address().port), '-e', 'slowPort', String(slow.address().port), '-e', 'deadlinePort', String(deadline.address().port), '-e', 'changingPort', String(changing.address().port), '-e', 'readinessPort', String(readiness.address().port), '-e', 'openingRacePort', String(openingRace.address().port), '-e', 'fallbackRacePort', String(fallbackRace.address().port), `${appPackage}.test/dev.framextv.lumaremote.BackendInstrumentation`], { timeout: 60000, maxBuffer: 128 * 1024 });
+  const { stdout, stderr } = await run(adb, ['-s', serial, 'shell', 'am', 'instrument', '-w', '-e', 'targetHost', '10.0.2.2',
+    '-e', 'receiverPort', String(receiver.address().port), '-e', 'slowPort', String(slow.address().port), '-e', 'deadlinePort', String(deadline.address().port),
+    '-e', 'readinessPort', String(readiness.address().port), '-e', 'malformedPort', String(malformed.address().port),
+    `${appPackage}.test/dev.framextv.lumaremote.BackendInstrumentation`], { timeout: 90000, maxBuffer: 128 * 1024 });
   process.stdout.write(stdout); if (stderr) process.stderr.write(stderr);
-  assert.match(stdout, /INSTRUMENTATION_RESULT: failures=0/u); assert.match(stdout, /INSTRUMENTATION_RESULT: passed=13/u); assert.match(stdout, /INSTRUMENTATION_CODE: -1/u);
+  assert.match(stdout, /INSTRUMENTATION_RESULT: failures=0/u); assert.match(stdout, /INSTRUMENTATION_RESULT: passed=14/u); assert.match(stdout, /INSTRUMENTATION_CODE: -1/u);
   assert.equal(connections, 2); assert.equal(appLists, 1);
   assert.ok(commands.includes('CONTENT\r\n1\r\n0 Olá 👋\r\n\r\n'));
   assert.equal(commands.filter(command => command === 'KEYEVENT\r\n26\r\n\r\n').length, 1);
-  assert.ok(commands.includes('STARTAPPEVNET\r\norg.xbmc.kodi\r\n\r\n'));
+  assert.ok(commands.includes('STARTAPPEVNET\r\ndev.framextv.lumareceiver\r\n\r\n'));
   assert.equal(commands.filter(command => command.startsWith('STARTAPPEVNET')).length, 1);
   assert.deepEqual(commands.filter(command => command.includes('setVolume')), ['MediaControl\r\nsetVolume 14\r\n\r\n']);
   assert.ok(commands.every(command => !/^(?:auth|CHECKPASSWORD|getServerInfo)/u.test(command)));
-  assert.deepEqual(mutations.map(message => message.method), ['Player.Open', 'Player.Open', 'Addons.ExecuteAddon', 'Player.Open', 'Addons.ExecuteAddon', 'Player.AddSubtitle', 'Player.SetSubtitle', 'Player.PlayPause', 'Player.PlayPause', 'Player.Seek', 'Player.Stop']);
-  assert.equal(mutations.find(message => message.method === 'Player.SetSubtitle').params.subtitle, 1);
-  assert.equal(addonProbes, 3);
-  assert.ok(mutations.filter(message => message.method === 'Addons.ExecuteAddon').every(message => !message.params.params[0].includes('https://')));
-  assert.equal(readinessReads, 4);
-  assert.equal(openingRaceWrites, 0);
-  assert.equal(fallbackRaceWrites, 0);
-  console.log('Native backend: 13 instrumentation checks and wire assertions passed against emulator-only fixtures.');
+  // Pairing: one window, two wrong/expired codes rejected by the receiver, then the
+  // whitespace-normalized code; the locally malformed code never reaches the wire.
+  assert.deepEqual(pairings.map(({ method, params }) => [method, params.pairingId, params.code]), [
+    ['pair.begin', undefined, undefined], ['pair.complete', PAIRING, '000000'], ['pair.complete', 'expiredPairing01', CODE], ['pair.complete', PAIRING, CODE]]);
+  assert.deepEqual(mutations.map(message => message.method), ['player.open', 'player.open', 'player.open', 'player.open', 'player.addSubtitle',
+    'player.setSubtitle', 'player.setSubtitle', 'player.pause', 'player.resume', 'player.seek', 'player.stop']);
+  const opens = mutations.filter(message => message.method === 'player.open').map(message => message.params);
+  assert.deepEqual(opens[0], { media: { url: FIRST, contentType: 'application/vnd.apple.mpegurl' }, onlyIfInactive: true });
+  assert.deepEqual(opens[1], { media: { url: FIRST, contentType: 'application/vnd.apple.mpegurl' }, onlyIfInactive: false }, 'Invalid content identity must not be forwarded.');
+  const episode = { key: 'framextv:tv:42:2:3', kind: 'tv', contentId: '42', season: 2, episode: 3, watchUrl: 'https://framextv.cc/watch/42/2/3', title: 'Fixture Series · S2 E3' };
+  assert.deepEqual(opens[2], { media: { url: FIRST, contentType: 'application/vnd.apple.mpegurl', content: episode, title: episode.title }, onlyIfInactive: false });
+  assert.deepEqual(opens[3], { media: { url: FIRST, contentType: 'application/vnd.apple.mpegurl', content: episode, title: episode.title, resumeSeconds: 30 },
+    onlyIfInactive: false, expectedCurrentSourceUrl: FIRST, expectedCurrentContentKey: episode.key });
+  assert.deepEqual(mutations.slice(4).map(message => message.params), [
+    { track: { url: 'https://media.example/pt.vtt', select: true, language: 'pt-BR', label: 'Português' }, expectedSourceUrl: FIRST },
+    { index: 1, expectedSourceUrl: FIRST }, { index: 'off', expectedSourceUrl: FIRST },
+    { expectedSourceUrl: FIRST, expectedContentKey: episode.key }, { expectedSourceUrl: FIRST },
+    { position: 60, expectedSourceUrl: FIRST }, { expectedSourceUrl: FIRST },
+  ]);
+  assert.equal(readinessReads, 6); assert.equal(malformedStatus, 3); assert.equal(deadlineCalls, 2);
+  console.log('Native backend: 14 instrumentation checks and LUMA Receiver wire assertions passed against emulator-only fixtures.');
 } finally {
   for (const socket of sockets) socket.destroy();
-  for (const server of [tcp, kodi, slow, deadline, changing, readiness, openingRace, fallbackRace]) { server.closeAllConnections?.(); await new Promise(done => server.close(done)); }
+  for (const server of servers) { server.closeAllConnections?.(); if (server.listening) await new Promise(done => server.close(done)); }
 }

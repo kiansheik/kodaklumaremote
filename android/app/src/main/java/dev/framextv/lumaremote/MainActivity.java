@@ -635,7 +635,7 @@ public final class MainActivity extends Activity {
         }
         pendingPlayNextCheck = true;
         String target = connectionService.snapshot().optString("selectedTarget", "luma");
-        connectionService.request("philips".equals(target) ? "msx.status" : "kodi.status", new JSONObject(), new ConnectionService.Callback() {
+        connectionService.request("philips".equals(target) ? "msx.status" : "receiver.status", new JSONObject(), new ConnectionService.Callback() {
             @Override public void success(JSONObject result) { finish(true); }
             @Override public void failure(String code, String message) { finish(false); }
             private void finish(boolean observed) {

@@ -20,6 +20,6 @@ for (const [apk, expected] of [['android/app/build/outputs/apk/debug/app-debug.a
 const { stdout } = await run(adb, ['-s', serial, 'shell', 'am', 'instrument', '-w', '-e', 'mode', 'settings', `${appPackage}.test/dev.framextv.lumaremote.BackendInstrumentation`], { timeout: 60000, maxBuffer: 32768 });
 process.stdout.write(stdout);
 assert.match(stdout, /INSTRUMENTATION_RESULT: failures=0/u);
-assert.match(stdout, /INSTRUMENTATION_RESULT: passed=5/u);
+assert.match(stdout, /INSTRUMENTATION_RESULT: passed=6/u);
 assert.match(stdout, /INSTRUMENTATION_CODE: -1/u);
-console.log('Saved settings: 5 real Android Keystore, persistence, validation and reset checks passed.');
+console.log('Saved settings: 6 real Android Keystore pairing, persistence, validation, reset and legacy Kodi cleanup checks passed.');

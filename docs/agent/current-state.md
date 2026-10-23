@@ -1,6 +1,37 @@
 # Current state
 
-## Unreleased 0.4.8: cross-phone Kodi metadata and system playback controls
+## Unreleased 0.4.9: Kodi replaced by LUMA Receiver everywhere
+
+The phone app now drives [LUMA Receiver](luma-receiver.md) (`android-receiver/`,
+receiver 0.2.0 installed on the physical projector) instead of Kodi:
+`receiver.*` RPCs with unchanged result shapes, PIN pairing (encrypted token,
+legacy Kodi credentials deleted), receiver-side atomic source guards,
+connect-before-launch casting, 2 s polling, 60 s two-way Library sync, mirrored
+scrub previews and projector-persisted caption size. Releases now carry
+`luma-receiver-<v>.apk` + `receiver-update.json` instead of the Kodi add-on; the
+add-on, its packager and the Mac Kodi controller were removed. The phone version
+is already bumped to 0.4.9/code 19 by an interrupted `make deploy-gh-pages`
+(safe to rerun; it keeps the prepared version). `npm run check` passes (Node 241,
+browser 157); emulator backend 14, service 18, settings 6, subtitles 9,
+multi-receiver 5 and packaged UI 9 pass. No physical-phone test of 0.4.9 yet.
+[Handoff](session-handoffs/2026-10-23-kodi-to-luma-receiver.md).
+
+## Unreleased: Android emulator fixtures migrated from Kodi to LUMA Receiver
+
+The phone's native instrumentation and `scripts/test-android-*.mjs` fixtures now
+model the [LUMA Receiver](luma-receiver.md) LAN API (`/api/v1/*`, `{ok,result}` /
+`{ok:false,error:{code}}`, Bearer token, pairing) instead of Kodi JSON-RPC.
+Mutation assertions name receiver methods and the forwarded guard fields
+(`expectedSourceUrl`, `expectedContentKey`, `onlyIfInactive`,
+`expectedCurrent*`, `resumeSeconds`). On the API 36 ARM64 emulator, backend
+14/14, service 18/18 (new pairing and two-way Library pull/push check), settings
+6/6 (pairing token plus legacy Kodi credential deletion), subtitles 9/9 and
+multi-receiver 5/5 pass with all Node wire assertions. One source fix:
+`receiver.status` failures are observed again (stale/clear) after the
+side-channel refactor had silenced them. Signing migration and live controls
+compile only. [Handoff](session-handoffs/2026-10-23-android-receiver-fixture-migration.md).
+
+## Published 0.4.8: cross-phone Kodi metadata and system playback controls
 
 Android source is versioned as 0.4.8/code 18. A production-signed local candidate
 was built at `.local/releases/v0.4.8/luma-remote-0.4.8.apk` (9,793,842 bytes,
@@ -8,10 +39,13 @@ SHA-256 `09b72de640663539af191a4e4f32305ced99f90d65a148b8eb3bd1d9897d3202`)
 with `script.lumaremote.metadata-1.0.0.zip` (8,426 bytes, SHA-256
 `a4aa9fe6513395520d8073c13177e5d44946bd7cd8c17e80540742bc71950b8e`).
 The APK package/version/minSdk, sole production signer, update-manifest hash,
-notes and exact five-file add-on contents were independently revalidated.
-Nothing was published, installed on a phone or installed in Kodi. A debug APK
-cannot update the production-signed app. The user completed the private local
-production-signing configuration.
+notes and exact five-file add-on contents were independently revalidated. Commit
+`b59e15b` is on `main` and `origin/main`; GitHub release `v0.4.8` is public with
+the matching APK, `update.json` and add-on ZIP, and the public Pages feed returns
+0.4.8/code 18 with the exact APK hash. The APK and add-on have not yet been
+installed on the physical phone or Kodi. A debug APK cannot update the
+production-signed app. The user completed the private local production-signing
+configuration.
 `make deploy-gh-pages` is now the guarded complete-release entry point: it
 auto-increments the next patch/code, checks and signs before committing, pushes
 the exact source, publishes the APK, update manifest and deterministic Kodi
@@ -84,8 +118,9 @@ handoff 78/78; Android backend 13/13, service 17/17, subtitles 9/9, scrub
 preview 7/7 and multi-receiver 5/5; catalog/history/Library/TV-catalog/resolver
 groups 6/6/6/5/4; JVM subtitle delivery 13/13 and normalizer 25/25; and
 package/release 13/13. `assembleRelease`, release lint and final artifact
-verification also passed. No physical-phone, two-phone or physical-Kodi
-acceptance is claimed. See the
+verification also passed. The guarded full release check repeated the build,
+Node and browser suites before commit/publication. No physical-phone, two-phone
+or physical-Kodi acceptance is claimed. See the
 [metadata contract](kodi-metadata-sync.md),
 [preview profile](scrub-preview-profile.md), [subtitle profile](subtitle-provider-profile.md)
 and [handoff](session-handoffs/2026-10-22-cross-phone-metadata-and-scrub-previews.md).

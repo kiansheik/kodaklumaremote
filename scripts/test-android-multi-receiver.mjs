@@ -32,30 +32,40 @@ const tcp = net.createServer(socket => {
     }
   });
 });
-const kodi = http.createServer(async (request, response) => {
+const TOKEN = 'fixture_receiver_token_0123456789';
+function reply(response, status, body) { response.writeHead(status, {'Content-Type': 'application/json'}); response.end(JSON.stringify(body)); }
+// Minimal LUMA Receiver LAN API (android-receiver ControlServer envelope).
+const receiver = http.createServer(async (request, response) => {
   try {
-    response.setHeader('Content-Type', 'application/json');
     if (request.method === 'GET' && request.url === '/fixture') {
-      response.end(JSON.stringify({connections, stops, playing, position, mutations: mutations.length})); return;
+      reply(response, 200, {connections, stops, playing, position, mutations: mutations.length}); return;
     }
-    assert.equal(request.url, '/jsonrpc');
-    assert.equal(request.headers.authorization, `Basic ${Buffer.from('fixture:fixture').toString('base64')}`);
+    if (request.method === 'GET' && request.url === '/api/v1/info') {
+      reply(response, 200, {ok: true, result: {app: 'lumareceiver', versionName: 'fixture', receiverId: 'fixture-receiver'}}); return;
+    }
+    assert.equal(request.method, 'POST'); assert.match(request.url, /^\/api\/v1\/[a-z]+\.[A-Za-z]+$/u);
+    if (request.headers.authorization !== `Bearer ${TOKEN}`) { reply(response, 401, {ok: false, error: {code: 'UNAUTHORIZED'}}); return; }
     const chunks = []; for await (const chunk of request) chunks.push(chunk);
-    const {method, params, id} = JSON.parse(Buffer.concat(chunks).toString()); let result;
-    if (method === 'JSONRPC.Ping') result = 'pong';
-    else if (method === 'Application.GetProperties') result = {name: 'Kodi', version: {major: 21, minor: 2}};
-    else if (method === 'Player.GetActivePlayers') result = [{playerid: 1, type: 'video'}];
-    else if (method === 'Player.GetItem') result = {item: {file: currentSource}};
-    else if (method === 'Player.GetProperties') result = {speed: playing ? 1 : 0, time: {hours: Math.floor(position / 3600), minutes: Math.floor(position / 60) % 60, seconds: position % 60},
-      totaltime: {hours: 0, minutes: 2, seconds: 0}, canseek: true, subtitles: [], currentsubtitle: {index: -1}, subtitleenabled: false};
-    else {
-      mutations.push({method, params}); result = 'OK';
-      if (method === 'Player.PlayPause') playing = params.play;
-      if (method === 'Player.Seek') { const time = params.value.time; position = time.hours * 3600 + time.minutes * 60 + time.seconds; }
-      if (method === 'Player.Stop') stops++;
-    }
-    response.end(JSON.stringify({jsonrpc: '2.0', id, result}));
-  } catch { response.writeHead(400); response.end('{}'); }
+    const method = request.url.slice('/api/v1/'.length), params = JSON.parse(Buffer.concat(chunks).toString() || '{}');
+    const guarded = () => {
+      if ('expectedSourceUrl' in params && params.expectedSourceUrl !== currentSource) { reply(response, 409, {ok: false, error: {code: 'SOURCE_CHANGED'}}); return false; }
+      return true;
+    };
+    let result;
+    if (method === 'player.status') result = {revision: mutations.length, active: true, playing, paused: !playing, state: playing ? 'playing' : 'paused',
+      positionSeconds: position, durationSeconds: 120, bufferedSeconds: 120, canSeek: true, sourceUrl: currentSource, title: 'Fixture'};
+    else if (method === 'player.subtitles') result = {active: true, enabled: false, currentIndex: null, tracks: []};
+    else if (method === 'library.pull') result = {records: [], cursor: 0, more: false, origin: 'fixture-multi-receiver'};
+    else if (method === 'library.push') result = {applied: params.records.length, cursor: 0};
+    else if (['player.pause', 'player.resume', 'player.seek', 'player.stop'].includes(method)) {
+      if (!guarded()) return;
+      mutations.push({method, params}); result = {accepted: true};
+      if (method === 'player.pause' || method === 'player.resume') playing = method === 'player.resume';
+      if (method === 'player.seek') position = params.position;
+      if (method === 'player.stop') stops++;
+    } else { reply(response, 404, {ok: false, error: {code: 'NOT_FOUND'}}); return; }
+    reply(response, 200, {ok: true, result});
+  } catch { reply(response, 400, {ok: false, error: {code: 'INVALID_INPUT'}}); }
 });
 function listen(server, port) { return new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolve); }); }
 try {
@@ -67,18 +77,18 @@ try {
     const {stdout} = await run(resolve(sdk, 'build-tools/36.0.0/aapt2'), ['dump', 'badging', resolve(apk)], {timeout: 10000});
     assert.equal(stdout.match(/^package: name='([^']+)'/mu)?.[1], expected, 'Build with -PreceiverFixture=true before running.');
   }
-  await listen(tcp, 8121); await listen(kodi, 0);
+  await listen(tcp, 8121); await listen(receiver, 0);
   for (const [apk] of apks) await run(adb, ['-s', serial, 'install', '-r', resolve(apk)], {timeout: 60000});
   const {stdout: version} = await run(adb, ['-s', serial, 'shell', 'getprop', 'ro.build.version.sdk'], {timeout: 10000});
   if (Number(version.trim()) >= 33) await run(adb, ['-s', serial, 'shell', 'pm', 'grant', appPackage, 'android.permission.POST_NOTIFICATIONS'], {timeout: 10000});
   const {stdout, stderr} = await run(adb, ['-s', serial, 'shell', 'am', 'instrument', '-w', '-e', 'mode', 'multi-receiver',
-    '-e', 'targetHost', '10.0.2.2', '-e', 'kodiPort', String(kodi.address().port), `${appPackage}.test/dev.framextv.lumaremote.BackendInstrumentation`], {timeout: 90000, maxBuffer: 128 * 1024});
+    '-e', 'targetHost', '10.0.2.2', '-e', 'receiverPort', String(receiver.address().port), `${appPackage}.test/dev.framextv.lumaremote.BackendInstrumentation`], {timeout: 90000, maxBuffer: 128 * 1024});
   process.stdout.write(stdout); if (stderr) process.stderr.write(stderr);
   assert.match(stdout, /INSTRUMENTATION_RESULT: failures=0/u); assert.match(stdout, /INSTRUMENTATION_RESULT: passed=5/u); assert.match(stdout, /INSTRUMENTATION_CODE: -1/u);
   assert.equal(connections, 2); assert.equal(stops, 0); assert.equal(playing, false);
   assert.deepEqual(mutations, [
-    {method: 'Player.Seek', params: {playerid: 1, value: {time: {hours: 0, minutes: 0, seconds: 0, milliseconds: 0}}}},
-    {method: 'Player.PlayPause', params: {playerid: 1, play: false}},
+    {method: 'player.seek', params: {position: 0, expectedSourceUrl: currentSource}},
+    {method: 'player.pause', params: {expectedSourceUrl: currentSource}},
   ]);
   assert.deepEqual(keys, ['KEYEVENT\r\n22\r\n\r\n']);
   console.log('Android dual receiver: 5 independent-transport, canonical-handoff, queue, selected-system-control and disconnect checks passed.');
@@ -86,5 +96,5 @@ try {
   console.error(JSON.stringify({fixture: {connections, stops, playing, mutations: mutations.map(({method}) => method), keys: keys.length}})); throw error;
 } finally {
   for (const socket of sockets) socket.destroy();
-  for (const server of [tcp, kodi]) { server.closeAllConnections?.(); if (server.listening) await new Promise(resolve => server.close(resolve)); }
+  for (const server of [tcp, receiver]) { server.closeAllConnections?.(); if (server.listening) await new Promise(resolve => server.close(resolve)); }
 }

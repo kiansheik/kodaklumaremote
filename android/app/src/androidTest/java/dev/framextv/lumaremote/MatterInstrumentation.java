@@ -219,7 +219,7 @@ public final class MatterInstrumentation {
             require(forgotten.has("volume") && forgotten.isNull("volume") && forgotten.has("currentInput") && forgotten.isNull("currentInput"), "Local recovery retained stale volume or input state");
             require(!forgotten.getJSONObject("capabilities").getBoolean("powerOn"), "Forgotten TV retained stale power On support");
             require(!saved.contains("node") && SECRET.equals(storage.get(KEY)), "Local recovery changed controller identity or retained the node");
-            require(lumaBefore.equals(context.getSharedPreferences("luma_settings", Context.MODE_PRIVATE).getAll()), "Local TV recovery changed LUMA or Kodi setup");
+            require(lumaBefore.equals(context.getSharedPreferences("luma_settings", Context.MODE_PRIVATE).getAll()), "Local TV recovery changed LUMA receiver setup");
             field(adapter, "available", true);
             call(adapter, "matter.pair", new JSONObject().put("setupCode", "invalid fixture"), "INVALID_INPUT");
             passed(runner, ++checks, "explicit offline local recovery clears only the TV binding without claiming remote revocation");

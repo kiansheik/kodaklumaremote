@@ -84,7 +84,7 @@ public final class LiveControlsInstrumentation {
         return value.get();
     }
     private JSONObject status(long end) throws Exception {
-        return request("kodi.status", new JSONObject(), end);
+        return request("receiver.status", new JSONObject(), end);
     }
     private void exactSource(JSONObject playback) throws LiveFailure {
         require(playback.optBoolean("active") && source.equals(playback.optString("sourceUrl")), "LIVE_SOURCE_CHANGED");
@@ -231,7 +231,7 @@ public final class LiveControlsInstrumentation {
         require(service != null, "LIVE_SERVICE_UNAVAILABLE");
         // The service has one FIFO network worker. This read follows earlier
         // Pause/Play and observation requests, so do not finish while an earlier
-        // control is still waiting behind a slow multi-request Kodi operation.
+        // control is still waiting behind a slow receiver operation.
         long end = SystemClock.elapsedRealtime() + CLEANUP_MS;
         JSONObject playback = status(end);
         diagnostics.putBoolean("priorControlsDrained", true);
@@ -259,7 +259,7 @@ public final class LiveControlsInstrumentation {
         playback = status(end); exactSource(playback);
         if (!playback.optBoolean("playing")) {
             diagnostics.putBoolean("cleanupResumeAttempted", true);
-            request("kodi.resume", new JSONObject().put("expectedSourceUrl", source), end);
+            request("receiver.resume", new JSONObject().put("expectedSourceUrl", source), end);
             observed(true, end);
         }
         diagnostics.putBoolean("finalPlaying", true);
@@ -270,7 +270,7 @@ public final class LiveControlsInstrumentation {
             require(args != null && "true".equals(args.getString("confirmLivePlayback")), "LIVE_CONFIRMATION_REQUIRED");
             diagnostics.putBoolean("confirmedLivePlayback", true);
             JSONObject saved = new SettingsStore(context).metadata();
-            require(saved.optBoolean("hasReceiver") && saved.optBoolean("hasKodi"), "LIVE_SAVED_SETUP_REQUIRED");
+            require(saved.optBoolean("hasReceiver") && saved.optBoolean("hasPairing"), "LIVE_SAVED_SETUP_REQUIRED");
             Intent launch = new Intent(context, MainActivity.class).setAction(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
             runner.startActivitySync(launch);

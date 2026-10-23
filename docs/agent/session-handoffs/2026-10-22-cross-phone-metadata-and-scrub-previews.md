@@ -47,6 +47,8 @@ subtitle downloads against DNS validation/connection races.
 - Gradle `:app:lintRelease`
 - Independent APK metadata/signature/manifest and deterministic add-on validation
 - Combined release-manifest/add-on auto-staging boundary tests (18/18)
+- User-started `make deploy-gh-pages`, followed by read-only GitHub release and
+  public Pages manifest verification
 - Gradle debug and Android-test fixture assembly with rerun tasks
 - `git diff --check`
 
@@ -85,15 +87,18 @@ subtitle downloads against DNS validation/connection races.
   match. The exact-source five-file add-on ZIP is 8,426 bytes with SHA-256
   `a4aa9fe6513395520d8073c13177e5d44946bd7cd8c17e80540742bc71950b8e`.
 - Auto-staging explicitly ignores the existing local web-receiver docs, dev
-  script, Android receiver tree and header capture; the final staged index stayed
-  empty and those unrelated files remained untracked.
+  script, Android receiver tree and header capture; the release commit contains
+  only the intended feature scope and those unrelated files remain untracked.
+- Guarded release commit `b59e15b` reached `origin/main`. Public GitHub release
+  `v0.4.8` contains the matching APK, update manifest and add-on ZIP, and the
+  Pages update feed was read back as 0.4.8/code 18 with the exact APK hash.
 
 ## What failed
 
 - No sampled stream response, HLS playlist or DASH manifest exposed a usable
   provider storyboard or trick-play image track.
-- No APK/release was published or installed on a physical phone, and the add-on
-  was not installed on physical Kodi; those acceptance results remain unknown.
+- The APK was not installed on a physical phone and the add-on was not installed
+  on physical Kodi; those acceptance results remain unknown.
 - Kodi offers no atomic compare-and-open RPC. Identity changes observed by the
   final pre-write check are rejected, but a second controller can still switch in
   the narrow gap between that read and `ExecuteAddon`/`Player.Open`; the emulator

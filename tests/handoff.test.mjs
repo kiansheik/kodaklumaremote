@@ -22,8 +22,8 @@ function fixture(options = {}) {
     state.events.push({ name, time: state.time });
   };
   const adapters = {
-    receiver: { async launchKodi(opts) { record('launch', opts); await options.launch?.(state, opts); } },
-    kodi: {
+    receiver: { async launchReceiver(opts) { record('launch', opts); await options.launch?.(state, opts); } },
+    player: {
       async connect(opts) { record('connect', opts); state.connections++; return { ready: state.connections >= (options.readyAfter || 1) }; },
       async open(value, opts) {
         record('open', opts); state.opened++; state.openedAt = state.time;
@@ -63,10 +63,10 @@ function fixture(options = {}) {
     onStatus: value => state.statuses.push(value),
     ...options.coordinator,
   };
-  if (options.prepare) adapters.kodi.prepareSubtitle = async (value, opts) => {
+  if (options.prepare) adapters.player.prepareSubtitle = async (value, opts) => {
     record('prepareSubtitle', opts); state.preparations.push(value.url); return options.prepare(state, value, opts);
   };
-  if (options.delivery) adapters.kodi.subtitleDelivery = async (preparedId, value, opts) => {
+  if (options.delivery) adapters.player.subtitleDelivery = async (preparedId, value, opts) => {
     record('subtitleDelivery', opts); state.deliveries.push(preparedId); return options.delivery(state, preparedId, value, opts);
   };
   return { state, adapters, coordinator: createHandoffCoordinator(adapters) };
@@ -77,11 +77,44 @@ async function startAndSelect(fixture, request, link = track('pt-BR').url) {
   return fixture.coordinator.selectSubtitle(request, link);
 }
 
-test('handoff launches, waits for video and exposes every declared language without subtitle I/O', async () => {
+test('handoff uses an already answering receiver without launching it', async () => {
+  const f = fixture();
+  const result = await f.coordinator.start(media([track('en')]));
+  assert.deepEqual(f.state.calls.slice(0, 2), ['connect', 'status']);
+  assert.ok(!f.state.calls.includes('launch'));
+  assert.equal(f.state.connections, 1);
+  assert.equal(f.state.opened, 1);
+  assert.equal(f.state.ready.length, 1);
+  assert.equal(f.state.statuses[0].message, 'Connecting to LUMA Receiver…');
+  assert.ok(!f.state.statuses.some(item => item.step === 'launching'));
+});
+
+test('an unreachable receiver is launched once while an authentication failure stops without launching', async () => {
+  let failures = 1;
+  const unreachable = fixture();
+  const connect = unreachable.adapters.player.connect;
+  unreachable.adapters.player.connect = async opts => {
+    if (failures-- > 0) { unreachable.state.calls.push('connect'); throw Object.assign(new Error('No answer'), { code: 'RECEIVER_UNAVAILABLE' }); }
+    return connect(opts);
+  };
+  await unreachable.coordinator.start(media([]));
+  assert.deepEqual(unreachable.state.calls.filter(name => ['connect', 'launch', 'open'].includes(name)), ['connect', 'launch', 'connect', 'open']);
+
+  const unauthorized = fixture();
+  unauthorized.adapters.player.connect = async () => { throw Object.assign(new Error('Unpaired'), { code: 'RECEIVER_AUTH' }); };
+  await assert.rejects(unauthorized.coordinator.start(media([])), { code: 'ADAPTER_FAILED', adapterCode: 'RECEIVER_AUTH' });
+  assert.ok(!unauthorized.state.calls.includes('launch'));
+  assert.equal(unauthorized.state.opened, 0);
+});
+
+test('handoff launches a receiver that does not answer, waits for video and exposes every declared language without subtitle I/O', async () => {
   const f = fixture({ readyAfter: 2, tracks: [{ index: 7, language: 'en', name: 'Unknown external' }] });
   const english = track('en');
   const result = await f.coordinator.start(media([english, track('de'), track('pt-BR'), { ...english }]));
-  assert.equal(f.state.calls[0], 'launch');
+  assert.deepEqual(f.state.calls.slice(0, 3), ['connect', 'launch', 'wait']);
+  assert.equal(f.state.calls.filter(name => name === 'launch').length, 1);
+  assert.deepEqual(f.state.statuses.slice(0, 3).map(item => item.message),
+    ['Connecting to LUMA Receiver…', 'Opening LUMA Receiver on the projector…', 'Waiting for LUMA Receiver…']);
   assert.equal(f.state.connections, 2);
   assert.equal(f.state.opened, 1);
   assert.deepEqual(f.state.adds, []);
@@ -114,7 +147,7 @@ test('video becomes ready without PT-BR or subtitle readiness and leaves existin
   assert.equal(f.state.ready.length, 1);
 });
 
-test('canonical handoff requires Kodi to preserve the exact add-on identity', async () => {
+test('canonical handoff requires the receiver to preserve the exact content identity', async () => {
   const content = canonical(1);
   const verified = fixture({ open: state => { state.playback.content = content; } });
   await verified.coordinator.start({ ...media([]), content });
@@ -215,7 +248,7 @@ test('manual selection adopts an explicitly identified track without guessing un
   assert.equal(result.catalog[1].index, null);
 });
 
-test('cold Kodi accepts an early Open without playback, then a guarded retry starts the video', async () => {
+test('cold receiver accepts an early Open without playback, then a guarded retry starts the video', async () => {
   const retries = [];
   const f = fixture({
     readyAfter: 2,
@@ -652,7 +685,9 @@ test('an explicit same-source recast resumes within that run when the previous o
       assert.equal(options.onlyIfInactive, true);
     },
     wait: state => { if (retrying && state.time >= 350) receipt(); },
-    coordinator: { limits: { activeMs: 1400 } },
+    // No launch settle precedes the recast, so the retry needs the full
+    // one-second mutation spacing plus a poll inside this window.
+    coordinator: { limits: { activeMs: 2400 } },
   });
   await f.coordinator.start(media([]));
   f.state.playback = { active: false, sourceUrl: '' };
@@ -666,7 +701,7 @@ test('an explicit same-source recast resumes within that run when the previous o
 test('an unknown Open never adopts or replaces independently selected playback', async () => {
   const f = fixture({
     neverActive: true,
-    open: () => { throw Object.assign(new Error('Unavailable response'), { code: 'KODI_RESPONSE' }); },
+    open: () => { throw Object.assign(new Error('Unavailable response'), { code: 'RECEIVER_RESPONSE' }); },
     wait: state => { if (state.opened) state.playback = { active: true, sourceUrl: 'https://media.example.org/independent.m3u8' }; },
   });
   await assert.rejects(f.coordinator.start(media([track('pt-BR')])), { code: 'SOURCE_CHANGED' });
@@ -681,13 +716,13 @@ test('a verified unapplied Open rejection permits one explicit later retry', asy
     if (state.opened === 1) {
       state.playback = { active: false, sourceUrl: '' };
       options.onNotSent();
-      throw Object.assign(new Error('Private native rejection detail'), { code: 'KODI_REJECTED' });
+      throw Object.assign(new Error('Private native rejection detail'), { code: 'RECEIVER_REJECTED' });
     }
     applied++;
   } });
   const request = media([]);
-  await assert.rejects(f.coordinator.start(request), { code: 'ADAPTER_FAILED', adapterCode: 'KODI_REJECTED' });
-  assert.equal(f.state.time, 1000);
+  await assert.rejects(f.coordinator.start(request), { code: 'ADAPTER_FAILED', adapterCode: 'RECEIVER_REJECTED' });
+  assert.equal(f.state.time, 0);
   assert.equal(f.state.opened, 1);
   assert.equal(applied, 0);
   await f.coordinator.start(request);
@@ -728,7 +763,7 @@ test('cold Open retries once only after confirmed inactivity and remains bounded
   const f = fixture({ neverActive: true, coordinator: { limits: { activeMs: 3000, openRetryMs: 500 } } });
   await assert.rejects(f.coordinator.start(media([])), { code: 'VIDEO_TIMEOUT' });
   assert.equal(f.state.opened, 2);
-  assert.equal(f.state.time, 4000);
+  assert.equal(f.state.time, 3000);
   const unavailable = fixture({
     neverActive: true,
     status: state => { if (state.opened) throw new Error('Unavailable status'); },
@@ -775,7 +810,7 @@ test('manual changes validate declared choices and preserve selection on source 
   await assert.rejects(f.coordinator.selectSubtitle(request, track('en').url), { code: 'SOURCE_CHANGED' });
   assert.equal(f.state.adds.length, 1);
   f.state.playback = { active: true, sourceUrl: url };
-  f.adapters.kodi.addSubtitle = async () => { throw new Error('Fixture add failed'); };
+  f.adapters.player.addSubtitle = async () => { throw new Error('Fixture add failed'); };
   await assert.rejects(f.coordinator.selectSubtitle(request, track('en').url), { code: 'SUBTITLE_TIMEOUT' });
   assert.equal(f.state.currentIndex, 0);
   assert.equal(f.state.enabled, true);
@@ -787,10 +822,10 @@ test('startup and manual subtitle reads recover transient failures without repea
   const f = fixture({
     status: state => {
       if ((!state.opened && initial-- > 0) || (state.adds.length && postAdd-- > 0)) {
-        state.time += 1000; throw Object.assign(new Error('Transient startup read'), { code: 'KODI_UNAVAILABLE' });
+        state.time += 1000; throw Object.assign(new Error('Transient startup read'), { code: 'RECEIVER_UNAVAILABLE' });
       }
     },
-    getSubtitles: state => { if (captions-- > 0) { state.time += 1000; throw Object.assign(new Error('Transient captions'), { code: 'KODI_RESPONSE' }); } },
+    getSubtitles: state => { if (captions-- > 0) { state.time += 1000; throw Object.assign(new Error('Transient captions'), { code: 'RECEIVER_RESPONSE' }); } },
   });
   const result = await startAndSelect(f, media([track('pt-BR'), track('en')]));
   assert.equal(result.selectedIndex, 0);
@@ -830,7 +865,7 @@ test('manual subtitle readiness waits and a bounded read failure leaves the vide
 });
 
 test('manual reads stop immediately for authentication, configuration and source errors', async () => {
-  for (const code of ['KODI_AUTH', 'KODI_CONFIG', 'SOURCE_CHANGED']) {
+  for (const code of ['RECEIVER_AUTH', 'RECEIVER_CONFIG', 'SOURCE_CHANGED']) {
     const f = fixture({ getSubtitles: () => { throw Object.assign(new Error('Fixed failure'), { code }); } });
     const request = media([track('pt-BR')]);
     await f.coordinator.start(request);
@@ -841,7 +876,7 @@ test('manual reads stop immediately for authentication, configuration and source
 });
 
 test('an uncertain manual Add reconciles late registration without another Add', async () => {
-  const f = fixture({ add: state => { state.pending.push({ index: 0, polls: 3 }); throw Object.assign(new Error('Lost Add response'), { code: 'KODI_RESPONSE' }); } });
+  const f = fixture({ add: state => { state.pending.push({ index: 0, polls: 3 }); throw Object.assign(new Error('Lost Add response'), { code: 'RECEIVER_RESPONSE' }); } });
   assert.equal((await startAndSelect(f, media([track('pt-BR')]))).selectedIndex, 0);
   assert.equal(f.state.adds.length, 1);
   assert.equal(f.state.opened, 1);
@@ -849,7 +884,7 @@ test('an uncertain manual Add reconciles late registration without another Add',
 
 test('a rejected manual Portuguese request never automatically loads English; the user may choose it', async () => {
   const f = fixture({ add: (state, value, options) => {
-    if (value.url === track('pt-BR').url) { options.onNotSent(); throw Object.assign(new Error('Rejected caption'), { code: 'KODI_REJECTED' }); }
+    if (value.url === track('pt-BR').url) { options.onNotSent(); throw Object.assign(new Error('Rejected caption'), { code: 'RECEIVER_REJECTED' }); }
     state.tracks.push({ index: 3 });
   } });
   const request = media([track('pt-BR'), track('en'), track('de')]);
@@ -863,7 +898,7 @@ test('a rejected manual Portuguese request never automatically loads English; th
 });
 
 test('an uncertain manual Add without registration cannot overlap another language or reopen video', async () => {
-  const f = fixture({ add: () => { throw Object.assign(new Error('Unknown Add outcome'), { code: 'KODI_UNAVAILABLE' }); }, coordinator: { limits: { subtitleMs: 1500 } } });
+  const f = fixture({ add: () => { throw Object.assign(new Error('Unknown Add outcome'), { code: 'RECEIVER_UNAVAILABLE' }); }, coordinator: { limits: { subtitleMs: 1500 } } });
   const request = media([track('pt-BR'), track('en')]);
   await f.coordinator.start(request);
   await assert.rejects(f.coordinator.selectSubtitle(request, track('pt-BR').url), { code: 'SUBTITLE_TIMEOUT' });
@@ -874,14 +909,14 @@ test('an uncertain manual Add without registration cannot overlap another langua
 });
 
 test('a lost manual selection response reconciles the enabled track without repeating Set', async () => {
-  const f = fixture({ select: (state, index) => { state.enabled = true; state.currentIndex = index; throw Object.assign(new Error('Lost Set response'), { code: 'KODI_RESPONSE' }); } });
+  const f = fixture({ select: (state, index) => { state.enabled = true; state.currentIndex = index; throw Object.assign(new Error('Lost Set response'), { code: 'RECEIVER_RESPONSE' }); } });
   assert.equal((await startAndSelect(f, media([track('pt-BR')]))).selectedLanguage, 'pt-br');
   assert.equal(f.state.calls.filter(name => name === 'setSubtitle').length, 1);
 });
 
 test('a proved-unsent manual Add permits explicit retry without video replay', async () => {
   const f = fixture({ add: (state, value, options) => {
-    if (state.adds.length === 1) { options.onNotSent(); throw Object.assign(new Error('Rejected Add'), { code: 'KODI_REJECTED' }); }
+    if (state.adds.length === 1) { options.onNotSent(); throw Object.assign(new Error('Rejected Add'), { code: 'RECEIVER_REJECTED' }); }
     state.tracks.push({ index: 0 });
   } });
   const request = media([track('pt-BR')]);
@@ -912,14 +947,14 @@ test('source changes during manual Add or its pacing stop before subtitle select
 
 test('source navigation during launch stops before Open', async () => {
   let current = true;
-  const f = fixture({ launch: () => { current = false; } });
+  const f = fixture({ readyAfter: 2, launch: () => { current = false; } });
   await assert.rejects(f.coordinator.start(media([]), { isCurrentSource: () => current }), { code: 'SOURCE_CHANGED' });
   assert.equal(f.state.opened, 0);
 });
 
 test('cancellation and a new start suppress late launch operations', async () => {
   const launch = deferred(); let launches = 0;
-  const f = fixture({ launch: async () => { if (++launches === 1) await launch.promise; } });
+  const f = fixture({ readyAfter: 2, launch: async () => { if (++launches === 1) await launch.promise; } });
   const first = f.coordinator.start(media([]));
   const cancelled = assert.rejects(first, { code: 'CANCELLED' });
   await Promise.resolve(); await Promise.resolve();
@@ -1029,10 +1064,12 @@ test('manual selection waits for the chosen track to be observed', async () => {
 });
 
 test('launch, first connection, Open, manual Add and Set respect one-second mutation settling', async () => {
-  const f = fixture({ launch: state => { state.time += 800; }, add: state => { state.time += 200; state.tracks.push({ index: 0 }); } });
+  const f = fixture({ readyAfter: 2, launch: state => { state.time += 800; }, add: state => { state.time += 200; state.tracks.push({ index: 0 }); } });
   await startAndSelect(f, media([track('pt-BR')]));
   const at = name => f.state.events.find(event => event.name === name).time;
-  assert.ok(at('connect') - at('launch') >= 1800);
+  const launchIndex = f.state.events.findIndex(event => event.name === 'launch');
+  const connectAfterLaunch = f.state.events.find((event, index) => index > launchIndex && event.name === 'connect').time;
+  assert.ok(connectAfterLaunch - at('launch') >= 1800);
   assert.ok(at('open') - at('launch') >= 1800);
   assert.ok(at('addSubtitle') - at('open') >= 1000);
   assert.ok(at('setSubtitle') - at('addSubtitle') >= 1200);
@@ -1040,18 +1077,18 @@ test('launch, first connection, Open, manual Add and Set respect one-second muta
 
 test('cancelling the one-second launch settle sends neither connect nor Open', async () => {
   let f;
-  f = fixture({ wait: () => f.coordinator.cancel() });
+  f = fixture({ readyAfter: 2, wait: () => f.coordinator.cancel() });
   await assert.rejects(f.coordinator.start(media([])), { code: 'CANCELLED' });
-  assert.deepEqual(f.state.calls.filter(name => ['launch', 'connect', 'open'].includes(name)), ['launch']);
+  assert.deepEqual(f.state.calls.filter(name => ['launch', 'connect', 'open'].includes(name)), ['connect', 'launch']);
 });
 
 test('handoff startup, active-video and overall polling have separate bounded deadlines', async () => {
   const startup = fixture({ readyAfter: Infinity, coordinator: { limits: { startupMs: 600 } } });
-  await assert.rejects(startup.coordinator.start(media([])), { code: 'KODI_START_TIMEOUT' });
+  await assert.rejects(startup.coordinator.start(media([])), { code: 'RECEIVER_START_TIMEOUT' });
   assert.equal(startup.state.time, 600);
   const active = fixture({ neverActive: true, coordinator: { limits: { activeMs: 700 } } });
   await assert.rejects(active.coordinator.start(media([])), { code: 'VIDEO_TIMEOUT' });
-  assert.equal(active.state.time, 1700);
+  assert.equal(active.state.time, 700);
   const overall = fixture({ readyAfter: Infinity, coordinator: { limits: { overallMs: 500 } } });
   await assert.rejects(overall.coordinator.start(media([])), { code: 'HANDOFF_TIMEOUT' });
   assert.equal(overall.state.time, 500);
@@ -1059,15 +1096,15 @@ test('handoff startup, active-video and overall polling have separate bounded de
 
 test('handoff also times out an adapter promise that never settles and aborts its signal', async () => {
   let adapterSignal;
-  const f = fixture({ launch: (state, options) => { adapterSignal = options.signal; return new Promise(() => {}); }, coordinator: { limits: { startupMs: 20 } } });
-  await assert.rejects(f.coordinator.start(media([])), { code: 'KODI_START_TIMEOUT' });
+  const f = fixture({ readyAfter: 2, launch: (state, options) => { adapterSignal = options.signal; return new Promise(() => {}); }, coordinator: { limits: { startupMs: 20 } } });
+  await assert.rejects(f.coordinator.start(media([])), { code: 'RECEIVER_START_TIMEOUT' });
   assert.equal(adapterSignal.aborted, true);
 });
 
 test('handoff honors caller AbortSignal and snapshots media before any async launch', async () => {
   const launched = deferred();
   const block = deferred();
-  const f = fixture({ launch: async () => { launched.resolve(); await block.promise; } });
+  const f = fixture({ readyAfter: 2, launch: async () => { launched.resolve(); await block.promise; } });
   const controller = new AbortController();
   const first = f.coordinator.start(media([]), { signal: controller.signal });
   const cancelled = assert.rejects(first, { code: 'CANCELLED' });
@@ -1193,7 +1230,7 @@ test('prepared subtitles become ready only after selection and full response del
   const request = media([track('pt-BR'), track('en')]), result = await f.coordinator.selectSubtitle(request, track('pt-BR').url);
   assert.equal(f.state.deliveries.length, 3); assert.equal(result.catalog[0].url, track('pt-BR').url); assert.equal(result.catalog[0].preparedId, preparedId('delivered'));
   assert.equal(result.selectedLanguage, 'pt-br');
-  f.adapters.kodi.subtitleDelivery = async () => ({ downloaded: true });
+  f.adapters.player.subtitleDelivery = async () => ({ downloaded: true });
   await f.coordinator.selectSubtitle(request, track('pt-BR').url);
   assert.equal(f.state.preparations.length, 1); assert.equal(f.state.adds.length, 1); assert.equal(f.state.opened, 0);
 });
@@ -1213,7 +1250,7 @@ test('delivery timeout preserves the playing video and binding; retry observes d
 
 test('a lost prepared Add response still reconciles one registration and waits for delivery', async () => {
   const f = fixture({ playback: preparedPlayback, prepare: () => ({ preparedId: preparedId('lost') }), delivery: () => ({ downloaded: true }),
-    add: state => { state.pending.push({ index: 0, polls: 3 }); throw Object.assign(new Error('Lost acknowledgement'), { code: 'KODI_RESPONSE' }); },
+    add: state => { state.pending.push({ index: 0, polls: 3 }); throw Object.assign(new Error('Lost acknowledgement'), { code: 'RECEIVER_RESPONSE' }); },
   });
   assert.equal((await f.coordinator.selectSubtitle(media([track('pt-BR')]), track('pt-BR').url)).selectedIndex, 0);
   assert.equal(f.state.adds.length, 1); assert.equal(f.state.preparations.length, 1); assert.equal(f.state.deliveries.length, 1); assert.equal(f.state.opened, 0);
@@ -1284,7 +1321,7 @@ test('preparation and delivery caps stay bounded and malformed delivery is never
 
 test('an unresolved prepared Add blocks another language before any new preparation or mutation', async () => {
   const f = fixture({ playback: preparedPlayback, prepare: () => ({ preparedId: preparedId('unknown') }), delivery: () => ({ downloaded: false }),
-    add: () => { throw Object.assign(new Error('No write receipt'), { code: 'KODI_UNAVAILABLE' }); }, coordinator: { limits: { subtitleMs: 700 } },
+    add: () => { throw Object.assign(new Error('No write receipt'), { code: 'RECEIVER_UNAVAILABLE' }); }, coordinator: { limits: { subtitleMs: 700 } },
   });
   const request = media([track('pt-BR'), track('en')]);
   await assert.rejects(f.coordinator.selectSubtitle(request, track('pt-BR').url), { code: 'SUBTITLE_TIMEOUT' });
@@ -1359,7 +1396,7 @@ test('an expired-ticket observer cannot clear a different Add with an unknown wr
   const f = fixture({ playback: preparedPlayback, coordinator: { limits: { subtitleMs: 700 } },
     prepare: () => ({ preparedId: preparedId('unknown_write') }),
     delivery: () => { throw Object.assign(new Error('Expired'), { code: 'SUBTITLE_EXPIRED' }); },
-    add: () => { throw Object.assign(new Error('Unknown write'), { code: 'KODI_UNAVAILABLE' }); },
+    add: () => { throw Object.assign(new Error('Unknown write'), { code: 'RECEIVER_UNAVAILABLE' }); },
   });
   const request = media([track('pt-BR'), track('en')]);
   await assert.rejects(f.coordinator.selectSubtitle(request, track('pt-BR').url), { code: 'SUBTITLE_TIMEOUT' });

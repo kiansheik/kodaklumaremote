@@ -55,3 +55,23 @@ test('broken release metadata leaves download unavailable and offers the publish
   await expect(page.getByRole('link', { name: 'Ver lançamentos no GitHub' })).toHaveAttribute('href', 'https://github.com/kiansheik/kodaklumaremote/releases/latest');
   expect(await page.locator('img').count()).toBe(1);
 });
+
+test('projector download link uses the receiver feed bound to the phone release tag', async ({ page }) => {
+  const receiver = { schemaVersion: 1, packageName: 'dev.framextv.lumareceiver', versionName: '0.1.4', versionCode: 6, minSdk: 23,
+    apkUrl: 'https://github.com/kiansheik/kodaklumaremote/releases/download/v0.2.4/luma-receiver-0.1.4.apk',
+    sha256: 'b'.repeat(64), sizeBytes: 1179435, releasedAt: '2026-10-18T18:00:00Z', notes: 'Receiver.' };
+  await page.route('**/install/update.json', route => route.fulfill({ json: release }));
+  await page.route('**/install/receiver-update.json', route => route.fulfill({ json: receiver }));
+  await page.goto(`${origin}/install/`);
+  await expect(page.locator('#receiver-download')).toHaveAttribute('href', receiver.apkUrl);
+  await expect(page.locator('#receiver-status')).toContainText('LUMA Receiver 0.1.4');
+  await expect(page.getByRole('heading', { name: 'Instale o LUMA Receiver no projetor' })).toBeVisible();
+});
+
+test('a release without a receiver feed keeps the projector link disabled', async ({ page }) => {
+  await page.route('**/install/update.json', route => route.fulfill({ json: release }));
+  await page.goto(`${origin}/install/`);
+  await expect(page.locator('#receiver-status')).toContainText('ainda não está disponível');
+  await expect(page.locator('#receiver-download')).toHaveAttribute('aria-disabled', 'true');
+  await expect(page.locator('#receiver-download')).not.toHaveAttribute('href');
+});

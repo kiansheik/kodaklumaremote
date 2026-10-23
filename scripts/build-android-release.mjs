@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { copyFile, mkdir, readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { packageKodiAddon } from './package-kodi-addon.mjs';
+import { receiverAssetName } from '../site/update-manifest.js';
 
 // Local signing only. Passwords stay in environment variables and are never
 // passed as command arguments, copied into the repository, or sent to CI.
@@ -34,7 +34,6 @@ const version = gradle.match(/versionName\s+'(\d+\.\d+\.\d+)'/u)?.[1];
 if (!version) throw new Error('No release version found in Android configuration.');
 const output = resolve(root, '.local', 'releases', `v${version}`);
 await mkdir(output, { recursive: true });
-const kodiAddon = await packageKodiAddon({ outputDirectory: output });
 await run(process.env.LUMA_GRADLE_BIN || 'gradle', ['--offline', '--no-daemon', '-p', 'android', ':app:assembleRelease']);
 const apk = resolve(output, `luma-remote-${version}.apk`);
 await copyFile(resolve(root, 'android/app/build/outputs/apk/release/app-release.apk'), apk);
@@ -43,5 +42,18 @@ await run(process.execPath, ['scripts/generate-update.mjs', '--apk', apk,
   '--expected-cert-sha256', certificate,
   '--released-at', options.get('--released-at') || new Date().toISOString(),
   '--notes-file', resolve(options.get('--notes-file')), '--out', resolve(output, 'update.json')]);
+// LUMA Receiver (the projector player) ships in every phone release with its own
+// feed, signed by the same certificate so the projector can update in place.
+const receiverGradle = await readFile(resolve(root, 'android-receiver/app/build.gradle'), 'utf8');
+const receiverVersion = receiverGradle.match(/versionName\s+'(\d+\.\d+\.\d+)'/u)?.[1];
+if (!receiverVersion) throw new Error('No LUMA Receiver version found in android-receiver configuration.');
+await run(process.env.LUMA_GRADLE_BIN || 'gradle', ['--offline', '--no-daemon', '-p', 'android-receiver', ':app:assembleRelease']);
+const receiverApk = resolve(output, receiverAssetName(receiverVersion));
+await copyFile(resolve(root, 'android-receiver/app/build/outputs/apk/release/app-release.apk'), receiverApk);
+await run(process.execPath, ['scripts/generate-update.mjs', '--apk', receiverApk, '--receiver-tag', `v${version}`,
+  '--aapt2', resolve(tools, 'aapt2'), '--apksigner', resolve(tools, 'apksigner'),
+  '--expected-cert-sha256', certificate,
+  '--released-at', options.get('--released-at') || new Date().toISOString(),
+  '--notes-file', resolve(options.get('--notes-file')), '--out', resolve(output, 'receiver-update.json')]);
 await copyFile(resolve(options.get('--notes-file')), resolve(output, 'notes.txt'));
-console.log(`Signed release and ${kodiAddon.assetName} prepared in .local/releases/v${version}. No files were published.`);
+console.log(`Signed LUMA Remote ${version} and LUMA Receiver ${receiverVersion} prepared in .local/releases/v${version}. No files were published.`);

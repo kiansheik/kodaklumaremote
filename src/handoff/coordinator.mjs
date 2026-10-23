@@ -1,46 +1,46 @@
 // A JS orchestration layer for a single selected receiver. Adapters own all I/O.
 // Native/WebView adapters must honor signal. For open, expectedSourceUrl binds
-// media.url; for subtitles, require Kodi's active source to match it before I/O.
+// media.url; for subtitles, require the receiver's active source to match it before I/O.
 // JS cancellation cannot undo an already accepted command.
-// receiver.launchKodi(options); kodi.connect(options) -> {ready:true};
-// kodi.open(media, options); kodi.status(options) -> {active, sourceUrl};
-// kodi.getSubtitles(options) -> {tracks:[{index,url?}], enabled, currentIndex};
-// kodi.addSubtitle(track, options); kodi.setSubtitle(index|'off', options);
-// Optional native preparation: kodi.prepareSubtitle(track, options) returns an
-// opaque preparedId; kodi.subtitleDelivery(preparedId, track, options) reports
-// {downloaded:boolean} only after its complete response body reached Kodi.
+// receiver.launchReceiver(options); player.connect(options) -> {ready:true};
+// player.open(media, options); player.status(options) -> {active, sourceUrl};
+// player.getSubtitles(options) -> {tracks:[{index,url?}], enabled, currentIndex};
+// player.addSubtitle(track, options); player.setSubtitle(index|'off', options);
+// Optional native preparation: player.prepareSubtitle(track, options) returns an
+// opaque preparedId; player.subtitleDelivery(preparedId, track, options) reports
+// {downloaded:boolean} only after its complete response body reached the receiver.
 // addSubtitle receives options.preparedId while track.url stays the original URL.
 // remote.ready(result, options). Every options object includes AbortSignal.
 // addSubtitle options.onNotSent() may report explicit proof that this request
-// was never applied or queued, including a verified Kodi rejection or a late
+// was never applied or queued, including a verified receiver rejection or a late
 // native pre-write rejection after abort.
 // Cancellation or a timeout alone is not proof and must never call onNotSent.
 // options.phase is 'handoff' or 'remote'. A cold-start Open retry also includes
 // onlyIfInactive:true; its adapter must reject if any video became active before
-// writing Player.Open. No retry is sent while an earlier Open promise is pending.
+// opening. No retry is sent while an earlier Open promise is pending.
 // open options.onNotSent() accepts the same explicit pre-write proof as Add.
 // open options.onSettled() reports an actual native response, even when its
 // receiver write outcome is unknown. JS timeout/abort alone must not call it.
 // addSubtitle uses the same receipt callbacks. A settled Add remains globally
 // exclusive until its registration is observed for that exact media identity;
-// settlement alone cannot identify Kodi subtitle entries that omit their URL.
+// settlement alone cannot identify receiver subtitle entries that omit their URL.
 
 const MESSAGES = Object.freeze({
   INVALID_MEDIA: 'The page did not provide a supported video and subtitle list.',
   INVALID_SUBTITLE: 'Choose a subtitle declared by the selected video.',
   CANCELLED: 'Casting was cancelled.',
   SOURCE_CHANGED: 'The selected video changed. Start casting again.',
-  KODI_START_TIMEOUT: 'Kodi did not become ready in time.',
-  VIDEO_TIMEOUT: 'Kodi did not start the selected video in time.',
-  METADATA_UNAVAILABLE: 'Video started, but Kodi did not preserve LUMA metadata. Install or enable the LUMA metadata add-on in Kodi, then cast again.',
-  SUBTITLE_TIMEOUT: 'Kodi did not register a subtitle in time.',
+  RECEIVER_START_TIMEOUT: 'LUMA Receiver did not become ready in time. Check that it is installed on the projector.',
+  VIDEO_TIMEOUT: 'The projector did not start the selected video in time.',
+  METADATA_UNAVAILABLE: 'Video started without its title information. Cast it again.',
+  SUBTITLE_TIMEOUT: 'The projector did not load the subtitle in time.',
   HANDOFF_TIMEOUT: 'Casting setup took too long. Try again.',
-  SUBTITLE_BINDING: 'Kodi changed the subtitle list unexpectedly. Start the video again.',
+  SUBTITLE_BINDING: 'The subtitle list changed unexpectedly. Start the video again.',
   SUBTITLE_DOWNLOAD: 'Could not download these subtitles. Choose the language again to retry.',
   SUBTITLE_FORMAT: 'This subtitle format is not supported.',
   SUBTITLE_INVALID: 'These subtitles could not be prepared. Choose the language again.',
   SUBTITLE_TOO_LARGE: 'This subtitle file is too large.',
-  SUBTITLE_DELIVERY: 'Kodi has not downloaded these subtitles. Keep the video playing and try the language again.',
+  SUBTITLE_DELIVERY: 'The projector has not downloaded these subtitles. Keep the video playing and try the language again.',
   SUBTITLE_EXPIRED: 'The prepared subtitle is no longer available. Choose the language again.',
   ADAPTER_FAILED: 'The receiver could not complete casting setup. Try again.',
 });
@@ -54,7 +54,7 @@ export class HandoffError extends Error {
 }
 
 function fail(code) { return new HandoffError(code); }
-const TRANSIENT_ADAPTER_CODES = new Set(['KODI_UNAVAILABLE', 'TIMEOUT', 'BUSY', 'KODI_RESPONSE', 'KODI_REJECTED']);
+const TRANSIENT_ADAPTER_CODES = new Set(['RECEIVER_UNAVAILABLE', 'TIMEOUT', 'BUSY', 'RECEIVER_RESPONSE', 'RECEIVER_REJECTED']);
 const SUBTITLE_ADAPTER_CODES = new Set(['SUBTITLE_DOWNLOAD', 'SUBTITLE_FORMAT', 'SUBTITLE_INVALID', 'SUBTITLE_TOO_LARGE', 'SUBTITLE_DELIVERY', 'SUBTITLE_EXPIRED']);
 const preparedTicket = value => typeof value === 'string' && /^[A-Za-z0-9_-]{16,128}$/u.test(value);
 function safeText(value, limit) { return typeof value === 'string' ? value.replace(/[\u0000-\u001f\u007f-\u009f]/gu, '').slice(0, limit) : ''; }
@@ -129,12 +129,12 @@ function abortableWait(ms, { signal }) {
 
 /** No network, media caching, logging, credential storage or Android APIs here. */
 export function createHandoffCoordinator({
-  receiver, kodi, remote, onStatus = () => {},
+  receiver, player, remote, onStatus = () => {},
   now = () => performance.now(), wait = abortableWait,
   limits = {},
 } = {}) {
-  if (typeof receiver?.launchKodi !== 'function' || typeof remote?.ready !== 'function'
-      || ['connect', 'open', 'status', 'getSubtitles', 'addSubtitle', 'setSubtitle'].some(name => typeof kodi?.[name] !== 'function')) throw fail('ADAPTER_FAILED');
+  if (typeof receiver?.launchReceiver !== 'function' || typeof remote?.ready !== 'function'
+      || ['connect', 'open', 'status', 'getSubtitles', 'addSubtitle', 'setSubtitle'].some(name => typeof player?.[name] !== 'function')) throw fail('ADAPTER_FAILED');
   const settings = {
     startup: bounded(limits.startupMs, 60000, 60000),
     active: bounded(limits.activeMs, 30000, 30000),
@@ -206,7 +206,7 @@ export function createHandoffCoordinator({
       check(ctx);
       const fixed = fail(SUBTITLE_ADAPTER_CODES.has(error?.code) ? error.code : 'ADAPTER_FAILED');
       fixed.retryable = typeof error?.code !== 'string' || TRANSIENT_ADAPTER_CODES.has(error.code);
-      if (SUBTITLE_ADAPTER_CODES.has(error?.code) || ['SOURCE_CHANGED', 'KODI_REJECTED', 'KODI_AUTH', 'KODI_CONFIG'].includes(error?.code)) fixed.adapterCode = error.code;
+      if (SUBTITLE_ADAPTER_CODES.has(error?.code) || ['SOURCE_CHANGED', 'RECEIVER_REJECTED', 'RECEIVER_AUTH', 'RECEIVER_CONFIG'].includes(error?.code)) fixed.adapterCode = error.code;
       throw fixed;
     } finally {
       clearTimeout(timer);
@@ -252,7 +252,7 @@ export function createHandoffCoordinator({
 
   async function assertPlayback(ctx, window = stage(ctx, settings.subtitle, 'SUBTITLE_TIMEOUT'), waitForActive = false) {
     while (true) {
-      const playback = await read(ctx, options => kodi.status(options), window);
+      const playback = await read(ctx, options => player.status(options), window);
       if (playback?.active && playback.sourceUrl === ctx.media.url) {
         if (!ctx.media.content || observedContent(playback.content)?.key === ctx.media.content.key) return;
         throw fail('SOURCE_CHANGED');
@@ -264,7 +264,7 @@ export function createHandoffCoordinator({
 
   async function subtitles(ctx, window = stage(ctx, settings.subtitle, 'SUBTITLE_TIMEOUT')) {
     while (true) {
-      const snapshot = await read(ctx, options => kodi.getSubtitles(options), window);
+      const snapshot = await read(ctx, options => player.getSubtitles(options), window);
       await assertPlayback(ctx, window, true);
       if (snapshot?.active === false) { await pause(ctx, window); continue; }
       if (!snapshot || !Array.isArray(snapshot.tracks) || snapshot.tracks.length > 128) throw fail('SUBTITLE_BINDING');
@@ -308,7 +308,7 @@ export function createHandoffCoordinator({
 
   function mediaIdentity(media) {
     // A provider may reuse one HLS URL for multiple episodes. Subtitle
-    // receipts and Kodi indices belong to the canonical item, not merely the
+    // receipts and receiver indices belong to the canonical item, not merely the
     // transport URL. Legacy captures without catalog identity stay URL-only.
     return `${media.url}\n${media.content?.key || ''}`;
   }
@@ -356,7 +356,7 @@ export function createHandoffCoordinator({
 
   async function observeTracks(ctx, cache) {
     // A cancelled Add for another canonical item may still be executing in
-    // Kodi. Its eventual anonymous index cannot be reconciled against this
+    // the receiver. Its eventual anonymous index cannot be reconciled against this
     // item's list, so only explicit proof that it was not sent can release it.
     const foreign = stage(ctx, settings.subtitle, 'SUBTITLE_TIMEOUT');
     while (activeAddition && activeAddition.cache !== cache) await pause(ctx, foreign);
@@ -392,12 +392,12 @@ export function createHandoffCoordinator({
     const existing = snapshot.tracks.find(item => item.url === track.url && !cache.retiredIndices.get(track.url)?.has(item.index));
     if (existing) { cache.bindings.set(track.url, existing.index); return snapshot; }
     let preparedId = cache.prepared.get(track.url);
-    if (typeof kodi.prepareSubtitle === 'function' && !preparedId) {
-      if (typeof kodi.subtitleDelivery !== 'function') throw fail('SUBTITLE_DELIVERY');
+    if (typeof player.prepareSubtitle === 'function' && !preparedId) {
+      if (typeof player.subtitleDelivery !== 'function') throw fail('SUBTITLE_DELIVERY');
       const preparation = stage(ctx, settings.prepare, 'SUBTITLE_DOWNLOAD');
       await assertPlayback(ctx, preparation);
       let prepared;
-      try { prepared = await call(ctx, options => kodi.prepareSubtitle(track, options), preparation); }
+      try { prepared = await call(ctx, options => player.prepareSubtitle(track, options), preparation); }
       catch (error) { if (error.adapterCode === 'SOURCE_CHANGED') throw fail('SOURCE_CHANGED'); throw error; }
       if (!preparedTicket(prepared?.preparedId)) throw fail('SUBTITLE_INVALID');
       preparedId = prepared.preparedId;
@@ -416,7 +416,7 @@ export function createHandoffCoordinator({
         if (activeAddition && activeAddition !== pending) throw fail('SUBTITLE_TIMEOUT');
         activeAddition = pending;
         pending.invoked = true;
-        return kodi.addSubtitle(track, {
+        return player.addSubtitle(track, {
           ...options,
           ...(preparedId ? { preparedId } : {}),
           onNotSent() {
@@ -447,11 +447,11 @@ export function createHandoffCoordinator({
   async function preflightTrack(ctx, cache, track) {
     const preparedId = cache.prepared.get(track.url), index = cache.bindings.get(track.url);
     if (!preparedId || !Number.isInteger(index)) return;
-    if (typeof kodi.subtitleDelivery !== 'function') throw fail('SUBTITLE_DELIVERY');
+    if (typeof player.subtitleDelivery !== 'function') throw fail('SUBTITLE_DELIVERY');
     const window = stage(ctx, settings.delivery, 'SUBTITLE_DELIVERY');
     await assertPlayback(ctx, window);
     try {
-      const receipt = await call(ctx, options => kodi.subtitleDelivery(preparedId, track, options), window);
+      const receipt = await call(ctx, options => player.subtitleDelivery(preparedId, track, options), window);
       if (typeof receipt?.downloaded !== 'boolean') throw fail('SUBTITLE_DELIVERY');
     } catch (error) {
       if (error.adapterCode === 'SOURCE_CHANGED') throw fail('SOURCE_CHANGED');
@@ -473,7 +473,7 @@ export function createHandoffCoordinator({
     if (track && !Number.isInteger(index)) throw fail('SUBTITLE_BINDING');
     status(ctx, 'selecting', track ? 'Selecting the chosen subtitles…' : 'Keeping subtitles off…');
     let rejected;
-    try { await mutate(ctx, options => kodi.setSubtitle(index ?? 'off', options), stage(ctx, settings.subtitle, 'SUBTITLE_TIMEOUT'), true); }
+    try { await mutate(ctx, options => player.setSubtitle(index ?? 'off', options), stage(ctx, settings.subtitle, 'SUBTITLE_TIMEOUT'), true); }
     catch (error) {
       if (error.code !== 'ADAPTER_FAILED' || error.retryable !== true) throw error;
       rejected = error;
@@ -482,17 +482,17 @@ export function createHandoffCoordinator({
     while (true) {
       const observed = await subtitles(ctx, selection);
       if (track ? observed.enabled === true && observed.currentIndex === index : observed.enabled === false) break;
-      if (rejected?.adapterCode === 'KODI_REJECTED') throw rejected;
+      if (rejected?.adapterCode === 'RECEIVER_REJECTED') throw rejected;
       await pause(ctx, selection);
     }
     const preparedId = track && cache.prepared.get(track.url);
     if (preparedId) {
-      if (typeof kodi.subtitleDelivery !== 'function') throw fail('SUBTITLE_DELIVERY');
+      if (typeof player.subtitleDelivery !== 'function') throw fail('SUBTITLE_DELIVERY');
       const delivery = stage(ctx, settings.delivery, 'SUBTITLE_DELIVERY');
       while (true) {
         await assertPlayback(ctx, delivery);
         let receipt;
-        try { receipt = await call(ctx, options => kodi.subtitleDelivery(preparedId, track, options), delivery); }
+        try { receipt = await call(ctx, options => player.subtitleDelivery(preparedId, track, options), delivery); }
         catch (error) { if (error.adapterCode === 'SOURCE_CHANGED') throw fail('SOURCE_CHANGED'); throw error; }
         if (receipt?.downloaded === true) break;
         if (receipt?.downloaded !== false) throw fail('SUBTITLE_DELIVERY');
@@ -523,7 +523,7 @@ export function createHandoffCoordinator({
       // not overlap an old native request whose receiver outcome is unknown.
       return Promise.resolve().then(() => {
         check(ctx); attempt.invoked = true;
-        return invokeMutation(() => kodi.open(ctx.media, {
+        return invokeMutation(() => player.open(ctx.media, {
           ...options, ...(onlyIfInactive ? { onlyIfInactive: true } : {}),
           onSettled() { attempt.nativeSettled = true; forgetCompletedPlayback(); },
           onNotSent() {
@@ -561,7 +561,7 @@ export function createHandoffCoordinator({
     let selectedWithoutMetadata = false;
     while (true) {
       let playback;
-      try { playback = await call(ctx, options => kodi.status(options), active); }
+      try { playback = await call(ctx, options => player.status(options), active); }
       catch (error) {
         if (selectedWithoutMetadata && error.code === 'VIDEO_TIMEOUT') throw fail('METADATA_UNAVAILABLE');
         if (error.adapterCode === 'SOURCE_CHANGED') throw fail('SOURCE_CHANGED');
@@ -593,7 +593,7 @@ export function createHandoffCoordinator({
             // can still land after we report B ready.
             if (sameAttempt || safeOpening(attempt)) return;
           }
-          // Kodi can expose the old item's add-on tag only after the initial
+          // A receiver can expose the old item's identity only after the initial
           // contentless status. Adopt at most one stable non-target key as the
           // pre-Open identity; a second different key is a real source race.
           // A cancelled attempt for another canonical item may land after the
@@ -646,21 +646,26 @@ export function createHandoffCoordinator({
   }
 
   async function run(ctx) {
-    status(ctx, 'launching', 'Opening Kodi on the projector…');
-    const startup = stage(ctx, settings.startup, 'KODI_START_TIMEOUT');
-    await mutate(ctx, options => receiver.launchKodi(options), startup);
-    status(ctx, 'waiting', 'Waiting for Kodi…');
-    await settleMutation(ctx, startup);
-    while (true) {
-      try {
-        if ((await call(ctx, options => kodi.connect(options), startup))?.ready === true) break;
-      } catch (error) {
+    const startup = stage(ctx, settings.startup, 'RECEIVER_START_TIMEOUT');
+    const connect = async () => {
+      try { return (await call(ctx, options => player.connect(options), startup))?.ready === true; }
+      catch (error) {
         if (error.adapterCode === 'SOURCE_CHANGED') throw fail('SOURCE_CHANGED');
         if (error.code !== 'ADAPTER_FAILED' || error.retryable !== true) throw error;
+        return false;
       }
-      await pause(ctx, startup);
+    };
+    // LUMA Receiver normally runs from boot and brings itself on screen when a
+    // video opens, so only launch it over EShare when it does not answer.
+    status(ctx, 'waiting', 'Connecting to LUMA Receiver…');
+    if (!await connect()) {
+      status(ctx, 'launching', 'Opening LUMA Receiver on the projector…');
+      await mutate(ctx, options => receiver.launchReceiver(options), startup);
+      status(ctx, 'waiting', 'Waiting for LUMA Receiver…');
+      await settleMutation(ctx, startup);
+      while (!await connect()) await pause(ctx, startup);
     }
-    const initial = await read(ctx, options => kodi.status(options), startup);
+    const initial = await read(ctx, options => player.status(options), startup);
     const cache = cacheFor(ctx.media);
     const initialContent = observedContent(initial?.content);
     const conflictingOpening = activeOpening && attemptIdentity(activeOpening) !== mediaIdentity(ctx.media)

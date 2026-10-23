@@ -38,7 +38,8 @@ public final class BackendInstrumentation extends UiSmokeInstrumentation {
         JSONObject result = call("device.connect", "host", args.getString("targetHost"));
         require(result.getBoolean("connected") && "LUMA fixture".equals(result.getString("name")), "Device identity missing");
     }
-    private void configure(int port) throws Exception { call("kodi.configure", "username", "fixture", "password", "fixture", "port", port); }
+    private static final String TOKEN = "fixture_receiver_token_0123456789", CODE = "123456";
+    private void configure(int port) throws Exception { call("receiver.configure", "token", TOKEN, "port", port); }
     private void check(String name, Check action) {
         tests++;
         Bundle progress = new Bundle(); progress.putString("class", getClass().getName()); progress.putString("test", name); progress.putInt("current", tests); sendStatus(1, progress);
@@ -68,10 +69,22 @@ public final class BackendInstrumentation extends UiSmokeInstrumentation {
         if ("scrub-preview".equals(args.getString("mode"))) { ScrubPreviewInstrumentation.run(this); return; }
         backend = new NativeBackend(getTargetContext());
         backend.setSourceGuard(token -> "current".equals(token));
-        int kodiPort = Integer.parseInt(args.getString("kodiPort")), slowPort = Integer.parseInt(args.getString("slowPort"));
-        check("connection and Kodi identity", () -> {
-            connect(); configure(kodiPort);
-            JSONObject kodi = call("kodi.connect"); require(kodi.getBoolean("ready") && "Kodi".equals(kodi.getString("name")), "Kodi identity missing");
+        int receiverPort = Integer.parseInt(args.getString("receiverPort")), slowPort = Integer.parseInt(args.getString("slowPort"));
+        check("connection, pairing and receiver identity", () -> {
+            connect();
+            rejects("RECEIVER_CONFIG", "receiver.status");
+            JSONObject begun = call("receiver.pairBegin", "port", receiverPort);
+            String pairing = begun.getString("pairingId");
+            require(pairing.matches("[A-Za-z0-9_-]{8,64}") && begun.getInt("expiresInSeconds") == 120, "Pairing window missing");
+            rejects("PAIRING_CODE_WRONG", "receiver.pairComplete", "pairingId", pairing, "code", "000000");
+            rejects("PAIRING_CODE_WRONG", "receiver.pairComplete", "pairingId", pairing, "code", "12ab56");
+            rejects("PAIRING_EXPIRED", "receiver.pairComplete", "pairingId", "expiredPairing01", "code", CODE);
+            rejects("RECEIVER_CONFIG", "receiver.status");
+            JSONObject paired = call("receiver.pairComplete", "pairingId", pairing, "code", "123 456");
+            require(paired.getBoolean("configured") && TOKEN.equals(paired.getString("token")), "Issued pairing token missing");
+            JSONObject receiver = call("receiver.connect");
+            require(receiver.getBoolean("ready") && "LUMA Receiver".equals(receiver.getString("name"))
+                    && "fixture-1.0".equals(receiver.getString("version")) && "fixture-receiver".equals(receiver.getString("receiverId")), "Receiver identity missing");
         });
         check("bounded keys and Unicode text", () -> {
             call("luma.key", "key", "right"); call("luma.text", "text", "Olá 👋");
@@ -87,116 +100,146 @@ public final class BackendInstrumentation extends UiSmokeInstrumentation {
             rejects("INVALID_INPUT", "luma.powerOff", "confirmed", "true");
             call("luma.powerOff", "confirmed", true);
         });
-        check("verified app inventory and launch", () -> {
+        check("verified app inventory and receiver launch", () -> {
             JSONArray apps = call("luma.apps").getJSONArray("apps"); require(apps.length() == 2, "App inventory incomplete");
-            call("luma.launchKodi", "sourceToken", "current");
-            rejects("SOURCE_CHANGED", "luma.launchKodi", "sourceToken", "stale");
+            call("luma.launchReceiver", "sourceToken", "current");
+            rejects("SOURCE_CHANGED", "luma.launchReceiver", "sourceToken", "stale");
             rejects("APP_NOT_AVAILABLE", "luma.launchApp", "packageName", "example.not_installed");
-            rejects("INVALID_INPUT", "luma.launchApp", "packageName", "org.xbmc.kodi\r\nKEYEVENT");
+            rejects("INVALID_INPUT", "luma.launchApp", "packageName", "dev.framextv.lumareceiver\r\nKEYEVENT");
         });
         check("media open and source guards", () -> {
-            call("kodi.open", "media", media(FIRST), "expectedSourceUrl", FIRST, "sourceToken", "current");
-            JSONObject status = call("kodi.status"); require(status.getBoolean("active") && FIRST.equals(status.getString("sourceUrl")) && !status.has("content"), "Current media identity missing");
+            // The fixture starts idle, so the forwarded onlyIfInactive guard accepts this cold open.
+            call("receiver.open", "media", media(FIRST), "expectedSourceUrl", FIRST, "onlyIfInactive", true, "sourceToken", "current");
+            JSONObject status = call("receiver.status"); require(status.getBoolean("active") && FIRST.equals(status.getString("sourceUrl")) && !status.has("content"), "Current media identity missing");
             JSONObject invalid = episodeMedia(); invalid.getJSONObject("content").put("key", "framextv:tv:42:2:4");
-            call("kodi.open", "media", invalid, "sourceToken", "current");
-            require(!call("kodi.status").has("content"), "Invalid content used the metadata add-on");
-            call("kodi.open", "media", episodeMedia(), "sourceToken", "current");
-            JSONObject adopted = call("kodi.status"), content = adopted.optJSONObject("content");
+            call("receiver.open", "media", invalid, "sourceToken", "current");
+            require(!call("receiver.status").has("content"), "Invalid content identity was forwarded");
+            call("receiver.open", "media", episodeMedia(), "sourceToken", "current");
+            JSONObject adopted = call("receiver.status"), content = adopted.optJSONObject("content");
             require(content != null && "framextv:tv:42:2:3".equals(content.optString("key"))
-                    && "Fixture Series · S2 E3".equals(content.optString("title")), "Canonical Kodi metadata was not recovered");
-            // The fixture makes the next capability probe report method-not-found.
-            // That read-only failure must fall back to one legacy Player.Open.
-            call("kodi.open", "media", episodeMedia(), "sourceToken", "current");
-            require(!call("kodi.status").has("content"), "Capability fallback invented metadata");
-            call("kodi.open", "media", episodeMedia(), "sourceToken", "current");
-            require(call("kodi.status").has("content"), "Metadata transport did not recover after fallback");
-            rejects("SOURCE_CHANGED", "kodi.open", "media", episodeMedia(), "expectedSourceUrl", FIRST,
+                    && "Fixture Series · S2 E3".equals(content.optString("title")), "Canonical receiver identity was not recovered");
+            rejects("SOURCE_CHANGED", "receiver.open", "media", episodeMedia(), "expectedSourceUrl", FIRST,
                     "expectedContentKey", "framextv:tv:42:2:4", "sourceToken", "current");
-            rejects("INVALID_INPUT", "kodi.open", "media", episodeMedia(), "expectedSourceUrl", FIRST,
+            rejects("INVALID_INPUT", "receiver.open", "media", episodeMedia(), "expectedSourceUrl", FIRST,
                     "expectedContentKey", "not-a-canonical-key", "sourceToken", "current");
-            rejects("SOURCE_CHANGED", "kodi.open", "media", media(FIRST), "expectedSourceUrl", FIRST, "onlyIfInactive", true, "sourceToken", "current");
-            rejects("INVALID_INPUT", "kodi.open", "media", media(FIRST), "onlyIfInactive", "true", "sourceToken", "current");
-            rejects("SOURCE_CHANGED", "kodi.open", "media", media(FIRST), "expectedSourceUrl", FIRST, "sourceToken", "stale");
-            rejects("SOURCE_CHANGED", "kodi.open", "media", media(FIRST), "expectedSourceUrl", "https://media.example/other.m3u8", "sourceToken", "current");
-            rejects("SOURCE_CHANGED", "kodi.pause", "expectedSourceUrl", "https://media.example/other.m3u8", "sourceToken", "current");
+            // Something is playing now: the receiver rejects the forwarded onlyIfInactive guard.
+            rejects("SOURCE_CHANGED", "receiver.open", "media", media(FIRST), "expectedSourceUrl", FIRST, "onlyIfInactive", true, "sourceToken", "current");
+            rejects("INVALID_INPUT", "receiver.open", "media", media(FIRST), "onlyIfInactive", "true", "sourceToken", "current");
+            rejects("SOURCE_CHANGED", "receiver.open", "media", media(FIRST), "expectedSourceUrl", FIRST, "sourceToken", "stale");
+            rejects("SOURCE_CHANGED", "receiver.open", "media", media(FIRST), "expectedSourceUrl", "https://media.example/other.m3u8", "sourceToken", "current");
+            rejects("SOURCE_CHANGED", "receiver.pause", "expectedSourceUrl", "https://media.example/other.m3u8", "sourceToken", "current");
             rejects("SOURCE_CHANGED", "luma.setVolume", "value", 7, "expectedSourceUrl", "https://media.example/other.m3u8");
         });
-        check("cold open rechecks activity after the add-on probe", () -> {
-            configure(Integer.parseInt(args.getString("openingRacePort")));
-            try {
-                rejects("SOURCE_CHANGED", "kodi.open", "media", episodeMedia(),
-                        "expectedSourceUrl", FIRST, "onlyIfInactive", true, "sourceToken", "current");
-                configure(Integer.parseInt(args.getString("fallbackRacePort")));
-                rejects("SOURCE_CHANGED", "kodi.open", "media", episodeMedia(),
-                        "expectedSourceUrl", FIRST, "onlyIfInactive", true, "sourceToken", "current");
-            } finally { configure(kodiPort); }
+        check("receiver applies forwarded replacement guards atomically", () -> {
+            JSONObject resumed = episodeMedia().put("resumeSeconds", 30);
+            call("receiver.open", "media", resumed, "expectedCurrentSourceUrl", FIRST, "expectedCurrentContentKey", "framextv:tv:42:2:3", "sourceToken", "current");
+            require(call("receiver.status").getInt("positionSeconds") == 30, "Forwarded resume position was not applied by the receiver");
+            rejects("SOURCE_CHANGED", "receiver.open", "media", episodeMedia(), "expectedCurrentSourceUrl", FIRST,
+                    "expectedCurrentContentKey", "framextv:tv:42:2:4", "sourceToken", "current");
+            rejects("SOURCE_CHANGED", "receiver.open", "media", episodeMedia(), "expectedCurrentSourceUrl", "https://media.example/other.m3u8",
+                    "expectedCurrentContentKey", "framextv:tv:42:2:3", "sourceToken", "current");
+            rejects("INVALID_INPUT", "receiver.open", "media", episodeMedia(), "expectedCurrentSourceUrl", FIRST, "sourceToken", "current");
+            rejects("INVALID_INPUT", "receiver.open", "media", episodeMedia(), "onlyIfInactive", true, "expectedCurrentSourceUrl", FIRST,
+                    "expectedCurrentContentKey", "framextv:tv:42:2:3", "sourceToken", "current");
+            rejects("INVALID_INPUT", "receiver.open", "media", episodeMedia(), "expectedCurrentSourceUrl", FIRST,
+                    "expectedCurrentContentKey", "framextv:tv:42", "sourceToken", "current");
+            rejects("SOURCE_CHANGED", "receiver.pause", "expectedSourceUrl", FIRST, "expectedContentKey", "framextv:tv:42:2:4", "sourceToken", "current");
+            rejects("INVALID_INPUT", "receiver.pause", "expectedSourceUrl", FIRST, "expectedContentKey", "framextv:tv:42", "sourceToken", "current");
+            require(call("receiver.status").getBoolean("playing"), "A rejected guard changed playback");
         });
-        check("public URL and credential boundaries", () -> {
-            rejects("INVALID_MEDIA", "kodi.open", "media", media("http://192.168.1.2/private"), "sourceToken", "current");
-            rejects("INVALID_MEDIA", "kodi.addSubtitle", "track", data("url", "http://127.0.0.1/private"), "expectedSourceUrl", FIRST);
-            rejects("KODI_CONFIG", "kodi.configure", "username", "fixture\r\nInjected", "password", "fixture", "port", kodiPort);
+        check("public URL and pairing token boundaries", () -> {
+            rejects("INVALID_MEDIA", "receiver.open", "media", media("http://192.168.1.2/private"), "sourceToken", "current");
+            rejects("INVALID_MEDIA", "receiver.addSubtitle", "track", data("url", "http://127.0.0.1/private"), "expectedSourceUrl", FIRST);
+            rejects("RECEIVER_CONFIG", "receiver.configure", "token", TOKEN + "\r\nInjected", "port", receiverPort);
+            rejects("RECEIVER_CONFIG", "receiver.configure", "token", "short", "port", receiverPort);
+            rejects("INVALID_INPUT", "receiver.configure", "token", TOKEN, "port", 80);
+            require(call("receiver.status").getBoolean("active"), "Rejected configuration replaced the paired token");
         });
         check("subtitle identity and selection", () -> {
-            JSONArray tracks = call("kodi.getSubtitles", "expectedSourceUrl", FIRST).getJSONArray("tracks"); require(tracks.length() == 2, "Subtitle inventory incomplete");
-            call("kodi.addSubtitle", "track", data("url", "https://media.example/pt.vtt"), "expectedSourceUrl", FIRST, "sourceToken", "current");
-            call("kodi.setSubtitle", "index", 1, "expectedSourceUrl", FIRST, "sourceToken", "current");
-            rejects("INVALID_SUBTITLE", "kodi.setSubtitle", "index", 8, "expectedSourceUrl", FIRST);
-            rejects("SOURCE_CHANGED", "kodi.getSubtitles", "expectedSourceUrl", "https://media.example/other.m3u8");
+            JSONArray tracks = call("receiver.getSubtitles", "expectedSourceUrl", FIRST).getJSONArray("tracks"); require(tracks.length() == 2, "Subtitle inventory incomplete");
+            require("Português".equals(tracks.getJSONObject(1).getString("name")) && "pt-br".equals(tracks.getJSONObject(1).getString("language")), "Subtitle labels changed");
+            call("receiver.addSubtitle", "track", data("url", "https://media.example/pt.vtt", "language", "pt-BR", "label", "Português"), "expectedSourceUrl", FIRST, "sourceToken", "current");
+            call("receiver.setSubtitle", "index", 1, "expectedSourceUrl", FIRST, "sourceToken", "current");
+            call("receiver.setSubtitle", "index", "off", "expectedSourceUrl", FIRST, "sourceToken", "current");
+            rejects("INVALID_SUBTITLE", "receiver.setSubtitle", "index", 8, "expectedSourceUrl", FIRST);
+            rejects("INVALID_INPUT", "receiver.setSubtitle", "index", "8", "expectedSourceUrl", FIRST);
+            rejects("SOURCE_CHANGED", "receiver.getSubtitles", "expectedSourceUrl", "https://media.example/other.m3u8");
         });
-        check("rejected subtitle receipt versus uncertain responses", () -> {
-            rejects("KODI_REJECTED", "kodi.addSubtitle", "track", data("url", "https://media.example/rejected.vtt"), "expectedSourceUrl", FIRST);
-            rejects("KODI_RESPONSE", "kodi.addSubtitle", "track", data("url", "https://media.example/unknown.vtt"), "expectedSourceUrl", FIRST);
-            rejects("KODI_RESPONSE", "kodi.addSubtitle", "track", data("url", "https://media.example/wrong-id.vtt"), "expectedSourceUrl", FIRST);
-            rejects("KODI_RESPONSE", "kodi.addSubtitle", "track", data("url", "https://media.example/malformed.vtt"), "expectedSourceUrl", FIRST);
-            rejects("KODI_RESPONSE", "kodi.addSubtitle", "track", data("url", "https://media.example/trailing.vtt"), "expectedSourceUrl", FIRST);
-            rejects("KODI_RESPONSE", "kodi.addSubtitle", "track", data("url", "https://media.example/false-result.vtt"), "expectedSourceUrl", FIRST);
-            rejects("KODI_RESPONSE", "kodi.addSubtitle", "track", data("url", "https://media.example/null-result.vtt"), "expectedSourceUrl", FIRST);
-            rejects("KODI_REJECTED", "kodi.open", "media", media("https://media.example/rejected.m3u8"), "sourceToken", "current");
-            rejects("KODI_RESPONSE", "kodi.open", "media", media("https://media.example/unknown.m3u8"), "sourceToken", "current");
-            rejects("KODI_RESPONSE", "kodi.open", "media", media("https://media.example/false-result.m3u8"), "sourceToken", "current");
-            rejects("KODI_RESPONSE", "kodi.open", "media", media("https://media.example/null-result.m3u8"), "sourceToken", "current");
+        check("rejected receipts versus uncertain responses", () -> {
+            rejects("RECEIVER_REJECTED", "receiver.addSubtitle", "track", data("url", "https://media.example/rejected.vtt"), "expectedSourceUrl", FIRST);
+            rejects("RECEIVER_REJECTED", "receiver.addSubtitle", "track", data("url", "https://media.example/bare-4xx.vtt"), "expectedSourceUrl", FIRST);
+            rejects("RECEIVER_RESPONSE", "receiver.addSubtitle", "track", data("url", "https://media.example/unknown.vtt"), "expectedSourceUrl", FIRST);
+            rejects("RECEIVER_RESPONSE", "receiver.addSubtitle", "track", data("url", "https://media.example/missing-result.vtt"), "expectedSourceUrl", FIRST);
+            rejects("RECEIVER_RESPONSE", "receiver.addSubtitle", "track", data("url", "https://media.example/malformed.vtt"), "expectedSourceUrl", FIRST);
+            rejects("RECEIVER_RESPONSE", "receiver.addSubtitle", "track", data("url", "https://media.example/trailing.vtt"), "expectedSourceUrl", FIRST);
+            rejects("RECEIVER_RESPONSE", "receiver.addSubtitle", "track", data("url", "https://media.example/false-result.vtt"), "expectedSourceUrl", FIRST);
+            rejects("RECEIVER_RESPONSE", "receiver.addSubtitle", "track", data("url", "https://media.example/null-result.vtt"), "expectedSourceUrl", FIRST);
+            rejects("RECEIVER_REJECTED", "receiver.open", "media", media("https://media.example/rejected.m3u8"), "sourceToken", "current");
+            rejects("RECEIVER_RESPONSE", "receiver.open", "media", media("https://media.example/unknown.m3u8"), "sourceToken", "current");
+            rejects("RECEIVER_RESPONSE", "receiver.open", "media", media("https://media.example/false-result.m3u8"), "sourceToken", "current");
+            rejects("RECEIVER_RESPONSE", "receiver.open", "media", media("https://media.example/null-result.m3u8"), "sourceToken", "current");
+            rejects("INVALID_MEDIA", "receiver.open", "media", media("https://media.example/invalid-content.m3u8"), "sourceToken", "current");
+            rejects("CANNOT_SEEK", "receiver.seek", "position", 86000, "expectedSourceUrl", FIRST, "sourceToken", "current");
+            require(FIRST.equals(call("receiver.status").getString("sourceUrl")), "A rejected receipt changed playback");
         });
-        check("source changes cannot mix playback or subtitle snapshots", () -> {
-            configure(Integer.parseInt(args.getString("changingPort")));
-            try {
-                rejects("SOURCE_CHANGED", "kodi.status");
-                rejects("SOURCE_CHANGED", "kodi.getSubtitles", "expectedSourceUrl", FIRST);
-            } finally { configure(kodiPort); }
+        check("revoked pairing clears the in-memory token", () -> {
+            rejects("RECEIVER_AUTH", "receiver.addSubtitle", "track", data("url", "https://media.example/revoked.vtt"), "expectedSourceUrl", FIRST);
+            require(!backend.connectionSnapshot().getBoolean("configured"), "Revoked token remained configured");
+            rejects("RECEIVER_CONFIG", "receiver.status");
+            configure(receiverPort); require(call("receiver.status").getBoolean("active"), "A fresh token was not accepted");
         });
-        check("subtitle reads wait for the actual player before adding", () -> {
+        check("inactive and ready subtitle snapshots", () -> {
             configure(Integer.parseInt(args.getString("readinessPort")));
             try {
-                JSONObject waiting = call("kodi.getSubtitles", "expectedSourceUrl", FIRST);
-                require(!waiting.getBoolean("active") && waiting.getJSONArray("tracks").length() == 0, "Unready player was reported subtitle-ready");
-                JSONObject ready = call("kodi.getSubtitles", "expectedSourceUrl", FIRST);
+                JSONObject waiting = call("receiver.getSubtitles", "expectedSourceUrl", FIRST);
+                require(!waiting.getBoolean("active") && waiting.getJSONArray("tracks").length() == 0 && waiting.isNull("currentIndex"), "Unready player was reported subtitle-ready");
+                JSONObject ready = call("receiver.getSubtitles", "expectedSourceUrl", FIRST);
                 require(ready.getBoolean("active") && ready.getJSONArray("tracks").length() == 0, "Ready player without tracks was treated as inactive");
-                rejects("KODI_RESPONSE", "kodi.getSubtitles", "expectedSourceUrl", FIRST);
-                rejects("KODI_RESPONSE", "kodi.getSubtitles", "expectedSourceUrl", FIRST);
-            } finally { configure(kodiPort); }
+                JSONObject unknown = call("receiver.getSubtitles", "expectedSourceUrl", FIRST);
+                require(unknown.getBoolean("active") && unknown.getJSONArray("tracks").length() == 1 && unknown.isNull("currentIndex"), "An unlisted current index was trusted");
+                rejects("RECEIVER_RESPONSE", "receiver.getSubtitles", "expectedSourceUrl", FIRST);
+                rejects("RECEIVER_RESPONSE", "receiver.getSubtitles", "expectedSourceUrl", FIRST);
+                rejects("RECEIVER_RESPONSE", "receiver.getSubtitles", "expectedSourceUrl", FIRST);
+            } finally { configure(receiverPort); }
         });
-        check("one bounded deadline covers every RPC in a status read", () -> {
+        check("malformed status and identity fail closed", () -> {
+            int malformed = Integer.parseInt(args.getString("malformedPort"));
+            configure(malformed);
+            try {
+                rejects("RECEIVER_RESPONSE", "receiver.status");
+                rejects("RECEIVER_RESPONSE", "receiver.status");
+                JSONObject spoofed = call("receiver.status");
+                require(spoofed.getBoolean("active") && !spoofed.has("content"), "A non-canonical receiver identity was adopted");
+                rejects("RECEIVER_RESPONSE", "receiver.connect");
+                rejects("RECEIVER_RESPONSE", "receiver.pairBegin", "port", malformed);
+                rejects("RECEIVER_RESPONSE", "receiver.pairComplete", "pairingId", "fixturePairing01", "code", CODE, "port", malformed);
+            } finally { configure(receiverPort); }
+        });
+        check("one bounded deadline covers every call in an operation", () -> {
             configure(Integer.parseInt(args.getString("deadlinePort")));
             long before = SystemClock.elapsedRealtime();
             try {
-                rejects("KODI_UNAVAILABLE", "kodi.status");
+                rejects("RECEIVER_UNAVAILABLE", "receiver.connect");
                 long duration = SystemClock.elapsedRealtime() - before;
-                require(duration >= 4000 && duration < 6500, "Status read exceeded its overall deadline");
-            } finally { configure(kodiPort); }
-            require(call("kodi.status").getBoolean("active"), "Expired read affected the next operation");
+                require(duration >= 4000 && duration < 6500, "Receiver connect exceeded its overall deadline");
+            } finally { configure(receiverPort); }
+            require(call("receiver.status").getBoolean("active"), "Expired read affected the next operation");
         });
         check("explicit pause resume seek stop", () -> {
-            call("kodi.pause", "expectedSourceUrl", FIRST, "sourceToken", "current");
-            call("kodi.resume", "expectedSourceUrl", FIRST, "sourceToken", "current");
-            call("kodi.seek", "position", 60, "expectedSourceUrl", FIRST, "sourceToken", "current");
-            require(call("kodi.status").getInt("positionSeconds") == 60, "Seek value not serialized correctly");
-            call("kodi.stop", "expectedSourceUrl", FIRST, "sourceToken", "current"); require(!call("kodi.status").getBoolean("active"), "Stop not observed");
+            call("receiver.pause", "expectedSourceUrl", FIRST, "expectedContentKey", "framextv:tv:42:2:3", "sourceToken", "current");
+            require(!call("receiver.status").getBoolean("playing"), "Pause not observed");
+            call("receiver.resume", "expectedSourceUrl", FIRST, "sourceToken", "current");
+            call("receiver.seek", "position", 60, "expectedSourceUrl", FIRST, "sourceToken", "current");
+            require(call("receiver.status").getInt("positionSeconds") == 60, "Seek value not serialized correctly");
+            call("receiver.stop", "expectedSourceUrl", FIRST, "sourceToken", "current"); require(!call("receiver.status").getBoolean("active"), "Stop not observed");
+            rejects("NO_VIDEO", "receiver.pause", "expectedSourceUrl", FIRST, "sourceToken", "current");
         });
         check("closed TCP reconnect and nonblocking close", () -> {
             call("luma.key", "key", "left"); Thread.sleep(100);
             try { call("luma.status"); throw new AssertionError("Closed fixture socket was accepted"); }
             catch (NativeBackend.BackendException expected) { require(expected.code.equals("INVALID_RESPONSE") || expected.code.equals("CONNECTION_FAILED") || expected.code.equals("NOT_CONNECTED"), "Unexpected closed-socket error"); }
             connect(); configure(slowPort);
-            Thread request = new Thread(() -> { try { call("kodi.status"); } catch (Exception ignored) {} }); request.start(); Thread.sleep(150);
+            Thread request = new Thread(() -> { try { call("receiver.status"); } catch (Exception ignored) {} }); request.start(); Thread.sleep(150);
             long before = SystemClock.elapsedRealtime(); backend.close(); require(SystemClock.elapsedRealtime() - before < 300, "close blocked the caller");
             request.join(5500); require(!request.isAlive(), "Network cancellation remained active");
         });

@@ -108,6 +108,18 @@ public final class LibraryStore implements AutoCloseable {
         }
         schedule();
     }
+    /** Progress rows changed after {@code updatedAfter}, oldest first, for receiver sync. Read-only. */
+    public JSONArray progressSince(long updatedAfter, int limit) {
+        JSONArray result = new JSONArray();
+        synchronized (lock) {
+            if (closed || database == null) return result;
+            try (Cursor rows = database.rawQuery("SELECT record FROM progress WHERE updated_at>? ORDER BY updated_at LIMIT ?",
+                    new String[] {Long.toString(updatedAfter), Integer.toString(Math.max(1, Math.min(limit, 500)))})) {
+                while (rows.moveToNext()) { JSONObject record = json(rows.getString(0)); if (record != null) result.put(record); }
+            } catch (RuntimeException failed) { available = false; }
+        }
+        return result;
+    }
     /** Offline, read-only and paginated; this method never schedules enrichment. */
     public JSONObject list(JSONObject params) throws LibraryException {
         fields(params, "offset", "limit", "query"); int offset = integer(params, "offset", 0, 1000000000, 0), limit = integer(params, "limit", 1, 100, 50);

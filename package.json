@@ -12,11 +12,11 @@
     "demo": "node scripts/demo-server.mjs",
     "smoke:cast": "node scripts/public-cast-smoke.mjs",
     "discover:tv": "node scripts/discover-tv.mjs",
-    "kodi": "node scripts/kodi-controller.mjs",
     "luma": "node scripts/luma-controller.mjs",
     "build:mobile": "node scripts/build-mobile.mjs",
     "release:android": "node scripts/build-android-release.mjs",
-    "publish:android": "node scripts/publish-android-release.mjs"
+    "publish:android": "node scripts/publish-android-release.mjs",
+    "receiver": "node scripts/receiver-dev.mjs"
   },
   "devDependencies": {
     "@playwright/test": "1.64.0",

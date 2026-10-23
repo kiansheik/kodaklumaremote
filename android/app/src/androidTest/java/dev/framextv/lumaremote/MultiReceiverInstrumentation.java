@@ -96,7 +96,7 @@ public final class MultiReceiverInstrumentation {
             }
         } finally { connection.disconnect(); }
     }
-    private JSONObject fixture() throws Exception { return request("http://10.0.2.2:" + arguments.getString("kodiPort") + "/fixture", null); }
+    private JSONObject fixture() throws Exception { return request("http://10.0.2.2:" + arguments.getString("receiverPort") + "/fixture", null); }
     private void tvState() throws Exception { tvState(true); }
     private void tvState(boolean active) throws Exception {
         request(base + "state", object("client", CLIENT, "sessionId", session, "playback", object("active", active, "source", tvSource,
@@ -123,13 +123,13 @@ public final class MultiReceiverInstrumentation {
     }
     private void connectLuma() throws Exception {
         call("device.connect", "host", "10.0.2.2");
-        call("kodi.configure", "username", "fixture", "password", "fixture", "port", Integer.parseInt(arguments.getString("kodiPort")));
-        require(call("kodi.connect").getBoolean("ready"), "Kodi API not ready"); call("kodi.status");
+        call("receiver.configure", "token", "fixture_receiver_token_0123456789", "port", Integer.parseInt(arguments.getString("receiverPort")));
+        require(call("receiver.connect").getBoolean("ready"), "LUMA Receiver API not ready"); call("receiver.status");
     }
     private void bothConnected() throws Exception {
         require(service.snapshot().getJSONObject("connection").getBoolean("connected"), "LUMA transport disconnected");
         require(call("msx.status").getBoolean("connected"), "TV transport disconnected");
-        require(call("kodi.status").getBoolean("active"), "Independent Kodi playback disappeared");
+        require(call("receiver.status").getBoolean("active"), "Independent receiver playback disappeared");
     }
     private PendingCall open(String source) throws Exception {
         runner.runOnMainSync(() -> service.authorizeToken("multi-current", "philips"));
@@ -243,7 +243,7 @@ public final class MultiReceiverInstrumentation {
             PendingCall retainedCapture = submit("msx.open", "source", FIRST, "mimeType", "application/vnd.apple.mpegurl", "title", "TV fixture", "subtitles", new JSONArray(), "sourceToken", "multi-current");
             JSONObject captured = nextCommand(); require(FIRST.equals(captured.getJSONObject("params").getString("source")), "Sample replaced capture authorization");
             tvSource = FIRST; acknowledge(captured); require(await(retainedCapture, 4).getBoolean("accepted"), "Captured source failed after sample");
-            passed("both receiver transports survive selected-target changes with Kodi API ready");
+            passed("both receiver transports survive selected-target changes with LUMA Receiver API ready");
 
             phase = "independent queues";
             PendingCall opening = open(SECOND); JSONObject delivered = nextCommand();
@@ -278,7 +278,7 @@ public final class MultiReceiverInstrumentation {
             passed("TV handoff retains canonical metadata and progress even though MSX exposes only the exact source");
 
             phase = "selected system controls";
-            call("app.selectTarget", "target", "luma"); call("kodi.status"); rememberLuma();
+            call("app.selectTarget", "target", "luma"); call("receiver.status"); rememberLuma();
             Notification lumaCard = waitCard("LUMA fixture video", "Pause"); PendingIntent staleLumaPause = action(lumaCard, "Pause");
             PendingIntent staleLumaBack = action(lumaCard, "Back 30 seconds");
             MediaController controller = new MediaController(context, service.getMediaSessionToken());
@@ -320,7 +320,7 @@ public final class MultiReceiverInstrumentation {
             before = SystemClock.elapsedRealtime(); call("msx.disconnect"); require(SystemClock.elapsedRealtime() - before < 1500, "TV disconnect blocked behind delivered Open");
             require(call("msx.status").getString("browserSetupUrl").isEmpty(), "Stopped server retained a browser setup URL");
             require(pending.ready.await(3, TimeUnit.SECONDS) && pending.error.get() != null, "TV disconnect did not cancel pending caller");
-            require(service.snapshot().getJSONObject("connection").getBoolean("connected") && call("kodi.status").getBoolean("active"), "TV disconnect closed or stopped LUMA");
+            require(service.snapshot().getJSONObject("connection").getBoolean("connected") && call("receiver.status").getBoolean("active"), "TV disconnect closed or stopped LUMA");
             require(!received.contains("stop") && FOURTH.equals(tvSource) && fixture().getInt("stops") == 0, "Disconnect sent a playback Stop");
             passed("TV disconnect immediately cancels its pending receipt while independent playback and LUMA survive");
             result.putInt("passed", checks); result.putInt("failures", 0);
