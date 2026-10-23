@@ -635,7 +635,13 @@ public final class MsxInstrumentation {
             require(!server.status().has("pendingCommand") && "SUBTITLE_FAILED".equals(server.status().getJSONObject("lastCommand").getString("error")), "Late receiver failure was lost");
             passed(runner, ++checks, "delivered timeout remains unknown and late acknowledgement resolves safe receipt");
 
+            String originalPeer = new URL(origin).getHost(), movedPeer = "192.168.50.9";
+            rejects("MSX_PAIRING", () -> target.rebindApprovedPeer("8.8.8.8"));
+            server.rebindApprovedPeer(movedPeer);
+            require(movedPeer.equals(server.status().getString("host")) && server.hasSavedReceiver() && !server.status().getBoolean("connected"), "Matter peer rebind lost approval or retained a stale session");
             int stablePort = server.status().getInt("port"); server.close(); server = new MsxServer(runner.getTargetContext());
+            require(movedPeer.equals(server.status().getString("host")), "Matter peer rebind did not persist");
+            server.rebindApprovedPeer(originalPeer);
             require(server.hasSavedReceiver() && origin.equals(server.start().getString("startupUrl")) && server.status().getInt("port") == stablePort, "Approved receiver or startup address did not persist");
             require(home.equals(request(origin + "/msx/start.json", null, 200).getString("parameter").substring("content:".length())), "Persistent token changed");
             server.reset(); server.start(); request(home, null, 404);

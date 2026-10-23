@@ -1298,7 +1298,10 @@ public final class ConnectionService extends Service {
                             if ("msx.textPairRequest".equals(method)) result = televisionText.pairRequest(host);
                             else if (grant) televisionText.pairGrant(host, args.optString("pin"));
                             else if ("msx.launchBrowser".equals(method)) result = televisionText.launchBrowser(host, television.status().optString("startupUrl"));
-                            else if ("msx.typeBrowserAddress".equals(method)) result = televisionText.typeBrowserAddress(host, television.status().optString("startupUrl"), args.optString("address"));
+                            else if ("msx.typeBrowserAddress".equals(method)) {
+                                if ("phone".equals(args.optString("address"))) television.rebindApprovedPeer(host);
+                                result = televisionText.typeBrowserAddress(host, television.status().optString("startupUrl"), args.optString("address"));
+                            }
                             else result = televisionText.typeAddress(host, television.status().optString("startupUrl"));
                         } catch (PhilipsTextController.TextException failure) { error = failure.code; }
                         catch (Exception invalid) { error = "TEXT_REJECTED"; }

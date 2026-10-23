@@ -1083,3 +1083,11 @@
   natively), Move and Play-on-both with drift control, LUMA brightness via
   a SurfaceView-safe tint overlay, Library >64-track fix, per-title subtitle
   memory, indefinite source cache. Receiver 0.3.2. Philips untested physically.
+- 2026-10-23 Philips launcher follow-up: the obsolete `192.168.1…` suggestion
+  was replaced by blank IP-only entry and native autofill of the phone's actual
+  listener host. A reachable listener returning HTTP403 `REQUEST_REJECTED` then
+  isolated a second fault: receiver approval remained pinned to the TV's old
+  DHCP address. The 0.4.16 candidate safely rebinds an existing approval to the
+  current private Matter-authenticated peer before autofill, preserves receiver
+  identity, clears the stale session and persists the peer. Android app and
+  AndroidTest compilation pass; real-TV validation remains.

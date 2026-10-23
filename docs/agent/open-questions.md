@@ -158,7 +158,12 @@ historical, not the current readiness state.
     the canonical LUMA page as the only speed dial. Real-TV feedback showed that
     putting the full direct receiver URL in its field was incompatible and led
     to a simple JSON rejection; the follow-up leaves the field blank and types
-    only the phone's fixed private IP. This does not yet
+    only the phone's current private IP. The old `192.168.1…` suggestion was
+    distinct from a reproduced receiver HTTP403 `REQUEST_REJECTED`: the phone
+    listener was reachable at `192.168.68…`, but its saved approval still named
+    the TV's former peer. The 0.4.16 candidate transfers that existing approval
+    only to the current private Matter-authenticated TV before phone-IP autofill
+    and persists it; this is compiled but not physically accepted. This does not yet
     prove that phone controls can foreground Internet or select the speed dial.
 12. Can the physically confirmed DIAL route launch another supported receiver?
     Exact-TV multicast discovery supplied an `Application-URL`; Netflix state

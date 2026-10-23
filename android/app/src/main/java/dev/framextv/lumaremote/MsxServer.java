@@ -241,6 +241,18 @@ public final class MsxServer implements AutoCloseable {
         }
     }
 
+    /** Move an existing receiver approval only to the authenticated Matter TV peer. */
+    public JSONObject rebindApprovedPeer(String matterHost) throws MsxException {
+        if (!privateAddress(matterHost)) throw new MsxException("MSX_PAIRING");
+        synchronized (lock) {
+            if (approvedClient.isEmpty() || approvedHost.equals(matterHost)) return snapshot();
+            clearSession(); pendingHost = pendingClient = null;
+            approvedHost = matterHost;
+            preferences.edit().putString("peer", approvedHost).commit();
+            return snapshot();
+        }
+    }
+
     /** Reset setup, not TV playback. A new capability prevents old pages controlling this phone. */
     public JSONObject reset() {
         synchronized (lock) {

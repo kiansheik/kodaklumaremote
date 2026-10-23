@@ -1,6 +1,6 @@
 # Current state
 
-## Philips IP-only launcher autofill candidate
+## Philips IP-only launcher and receiver-peer rebind candidate
 
 - The stable TV launcher now begins with a focused, empty 15-character field
   and accepts only a private IPv4 address. Protocols, ports, paths and public
@@ -18,6 +18,15 @@
   Because that probe can be browser-blocked and does not prove receiver
   reachability, its negative state now opens the same blank autofill field with
   neutral guidance instead of claiming that the phone did not answer.
+- The previous launcher also suggested the wrong `192.168.1…` subnet; the
+  deployed IP-only flow instead derives and types the phone's actual listener
+  host (currently `192.168.68…`). A separate HTTP 403 `REQUEST_REJECTED` was
+  reproduced while the listener was healthy: the saved receiver approval was
+  still bound to the TV's former address. Before phone-IP autofill, 0.4.16 now
+  moves an existing approval to the current private Matter-authenticated TV
+  peer, preserves the receiver identity/capability, clears the stale session and
+  persists the new peer. Public addresses are rejected. Android app and
+  AndroidTest sources compile; physical Philips acceptance remains pending.
 
 ## Released 0.4.14: Philips typing rebind and one-speed-dial setup
 

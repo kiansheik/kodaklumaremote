@@ -1,0 +1,5 @@
+LUMA Remote 0.4.16
+
+Fixes a white screen after Philips direct navigation when the TV's network address changed. Before IP autofill, the app now safely moves the saved browser-receiver approval to the current authenticated Matter TV address while preserving the TV's saved receiver identity.
+
+The TV launcher continues to accept only the phone's private IP address, and an inconclusive browser probe no longer claims that the phone failed to answer.
