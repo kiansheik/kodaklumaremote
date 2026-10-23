@@ -4,9 +4,9 @@
   "versionName": "0.3.2",
   "versionCode": 16,
   "minSdk": 23,
-  "apkUrl": "https://github.com/kiansheik/kodaklumaremote/releases/download/v0.4.13/luma-receiver-0.3.2.apk",
+  "apkUrl": "https://github.com/kiansheik/kodaklumaremote/releases/download/v0.4.14/luma-receiver-0.3.2.apk",
   "sha256": "b45d3e642c988d8eac256e8813fa1613308e50fd0f7577c4929cde7869ac2fdb",
   "sizeBytes": 1134598,
-  "releasedAt": "2026-10-23T16:43:45.261Z",
-  "notes": "LUMA Remote 0.4.13\n\nPhilips receiver setup now uses the TV's Internet browser only. When the video receiver is offline, the remote says Set up TV receiver instead of attempting a launch that may fail.\n\nSelect the TV browser's address field, choose the stable kiansheik.io address or the current phone's direct backup address, then tap Type and open selected address. The phone types the URL and presses Go for you; the same action requests first-time TV typing permission when needed. The old Media Station X setup has been removed from the app.\n\nThe fixed TV page now detects the local network prefix when the browser allows it, so first setup normally needs only the phone's final IP number. It remembers the phone, checks it next time, opens it automatically when available, and shows a chooser when several phones have been saved.\n"
+  "releasedAt": "2026-10-23T16:58:37.965Z",
+  "notes": "LUMA Remote 0.4.14\n\nPhilips TV typing can now recover when the TV receives a different local network address. Tap Type and open selected address again, enter the new four-digit TV PIN, and the app replaces the saved typing permission only after the new pairing succeeds.\n\nPhilips browser setup now supports a simpler one-speed-dial flow. Save the stable LUMA page as the TV Internet browser's only speed dial, open it, then tap Autofill this phone on LUMA page. The phone types its current direct receiver URL into the focused field and presses Go. The direct browser address remains available as a backup.\n"
 }

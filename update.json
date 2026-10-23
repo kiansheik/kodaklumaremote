@@ -1,12 +1,12 @@
 {
   "schemaVersion": 1,
   "packageName": "dev.framextv.lumaremote",
-  "versionName": "0.4.13",
-  "versionCode": 23,
+  "versionName": "0.4.14",
+  "versionCode": 24,
   "minSdk": 24,
-  "apkUrl": "https://github.com/kiansheik/kodaklumaremote/releases/download/v0.4.13/luma-remote-0.4.13.apk",
-  "sha256": "4aacc6a636412fc880e67100f526fab5710ed84b01fa7b26ed753bf59343d479",
-  "sizeBytes": 9821506,
-  "releasedAt": "2026-10-23T16:43:40.471Z",
-  "notes": "LUMA Remote 0.4.13\n\nPhilips receiver setup now uses the TV's Internet browser only. When the video receiver is offline, the remote says Set up TV receiver instead of attempting a launch that may fail.\n\nSelect the TV browser's address field, choose the stable kiansheik.io address or the current phone's direct backup address, then tap Type and open selected address. The phone types the URL and presses Go for you; the same action requests first-time TV typing permission when needed. The old Media Station X setup has been removed from the app.\n\nThe fixed TV page now detects the local network prefix when the browser allows it, so first setup normally needs only the phone's final IP number. It remembers the phone, checks it next time, opens it automatically when available, and shows a chooser when several phones have been saved.\n"
+  "apkUrl": "https://github.com/kiansheik/kodaklumaremote/releases/download/v0.4.14/luma-remote-0.4.14.apk",
+  "sha256": "02d15163f0f64128f5b43e35cd32d5619fd41e6eea68ca1e0db3f685b9be9ad1",
+  "sizeBytes": 9821742,
+  "releasedAt": "2026-10-23T16:58:33.101Z",
+  "notes": "LUMA Remote 0.4.14\n\nPhilips TV typing can now recover when the TV receives a different local network address. Tap Type and open selected address again, enter the new four-digit TV PIN, and the app replaces the saved typing permission only after the new pairing succeeds.\n\nPhilips browser setup now supports a simpler one-speed-dial flow. Save the stable LUMA page as the TV Internet browser's only speed dial, open it, then tap Autofill this phone on LUMA page. The phone types its current direct receiver URL into the focused field and presses Go. The direct browser address remains available as a backup.\n"
 }
