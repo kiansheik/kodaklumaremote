@@ -1,12 +1,12 @@
 {
   "schemaVersion": 1,
   "packageName": "dev.framextv.lumaremote",
-  "versionName": "0.4.17",
-  "versionCode": 27,
+  "versionName": "0.4.18",
+  "versionCode": 28,
   "minSdk": 24,
-  "apkUrl": "https://github.com/kiansheik/kodaklumaremote/releases/download/v0.4.17/luma-remote-0.4.17.apk",
-  "sha256": "f1c3765f40ad3ad701feb2449397636a0026f8eb6344c8545320e95e9d52aa29",
-  "sizeBytes": 9821446,
-  "releasedAt": "2026-10-23T17:29:20.516Z",
-  "notes": "LUMA Remote 0.4.17\n\nMakes Philips directional-pad navigation reliable on the TV receiver page. The page no longer requests or follows a mouse pointer; tiny remote movements accumulate into one Up, Down, Left, or Right focus step, and OK activates the focused control.\n\nAlso includes the receiver approval repair from 0.4.16 for TVs whose local network address changed.\n"
+  "apkUrl": "https://github.com/kiansheik/kodaklumaremote/releases/download/v0.4.18/luma-remote-0.4.18.apk",
+  "sha256": "276c27937666ab5c68c4d02b93f98ee77b1535a4021dd1f7b3f73bc5a6afbf37",
+  "sizeBytes": 9821602,
+  "releasedAt": "2026-10-23T17:35:12.828Z",
+  "notes": "LUMA Remote 0.4.18\n\nFixes the remaining Philips REQUEST_REJECTED response when the TV's actual browser connection address differs from its Matter-resolved address. Phone-IP autofill now opens a short explicit migration window, allowing the real private-LAN connection to update the saved peer while preserving the previously approved receiver identity.\n\nAlso includes no-pointer directional navigation: small remote movements become Up, Down, Left, or Right focus steps and OK activates the focused control.\n\nAdds a Speed dial button directly below the Philips remote. It requests the TV Internet browser even when the receiver is already connected, using the saved Philips browser permission.\n"
 }
