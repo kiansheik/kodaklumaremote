@@ -1,12 +1,12 @@
 {
   "schemaVersion": 1,
   "packageName": "dev.framextv.lumaremote",
-  "versionName": "0.4.10",
-  "versionCode": 20,
+  "versionName": "0.4.11",
+  "versionCode": 21,
   "minSdk": 24,
-  "apkUrl": "https://github.com/kiansheik/kodaklumaremote/releases/download/v0.4.10/luma-remote-0.4.10.apk",
-  "sha256": "d5e275e02faeda0e8cae0a0a4c505b32b4640d4ca712e64b489644b2b21acba8",
-  "sizeBytes": 9794770,
-  "releasedAt": "2026-10-23T08:42:10.938Z",
-  "notes": "LUMA Remote 0.4.10\n\nSubtitles no longer interrupt the video. LUMA Receiver now downloads the chosen subtitle file itself and draws it, so picking or switching a language never rebuffers or reloads playback. It reads WebVTT, SRT, ASS/SSA and TTML in any common text encoding, skips individual broken lines instead of rejecting the file, removes stray positioning tags, and repairs Hebrew and Arabic files whose punctuation was stored backwards for older players. On a 63-track test episode every file now loads, including languages that previously failed.\n\nFixes subtitle tracks disappearing from the list when the provider's file name contained a space.\n\nFixes a crash when holding the scrub bar: a slow preview decode was released while still running. Slow previews now finish safely, and a single slow frame no longer disables previews for the rest of the video.\n\nThe app reconnects to the saved projector on its own after it is reopened, instead of forgetting it when the first attempt fails.\n\nLUMA Receiver keeps a smaller video buffer to reduce memory pressure on the projector, and keeps a short diagnostic log across restarts to help investigate freezes.\n"
+  "apkUrl": "https://github.com/kiansheik/kodaklumaremote/releases/download/v0.4.11/luma-remote-0.4.11.apk",
+  "sha256": "8886a891fe2b49ce1ba1c1bb64da90ecdb8f0381eb6055b06e336ff9322099de",
+  "sizeBytes": 9794978,
+  "releasedAt": "2026-10-23T09:08:44.359Z",
+  "notes": "LUMA Remote 0.4.11\n\nCasting no longer waits for the projector's native navigation service during startup. The phone connects directly to LUMA Receiver as soon as its boot-time service and saved private address are available, so a video can start while the rest of the projector is still coming online.\n\nProjector navigation, apps, volume and power reconnect separately when the native protocol becomes available. If that connection drops later, receiver playback, casting and media controls remain available while hardware-only controls are hidden.\n"
 }
