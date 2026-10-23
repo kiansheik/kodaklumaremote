@@ -1,12 +1,12 @@
 {
   "schemaVersion": 1,
   "packageName": "dev.framextv.lumareceiver",
-  "versionName": "0.3.2",
-  "versionCode": 16,
+  "versionName": "0.3.3",
+  "versionCode": 17,
   "minSdk": 23,
-  "apkUrl": "https://github.com/kiansheik/kodaklumaremote/releases/download/v0.4.22/luma-receiver-0.3.2.apk",
-  "sha256": "b45d3e642c988d8eac256e8813fa1613308e50fd0f7577c4929cde7869ac2fdb",
-  "sizeBytes": 1134598,
-  "releasedAt": "2026-10-23T18:18:26.561Z",
-  "notes": "LUMA Remote 0.4.22\n\nRestores an already-approved Philips receiver automatically after the phone app or its background service restarts. The exact saved TV may reload its private bootstrap and prove its saved browser identity without reopening pairing; different private peers still require the explicit migration and Allow TV flow.\n\nIncludes the 0.4.21 steady timeline seek queue: slow TV seeks no longer flash the phone playback controls, and repeated scrubs coalesce instead of piling up.\n"
+  "apkUrl": "https://github.com/kiansheik/kodaklumaremote/releases/download/v0.4.23/luma-receiver-0.3.3.apk",
+  "sha256": "3250643ef08f221c6176b3b0775f57bd3caef9ac6cc7b626f0c57c11f26bcafb",
+  "sizeBytes": 1134601,
+  "releasedAt": "2026-10-23T23:34:14.360Z",
+  "notes": "Saved LUMA projectors stay castable while their receiver reconnects, so a Library selection now waits for the boot receiver instead of returning to setup.\n\nLUMA Receiver 0.3.3 starts its listener and brings its own screen forward when the projector finishes booting. Native projector controls may connect later without blocking playback.\n"
 }
