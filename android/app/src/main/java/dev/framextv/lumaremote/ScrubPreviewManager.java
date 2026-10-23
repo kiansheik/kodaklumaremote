@@ -95,7 +95,8 @@ public final class ScrubPreviewManager implements AutoCloseable {
 
     private static final int WIDTH = 256, HEIGHT = 144, JPEG_QUALITY = 55;
     private static final int MAX_FRAMES = 240, MAX_FRAME_BYTES = 128 * 1024, DEFAULT_CACHE_BYTES = 12 * 1024 * 1024;
-    private static final long DEFAULT_DECODE_TIMEOUT_MILLIS = 1800;
+    // Physical 1080p HLS segments took longer than 1.8 s to decode from memory.
+    private static final long DEFAULT_DECODE_TIMEOUT_MILLIS = 5000;
     private final Object lock = new Object();
     private final SourceLoader sourceLoader;
     private final FrameExtractorFactory factory;
@@ -190,16 +191,24 @@ public final class ScrubPreviewManager implements AutoCloseable {
         // Guarded by the manager lock. The start gate makes cancellation
         // before factory.open deterministic rather than a FutureTask race.
         boolean started, cancelBeforeStart;
+        // Guarded by this task. MediaMetadataRetriever.release() during a native
+        // frame decode is a use-after-free that kills the process, so an abort
+        // while decoding only marks the task; the decoder releases on return.
+        private boolean decoding;
         DecodeTask(long generation, MediaPayload payload) { this.generation = generation; this.payload = payload; }
+        synchronized boolean beginDecode() { if (releaseRequested.get()) return false; decoding = true; return true; }
+        synchronized void endDecode() { decoding = false; }
+        synchronized void abandon() { releaseRequested.set(true); if (!decoding) scheduleRelease(this); }
         byte[] run() throws Exception {
             FrameExtractor opened = factory.open(payload.bytes);
             extractor = opened;
-            if (releaseRequested.get()) { scheduleRelease(this); throw failure("PREVIEW_UNSUPPORTED"); }
+            if (!beginDecode()) { scheduleRelease(this); throw failure("PREVIEW_UNSUPPORTED"); }
             Bitmap frame = null;
             try {
                 frame = opened.frameAt(payload.timeUs);
                 return encode(frame);
             } finally {
+                endDecode();
                 if (frame != null && !frame.isRecycled()) frame.recycle();
                 requestRelease(this);
             }
@@ -398,7 +407,8 @@ public final class ScrubPreviewManager implements AutoCloseable {
             }
             return task.future.get(decodeTimeoutMillis, TimeUnit.MILLISECONDS);
         } catch (TimeoutException timeout) {
-            synchronized (lock) { if (generation == job.generation) failedGeneration = job.generation; }
+            // Not permanent: the single active-decode slot already bounds stuck work,
+            // and later positions of the same video may decode faster.
             abortDecode(task); throw failure("PREVIEW_UNSUPPORTED");
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt(); abortDecode(task); throw failure("SOURCE_CHANGED");
@@ -434,7 +444,7 @@ public final class ScrubPreviewManager implements AutoCloseable {
             shutdown = closed && activeDecode == null;
         }
         if (future != null) future.cancel(true);
-        requestRelease(task);
+        task.abandon();
         if (shutdown) releaser.shutdown();
     }
     private void requestRelease(DecodeTask task) {

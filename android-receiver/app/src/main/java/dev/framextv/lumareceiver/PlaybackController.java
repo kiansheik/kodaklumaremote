@@ -17,6 +17,7 @@ import androidx.media3.common.TrackSelectionOverride;
 import androidx.media3.common.TrackSelectionParameters;
 import androidx.media3.common.Tracks;
 import androidx.media3.datasource.DefaultHttpDataSource;
+import androidx.media3.exoplayer.DefaultLoadControl;
 import androidx.media3.exoplayer.DefaultRenderersFactory;
 import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
@@ -44,14 +45,17 @@ final class PlaybackController implements Player.Listener {
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private final Object revisionLock = new Object();
-    private final List<MediaRequest.Subtitle> addedSubtitles = new ArrayList<>();
+    /** Receiver-rendered caption tracks, exposed at stable indices from EXTERNAL_BASE. */
+    static final int EXTERNAL_BASE = 512;
+    private final List<ExternalCaptions> externals = new ArrayList<>();
+    private final ExecutorService captionLoader = Executors.newFixedThreadPool(2);
+    private int selectedExternal = -1;
     private ExoPlayer player;
     private MediaRequest current;
     private Ui ui;
     private long revision, lastStartedAt;
-    private String error, pendingTextId;
+    private String error;
     private boolean seenPlaying, effectsApplied;
-    private int subtitleSerial;
 
     private final Runnable progressTick = new Runnable() {
         @Override public void run() {
@@ -78,12 +82,20 @@ final class PlaybackController implements Player.Listener {
     ExoPlayer player() {
         if (player == null) {
             DefaultRenderersFactory renderers = new DefaultRenderersFactory(context).setEnableDecoderFallback(true);
-            player = new ExoPlayer.Builder(context, renderers)
+            // The projector has little RAM; the default buffer held ~70 s of 1080p
+            // (about 50 MB). Keep 15-30 s and at most 24 MB.
+            DefaultLoadControl load = new DefaultLoadControl.Builder()
+                .setBufferDurationsMs(15_000, 30_000, 1_500, 3_000)
+                .setTargetBufferBytes(24 * 1024 * 1024).setPrioritizeTimeOverSizeThresholds(false).build();
+            player = new ExoPlayer.Builder(context, renderers).setLoadControl(load)
                 .setSeekBackIncrementMs(10_000).setSeekForwardIncrementMs(10_000)
                 .setAudioAttributes(new AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(), true)
                 .setWakeMode(C.WAKE_MODE_NETWORK)
                 .build();
             player.addListener(this);
+            player.addAnalyticsListener(new androidx.media3.exoplayer.analytics.AnalyticsListener() {
+                @Override public void onDroppedVideoFrames(EventTime time, int count, long elapsedMs) { droppedFrames += count; }
+            });
         }
         return player;
     }
@@ -122,18 +134,14 @@ final class PlaybackController implements Player.Listener {
         if (currentUrl != null && (current == null || !current.url.equals(currentUrl)
                 || current.content == null || !current.content.optString("key").equals(currentKey))) throw new ApiException("SOURCE_CHANGED", 409);
         recordProgress();
-        current = request; error = null; seenPlaying = false; pendingTextId = null;
-        addedSubtitles.clear(); addedSubtitles.addAll(request.subtitles);
+        current = request; error = null; seenPlaying = false;
+        externals.clear(); selectedExternal = -1;
         lastStartedAt = System.currentTimeMillis();
         ExoPlayer exo = player();
-        // Text stays enabled; preferring the first requested language picks it on load.
-        TrackSelectionParameters.Builder params = exo.getTrackSelectionParameters().buildUpon()
-            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false).clearOverrides();
-        for (MediaRequest.Subtitle subtitle : request.subtitles) {
-            if (subtitle.select && !subtitle.language.isEmpty()) { params.setPreferredTextLanguage(subtitle.language); break; }
-        }
-        exo.setTrackSelectionParameters(params.build());
+        exo.setTrackSelectionParameters(exo.getTrackSelectionParameters().buildUpon()
+            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false).clearOverrides().build());
         prepare((long) (request.resumeSeconds * 1000));
+        for (MediaRequest.Subtitle subtitle : request.subtitles) addExternal(subtitle);
         exo.setPlayWhenReady(true);
         // Casting must surface the receiver even after its screen was closed with Back.
         if (ui != null) ui.bringToFront(); else MainActivity.bringToFront(context);
@@ -146,19 +154,9 @@ final class PlaybackController implements Player.Listener {
             .setUserAgent(current.headers.containsKey("User-Agent") ? current.headers.get("User-Agent") : "LumaReceiver/1")
             .setAllowCrossProtocolRedirects(true).setConnectTimeoutMs(15_000).setReadTimeoutMs(20_000)
             .setDefaultRequestProperties(current.headers);
-        List<MediaItem.SubtitleConfiguration> subtitles = new ArrayList<>();
-        int n = 0;
-        for (MediaRequest.Subtitle subtitle : addedSubtitles) {
-            subtitles.add(new MediaItem.SubtitleConfiguration.Builder(Uri.parse(subtitle.url))
-                .setId("luma-sub-" + (n++)).setMimeType(subtitle.mimeType)
-                .setLanguage(subtitle.language.isEmpty() ? null : subtitle.language)
-                .setLabel(subtitle.label.isEmpty() ? null : subtitle.label)
-                .setSelectionFlags(subtitle.select ? C.SELECTION_FLAG_DEFAULT : 0).build());
-        }
         String mime = MediaRequest.HLS.equals(current.contentType) ? MimeTypes.APPLICATION_M3U8
             : MediaRequest.DASH.equals(current.contentType) ? MimeTypes.APPLICATION_MPD : null;
         MediaItem item = new MediaItem.Builder().setUri(current.url).setMimeType(mime)
-            .setSubtitleConfigurations(subtitles)
             .setMediaMetadata(new MediaMetadata.Builder().setTitle(current.title).build()).build();
         ExoPlayer exo = player();
         if (display.pictureAdjusted() || effectsApplied) { exo.setVideoEffects(display.effects()); effectsApplied = display.pictureAdjusted(); }
@@ -195,21 +193,57 @@ final class PlaybackController implements Player.Listener {
     void stop() {
         recordProgress();
         main.removeCallbacks(progressTick);
-        current = null; error = null; addedSubtitles.clear(); pendingTextId = null;
+        current = null; error = null; externals.clear(); selectedExternal = -1;
         if (player != null) { player.stop(); player.clearMediaItems(); }
         bump();
     }
 
-    /** Re-prepares at the current position with one more side-loaded subtitle. */
-    JSONObject addSubtitle(MediaRequest.Subtitle subtitle) throws Exception {
-        if (addedSubtitles.size() >= MediaRequest.MAX_SUBTITLES) throw new ApiException("INVALID_SUBTITLE");
-        addedSubtitles.add(subtitle);
-        boolean playing = player().getPlayWhenReady();
-        if (subtitle.select) pendingTextId = "luma-sub-" + (addedSubtitles.size() - 1);
-        prepare(player().getCurrentPosition());
-        player().setPlayWhenReady(playing);
+    /**
+     * Main thread: registers a caption file the receiver downloads and draws
+     * itself. Nothing in the media pipeline changes, so playback never rebuffers.
+     */
+    ExternalCaptions addExternal(MediaRequest.Subtitle subtitle) throws ApiException {
+        if (externals.size() >= MediaRequest.MAX_SUBTITLES) throw new ApiException("INVALID_SUBTITLE");
+        ExternalCaptions captions = new ExternalCaptions(subtitle, current == null ? java.util.Collections.emptyMap() : current.headers);
+        externals.add(captions);
+        // Selection waits for a usable file so a failed download cannot hide the current language.
+        captionLoader.execute(() -> {
+            captions.load();
+            main.post(() -> {
+                int ordinal = externals.indexOf(captions);
+                if (captions.selectOnLoad && captions.error == null && ordinal >= 0) selectExternal(ordinal);
+                bump();
+            });
+        });
         bump();
-        return new JSONObject().put("accepted", true).put("subtitleSerial", ++subtitleSerial);
+        return captions;
+    }
+
+    int externalIndex(ExternalCaptions captions) { return EXTERNAL_BASE + externals.indexOf(captions); }
+
+    /** Main thread: drops a track whose file proved unusable so a rejected add leaves no trace. */
+    void discardExternal(ExternalCaptions captions) {
+        int ordinal = externals.indexOf(captions);
+        // Only the newest entry can go without shifting other tracks' stable indices.
+        if (ordinal < 0 || ordinal != externals.size() - 1) return;
+        externals.remove(ordinal);
+        if (selectedExternal == ordinal) selectedExternal = -1;
+        bump();
+    }
+
+    private void selectExternal(int ordinal) {
+        selectedExternal = ordinal;
+        // Hide ExoPlayer's own text so only the selected file is drawn.
+        if (player != null) player.setTrackSelectionParameters(player.getTrackSelectionParameters().buildUpon()
+            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true).build());
+    }
+
+    boolean externalSelected() { return selectedExternal >= 0 && selectedExternal < externals.size(); }
+
+    /** Main thread, about ten times a second while a receiver-rendered track is selected. */
+    String externalText() {
+        if (!externalSelected() || player == null) return "";
+        return externals.get(selectedExternal).textAt(player.getCurrentPosition());
     }
 
     JSONObject tracks(int type) throws Exception {
@@ -230,7 +264,17 @@ final class PlaybackController implements Player.Listener {
                 }
             }
         }
-        return new JSONObject().put("active", active()).put("enabled", !disabled && currentIndex != JSONObject.NULL)
+        boolean enabled = !disabled && currentIndex != JSONObject.NULL;
+        if (type == C.TRACK_TYPE_TEXT && current != null) {
+            for (int i = 0; i < externals.size(); i++) {
+                ExternalCaptions captions = externals.get(i);
+                list.put(new JSONObject().put("index", EXTERNAL_BASE + i).put("name", captions.name(i + 1))
+                    .put("language", captions.language).put("supported", captions.error == null)
+                    .put("loading", captions.loading()).put("external", true));
+            }
+            if (externalSelected()) { currentIndex = EXTERNAL_BASE + selectedExternal; enabled = true; }
+        }
+        return new JSONObject().put("active", active()).put("enabled", enabled)
             .put("currentIndex", currentIndex).put("tracks", list);
     }
 
@@ -239,11 +283,19 @@ final class PlaybackController implements Player.Listener {
         TrackSelectionParameters.Builder params = exo.getTrackSelectionParameters().buildUpon();
         if ("off".equals(index)) {
             if (type != C.TRACK_TYPE_TEXT) throw new ApiException("INVALID_INPUT");
+            selectedExternal = -1;
             exo.setTrackSelectionParameters(params.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true).build());
             bump();
             return;
         }
         int wanted = MediaRequest.integer(index, 0, 1024), seen = 0;
+        if (type == C.TRACK_TYPE_TEXT && wanted >= EXTERNAL_BASE) {
+            if (wanted - EXTERNAL_BASE >= externals.size()) throw new ApiException("INVALID_SUBTITLE");
+            selectExternal(wanted - EXTERNAL_BASE);
+            bump();
+            return;
+        }
+        if (type == C.TRACK_TYPE_TEXT) selectedExternal = -1;
         for (Tracks.Group group : exo.getCurrentTracks().getGroups()) {
             if (group.getType() != type) continue;
             if (wanted < seen + group.length) {
@@ -280,6 +332,21 @@ final class PlaybackController implements Player.Listener {
 
     String title() { return current == null ? null : current.title; }
 
+    private int droppedFrames;
+
+    @Override public void onRenderedFirstFrame() { droppedFrames = 0; }
+
+    /** One-line state for the diagnostics log; never includes URLs. */
+    String diagnosticSummary() {
+        if (player == null || current == null) return "player=idle";
+        Format video = player.getVideoFormat();
+        return String.format(java.util.Locale.ROOT, "state=%d playing=%b pos=%.0f buffered=%.0f video=%s dropped=%d captions=%d/%d",
+            player.getPlaybackState(), player.isPlaying(), player.getCurrentPosition() / 1000.0,
+            (player.getBufferedPosition() - player.getCurrentPosition()) / 1000.0,
+            video == null ? "-" : video.width + "x" + video.height + "@" + (video.bitrate > 0 ? video.bitrate / 1000 + "k" : "?"),
+            droppedFrames, selectedExternal, externals.size());
+    }
+
     private void recordProgress() {
         if (current == null || current.content == null || player == null || !seenPlaying) return;
         long duration = player.getDuration();
@@ -308,23 +375,7 @@ final class PlaybackController implements Player.Listener {
         if (reason == Player.DISCONTINUITY_REASON_SEEK) bump();
     }
 
-    @Override public void onTracksChanged(Tracks tracks) {
-        if (pendingTextId != null) {
-            int index = 0;
-            for (Tracks.Group group : tracks.getGroups()) {
-                if (group.getType() != C.TRACK_TYPE_TEXT) continue;
-                for (int i = 0; i < group.length; i++, index++) {
-                    String id = group.getTrackFormat(i).id;
-                    if (id != null && id.endsWith(pendingTextId)) {
-                        pendingTextId = null;
-                        try { selectTrack(C.TRACK_TYPE_TEXT, index); } catch (ApiException ignored) { }
-                        return;
-                    }
-                }
-            }
-        }
-        bump();
-    }
+    @Override public void onTracksChanged(Tracks tracks) { bump(); }
 
     @Override public void onPlayerError(PlaybackException failure) {
         error = failure.getErrorCodeName();

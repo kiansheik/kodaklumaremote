@@ -23,7 +23,7 @@ public class MediaRequestTest {
         assertEquals("https://framextv.cc/watch/42/1/3", request.content.getString("watchUrl"));
         assertEquals("Show · S1 E3", request.title);
         assertEquals(12.5, request.resumeSeconds, 0);
-        assertEquals(MediaRequest.SRT, request.subtitles.get(0).mimeType);
+        assertEquals("", request.subtitles.get(0).mimeType); // only a hint; the receiver sniffs the body
         assertTrue(request.subtitles.get(0).select);
         assertEquals("application/dash+xml", MediaRequest.contentType("", "https://x.example/m.mpd"));
         assertEquals(MediaRequest.HLS, MediaRequest.contentType("application/x-mpegURL; charset=x", "https://x.example/v"));
@@ -43,7 +43,7 @@ public class MediaRequestTest {
         rejects("{\"url\":\"https://x.example/v.mp4\",\"headers\":{\"Cookie\":\"a\"}}", "INVALID_MEDIA");
         rejects("{\"url\":\"https://x.example/v.mp4\",\"content\":{\"kind\":\"movie\",\"contentId\":\"7\",\"key\":\"framextv:movie:8\"}}", "INVALID_CONTENT");
         rejects("{\"url\":\"https://x.example/v.mp4\",\"content\":{\"kind\":\"tv\",\"contentId\":\"7\",\"season\":1,\"episode\":0}}", "INVALID_CONTENT");
-        rejects("{\"url\":\"https://x.example/v.mp4\",\"subtitles\":[{\"url\":\"https://x.example/s.ass\",\"mimeType\":\"text/x-ssa\"}]}", "INVALID_SUBTITLE");
+        rejects("{\"url\":\"https://x.example/v.mp4\",\"subtitles\":[{\"url\":\"file:///s.ass\"}]}", "INVALID_SUBTITLE");
         rejects("{\"url\":\"https://x.example/v.mp4\",\"title\":\"bad\\u202Etitle\"}", "INVALID_INPUT");
     }
 }

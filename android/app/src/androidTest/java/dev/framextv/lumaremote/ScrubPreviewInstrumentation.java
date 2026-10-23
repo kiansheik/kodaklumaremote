@@ -173,7 +173,7 @@ public final class ScrubPreviewInstrumentation {
             rejects("PREVIEW_UNSUPPORTED", () -> ScrubPreviewManager.redirectTarget(current, "http://media.example/plain.m3u8"));
             rejects("PREVIEW_UNSUPPORTED", () -> ScrubPreviewManager.redirectTarget(current, "https://127.0.0.1/private.m3u8"));
         });
-        check("decoder timeout permanently fails its binding without growing stuck work", () -> {
+        check("decoder timeout skips while the slow decode runs, then recovers without growing stuck work", () -> {
             MemoryLoader loader = new MemoryLoader();
             AtomicInteger reads = new AtomicInteger(), closes = new AtomicInteger();
             CountDownLatch started = new CountDownLatch(1), release = new CountDownLatch(1);
@@ -195,17 +195,20 @@ public final class ScrubPreviewInstrumentation {
             Reply timedOut = new Reply(); manager.request(generation, SOURCE, 20, timedOut);
             require(started.await(1, TimeUnit.SECONDS), "Decoder did not start"); timedOut.await();
             require("PREVIEW_UNSUPPORTED".equals(timedOut.error.get()), "Decoder timeout was not bounded");
-            waitFor(() -> closes.get() == 1, "Timed-out extractor was not released");
+            Thread.sleep(150);
+            require(closes.get() == 0, "Extractor was released while its native decode was still running");
             Reply sameBinding = new Reply(); manager.request(generation, SOURCE, 40, sameBinding); sameBinding.await();
             require("PREVIEW_UNSUPPORTED".equals(sameBinding.error.get()) && reads.get() == 1
                     && manager.activeDecoderCount() == 1, "Timed-out binding created more stuck work");
             release.countDown(); waitFor(() -> manager.activeDecoderCount() == 0, "Timed-out decoder did not settle");
-            Reply permanentlyFailed = new Reply(); manager.request(generation, SOURCE, 50, permanentlyFailed); permanentlyFailed.await();
-            require("PREVIEW_UNSUPPORTED".equals(permanentlyFailed.error.get()) && reads.get() == 1, "Failed binding retried its decoder");
+            waitFor(() -> closes.get() == 1, "Timed-out extractor was not released after its decode returned");
+            Reply sameVideoLater = new Reply(); manager.request(generation, SOURCE, 50, sameVideoLater); sameVideoLater.await();
+            require(sameVideoLater.result.get() != null && reads.get() == 2 && manager.activeDecoderCount() == 0,
+                    "A settled slow decode prevented later previews of the same video");
             String nextSource = "https://media.example/next.m3u8";
             long nextGeneration = manager.bind(nextSource, content("42", 2), 600);
             Reply recovered = new Reply(); manager.request(nextGeneration, nextSource, 50, recovered); recovered.await();
-            require(recovered.result.get() != null && reads.get() == 2 && manager.activeDecoderCount() == 0,
+            require(recovered.result.get() != null && reads.get() == 3 && manager.activeDecoderCount() == 0,
                     "Settled decoder prevented a later binding");
             manager.close();
         });

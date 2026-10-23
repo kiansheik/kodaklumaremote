@@ -204,6 +204,9 @@ public final class CatalogClient {
         if (!(value instanceof String)) return null; String raw = (String) value;
         // The API can explicitly expose its own relative delivery route.
         if (raw.startsWith("/api/") && !raw.contains("\\")) raw = base + raw;
+        // Provider file names contain literal spaces (about half of one sampled
+        // episode's 63 tracks); encode them instead of silently dropping the track.
+        raw = raw.trim().replace(" ", "%20");
         try { return NativeBackend.publicUrl(raw); } catch (Exception invalid) { return null; }
     }
     private static boolean alreadyDelivered(String url) {

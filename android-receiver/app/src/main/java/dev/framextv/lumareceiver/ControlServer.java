@@ -131,7 +131,15 @@ final class ControlServer {
                 return ReceiverApp.onMain(() -> playback.tracks(C.TRACK_TYPE_AUDIO));
             case "player.addSubtitle": {
                 MediaRequest.Subtitle subtitle = MediaRequest.subtitle(params.optJSONObject("track"));
-                return ReceiverApp.onMain(() -> { playback.expect(params); return playback.addSubtitle(subtitle); });
+                ExternalCaptions captions = ReceiverApp.onMain(() -> { playback.expect(params); return playback.addExternal(subtitle); });
+                // Stay within the phone's 5 s call budget; a slow file keeps loading in the background.
+                boolean loaded = captions.await(4000);
+                if (loaded && captions.error != null) {
+                    ReceiverApp.onMain(() -> { playback.discardExternal(captions); return null; });
+                    throw new ApiException(captions.error, 422);
+                }
+                int index = ReceiverApp.onMain(() -> playback.externalIndex(captions));
+                return new JSONObject().put("accepted", true).put("index", index).put("loaded", loaded);
             }
             case "player.setSubtitle":
                 return ReceiverApp.onMain(() -> { playback.expect(params); playback.selectTrack(C.TRACK_TYPE_TEXT, params.opt("index")); return accepted(); });
@@ -208,6 +216,20 @@ final class ControlServer {
                     frame = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
                 }
                 return new JSONObject().put("shown", app.scrub(active, position, duration, frame));
+            }
+            case "app.diagnostics":
+                return new JSONObject().put("current", app.diagnostics.tail(false, 40)).put("previous", app.diagnostics.tail(true, 40));
+            case "app.snapshot": {
+                String png = ReceiverApp.onMain(() -> {
+                    android.graphics.Bitmap bitmap = app.snapshot();
+                    if (bitmap == null) return null;
+                    java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+                    bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out);
+                    bitmap.recycle();
+                    return android.util.Base64.encodeToString(out.toByteArray(), android.util.Base64.NO_WRAP);
+                });
+                if (png == null) throw new ApiException("NO_UI", 409);
+                return new JSONObject().put("png", png);
             }
             case "app.notice": {
                 String text = MediaRequest.label(params.opt("text"), 160);

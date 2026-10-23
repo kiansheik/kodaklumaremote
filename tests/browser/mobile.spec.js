@@ -1413,36 +1413,30 @@ test('Turn off sends exactly one confirmed power request and disables on connect
 });
 
 
-test('invalid subtitle bytes never reach the receiver and another language remains usable without replay', async ({ page }) => {
+test('a subtitle file LUMA Receiver cannot read is reported and another language remains usable without replay', async ({ page }) => {
   await openApp(page); await setup(page); await cast(page);
   await page.getByRole('button', { name: 'Subtitles', exact: true }).click();
-  await page.evaluate(() => { window.__receiver.failPrepare = 'SUBTITLE_INVALID'; });
+  await page.evaluate(() => { window.__receiver.failSubtitle = 'SUBTITLE_INVALID'; });
   await page.getByRole('button', { name: 'Portuguese (Brazil)', exact: true }).click();
   await expect(page.locator('#sheet-message')).toHaveText('This subtitle file has no valid timed captions. Choose another subtitle.');
-  expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'receiver.addSubtitle').length)).toBe(0);
-  await page.evaluate(() => { window.__receiver.failPrepare = null; });
+  await page.evaluate(() => { window.__receiver.failSubtitle = null; });
   await page.getByRole('button', { name: 'English', exact: true }).click();
   await expect(page.getByRole('button', { name: 'English', exact: true })).toHaveAttribute('aria-pressed', 'true');
   const calls = await page.evaluate(() => window.__calls);
-  const add = calls.find(call => call.method === 'receiver.addSubtitle');
+  const add = calls.filter(call => call.method === 'receiver.addSubtitle').at(-1);
   expect(add.params.track.url).toBe(media.tracks[0].url);
-  expect(add.params.preparedId).toMatch(/^[A-Za-z0-9_-]{16,128}$/);
-  const saved = calls.filter(call => call.method === 'app.rememberRemote').at(-1).params.remote.catalog.find(track => track.language === 'en');
-  expect(saved.url).toBe(media.tracks[0].url);
-  expect(saved.preparedId).toBe(add.params.preparedId);
   expect(calls.filter(call => call.method === 'receiver.open')).toHaveLength(1);
-  await expect(page.locator('body')).not.toContainText('private-subtitle-token');
 });
 
-test('subtitle selection waits for complete normalized file delivery after the Add acknowledgement', async ({ page }) => {
+test('LUMA subtitles go straight to the receiver as catalog URLs with no phone download or delivery step', async ({ page }) => {
   await openApp(page); await setup(page); await cast(page);
   await page.getByRole('button', { name: 'Subtitles', exact: true }).click();
-  await page.evaluate(() => { window.__receiver.holdDelivery = true; });
   await page.getByRole('button', { name: 'Portuguese (Brazil)', exact: true }).click();
-  await expect.poll(() => page.evaluate(() => window.__calls.filter(call => call.method === 'receiver.subtitleDelivery').length)).toBeGreaterThan(0);
-  expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'app.rememberRemote').length)).toBe(0);
-  await page.evaluate(() => { window.__receiver.holdDelivery = false; });
   await expect(page.getByRole('button', { name: 'Portuguese (Brazil)', exact: true })).toHaveAttribute('aria-pressed', 'true');
-  expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'receiver.addSubtitle').length)).toBe(1);
-  expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'receiver.open').length)).toBe(1);
+  const calls = await page.evaluate(() => window.__calls);
+  expect(calls.filter(call => ['receiver.prepareSubtitle', 'receiver.subtitleDelivery'].includes(call.method))).toEqual([]);
+  const add = calls.find(call => call.method === 'receiver.addSubtitle');
+  expect(add.params.track.url).toBe(media.tracks.find(track => track.language === 'pt-BR' || track.language === 'pt-br')?.url ?? add.params.track.url);
+  expect(add.params.preparedId).toBeUndefined();
+  expect(calls.filter(call => call.method === 'receiver.open')).toHaveLength(1);
 });

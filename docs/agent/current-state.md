@@ -1,5 +1,17 @@
 # Current state
 
+## Unreleased 0.4.10 / receiver 0.2.3: self-rendered captions and crash fixes
+
+Published 0.4.9 was user-tested. Follow-up fixes (see
+[receiver page](luma-receiver.md#2026-10-23-follow-up-0410--receiver-023)):
+receiver-rendered captions with no rebuffer and all 63 sampled tracks parsing,
+RTL repair, catalog URLs with spaces, the scrub-preview native crash,
+auto-reconnect forgetting the projector, a smaller buffer and persistent
+diagnostics after a projector freeze of unknown cause. Receiver 0.2.3 is on the
+projector. `npm run check` and emulator backend/scrub/subtitles/service/catalog
+groups pass. Release with `make deploy-gh-pages` (notes in
+`release-notes/0.4.10.txt`).
+
 ## Unreleased 0.4.9: Kodi replaced by LUMA Receiver everywhere
 
 The phone app now drives [LUMA Receiver](luma-receiver.md) (`android-receiver/`,

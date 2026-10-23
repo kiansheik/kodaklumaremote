@@ -56,3 +56,28 @@ Each phone release now carries `luma-receiver-<v>.apk` and
 `receiver-update.json` for the receiver's updater and the install site links the
 projector download. The Kodi add-on, its packager and the Mac Kodi controller
 were removed (Git history keeps them; `tests/manual-kodi.md` stays as evidence).
+
+## 2026-10-23 follow-up (0.4.10 / receiver 0.2.3)
+
+User acceptance of 0.4.9: EN/PT/BG captions "great"; size buttons good (default
+stays 100%). Fixed after their report:
+
+- **Captions without rebuffer.** Sideloaded ExoPlayer subtitles re-prepared the
+  stream on every add and re-fetched earlier files from the phone (16-request
+  cap), so later languages failed. The receiver now fetches catalog URLs itself
+  (`ExternalCaptions`), parses VTT/SRT/ASS/TTML in any common encoding
+  (`CaptionParser`), and draws them in `SubtitleOverlay`; external tracks use
+  stable indices 512+. A 63-track Midnight Mass S1E5 catalog: all 63 parse (old
+  phone normalizer: 62). Playback stayed `ready` across four track switches on
+  the projector. Pre-reversed RTL punctuation is repaired per file; `{\an8}`
+  overrides are stripped. Emulator snapshots (`app.snapshot`) show correct
+  Hebrew/Arabic RTL rendering. The phone no longer prepares/hosts LUMA subtitles.
+- **Catalog URLs with spaces** were silently dropped (29/63 tracks); now encoded.
+- **Scrub crash:** a timed-out preview decode released `MediaMetadataRetriever`
+  during native decode (use-after-free). Release now waits for decode return;
+  timeout 1.8 s → 5 s and no permanent per-video failure.
+- **Auto-reconnect:** a failed first auto-connect deleted the saved projector.
+- **Projector freeze** (system hang with looping audio during plain playback on
+  0.2.2, cause unknown). Buffer capped at 30 s/24 MB; `Diagnostics` keeps a
+  15 s rolling log across reboots (`app.diagnostics`). Post-fix 1080p check:
+  ~356 MB free, 0 dropped frames.

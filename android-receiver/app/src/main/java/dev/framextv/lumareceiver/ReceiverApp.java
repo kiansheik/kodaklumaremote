@@ -25,6 +25,7 @@ public final class ReceiverApp extends Application {
     Pairing pairing;
     Updater updater;
     ControlServer server;
+    Diagnostics diagnostics;
     private Pairing.Listener pairingUi;
     private volatile java.util.function.BiConsumer<String, Integer> noticeUi;
 
@@ -44,6 +45,8 @@ public final class ReceiverApp extends Application {
         updater = new Updater(this, preferences);
         updater.attach(null, playback);
         server = new ControlServer(this);
+        diagnostics = new Diagnostics(this);
+        diagnostics.start(playback);
         startReceiverService(this);
         updater.schedule();
     }
@@ -51,6 +54,11 @@ public final class ReceiverApp extends Application {
     void setPairingUi(Pairing.Listener listener) { pairingUi = listener; }
 
     void setNoticeUi(java.util.function.BiConsumer<String, Integer> listener) { noticeUi = listener; }
+
+    private volatile java.util.function.Supplier<android.graphics.Bitmap> snapshotUi;
+    void setSnapshotUi(java.util.function.Supplier<android.graphics.Bitmap> supplier) { snapshotUi = supplier; }
+    /** Main thread: the caption overlay exactly as drawn (video surfaces are not included). */
+    android.graphics.Bitmap snapshot() { java.util.function.Supplier<android.graphics.Bitmap> target = snapshotUi; return target == null ? null : target.get(); }
 
     interface ScrubUi { void onScrub(boolean active, double position, double duration, android.graphics.Bitmap frame); }
     private volatile ScrubUi scrubUi;
@@ -83,7 +91,12 @@ public final class ReceiverApp extends Application {
 
     static void startReceiverService(Context context) {
         Intent intent = new Intent(context, ReceiverService.class);
-        if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(intent); else context.startService(intent);
+        try { if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(intent); else context.startService(intent); }
+        catch (RuntimeException backgroundStartBlocked) {
+            // Android 12+ forbids this from the background (e.g. after an update);
+            // the projector's Android 9 allows it, and opening the screen retries.
+            android.util.Log.w("LumaReceiver", "SERVICE_START_DEFERRED");
+        }
     }
 
     /** Runs on the main looper and waits; HTTP threads use this for every player call. */

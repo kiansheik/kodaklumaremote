@@ -440,7 +440,8 @@ public final class NativeBackend {
         if ("INVALID_CONTENT".equals(code)) throw fail("INVALID_MEDIA");
         switch (code) {
             case "SOURCE_CHANGED": case "NO_VIDEO": case "CANNOT_SEEK": case "INVALID_SUBTITLE": case "INVALID_MEDIA":
-            case "PAIRING_CODE_WRONG": case "PAIRING_EXPIRED": throw fail(code);
+            case "PAIRING_CODE_WRONG": case "PAIRING_EXPIRED":
+            case "SUBTITLE_DOWNLOAD": case "SUBTITLE_INVALID": case "SUBTITLE_TOO_LARGE": throw fail(code);
             default:
                 // The receiver validates every request before acting, so any other 4xx
                 // was rejected without effect; 5xx/unknown outcomes stay ambiguous.
@@ -592,7 +593,9 @@ public final class NativeBackend {
                 // Only a service-owned ticket can resolve to a private, receiver-pinned URL.
                 url = subtitleResolver.resolve(id, publicUrl(params.opt("expectedSourceUrl")), url, host);
             }
-            JSONObject subtitle = object("url", url, "mimeType", params.has("preparedId") ? "application/x-subrip" : "", "select", true);
+            // Type, language and label are hints; the receiver sniffs and decodes the file itself.
+            String hint = params.has("preparedId") ? "application/x-subrip" : track.optString("contentType", "").split(";", 2)[0].trim();
+            JSONObject subtitle = object("url", url, "mimeType", hint.matches("[a-z0-9.+-]{1,40}/[a-z0-9.+-]{1,60}") ? hint : "", "select", true);
             String language = track.optString("language", "");
             if (language.matches("[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*")) subtitle.put("language", language);
             String name = label(track.optString("label", track.optString("name", "")), 120);

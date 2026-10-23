@@ -1266,8 +1266,10 @@ public final class ConnectionService extends Service {
         if (rescan) settings.clear("receiver");
         JSONObject saved = rescan ? null : settings.readReceiver();
         if (saved != null) {
+            // A failed attempt (projector booting, Wi-Fi rejoining, the old socket
+            // after a crash) must not forget the projector: keep it and retry.
             try { return connectReceiver(work, saved.optString("host")); }
-            catch (NativeBackend.BackendException ignored) { if (!work.current()) throw ignored; settings.clear("receiver"); }
+            catch (NativeBackend.BackendException ignored) { if (!work.current()) throw ignored; }
         }
         JSONObject discovered = work.transport.handle("device.discover", new JSONObject());
         JSONArray devices = discovered.optJSONArray("devices"); if (devices == null) devices = new JSONArray();

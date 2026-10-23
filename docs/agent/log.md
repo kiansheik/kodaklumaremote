@@ -971,3 +971,7 @@
   showed no visible change. `npm run check` Node241/browser157 and emulator
   groups pass. [Receiver](luma-receiver.md),
   [handoff](session-handoffs/2026-10-23-kodi-to-luma-receiver.md).
+- 2026-10-23 0.4.9 user test → fixes for 0.4.10/receiver 0.2.3: receiver-rendered
+  captions (no rebuffer, VTT/SRT/ASS/TTML, encodings, RTL repair), catalog URL
+  spaces, scrub-preview use-after-free crash, auto-reconnect, buffer cap and
+  persistent diagnostics after a projector freeze. [Receiver](luma-receiver.md).

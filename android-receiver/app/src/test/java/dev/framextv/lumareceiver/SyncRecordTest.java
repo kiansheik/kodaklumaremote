@@ -29,7 +29,7 @@ public class SyncRecordTest {
     @Test public void newerWinsThenOriginThenData() {
         assertTrue(SyncRecord.wins(record("k", 2, "phoneAAAA", "{}"), record("k", 1, "phoneZZZZ", "{}")));
         assertFalse(SyncRecord.wins(record("k", 1, "phoneZZZZ", "{}"), record("k", 2, "phoneAAAA", "{}")));
-        assertTrue(SyncRecord.wins(record("k", 1, "phoneZZZZ", "{}"), record("k", 1, "phoneAAAA", "{}")));
+        assertTrue(SyncRecord.wins(record("k", 1, "phoneZZZZ", "{\"b\":1}"), record("k", 1, "phoneAAAA", "{\"a\":1}")));
         assertTrue(SyncRecord.wins(record("k", 1, "phoneAAAA", "{\"b\":1}"), record("k", 1, "phoneAAAA", "{\"a\":1}")));
         assertFalse(SyncRecord.wins(record("k", 1, "phoneAAAA", "{}"), record("k", 1, "phoneAAAA", "{}")));
         assertFalse(SyncRecord.wins(record("k", 1, "phoneZZZZ", "{\"a\":1}"), record("k", 1, "luma-AAAA", "{\"a\":1}")));

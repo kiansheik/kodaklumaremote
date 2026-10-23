@@ -59,14 +59,11 @@ final class MediaRequest {
         if (track == null) throw new ApiException("INVALID_SUBTITLE");
         String url;
         try { url = httpUrl(track.opt("url")); } catch (ApiException invalid) { throw new ApiException("INVALID_SUBTITLE"); }
-        String declared = track.optString("mimeType", "").toLowerCase(Locale.ROOT), path = URI.create(url).getPath().toLowerCase(Locale.ROOT);
-        String mime;
-        if (declared.equals(SRT) || declared.equals("text/srt") || declared.isEmpty() && path.endsWith(".srt")) mime = SRT;
-        else if (declared.equals(VTT) || declared.isEmpty() && path.endsWith(".vtt")) mime = VTT;
-        else if (declared.isEmpty()) mime = SRT; // The phone normalizes every selected track to UTF-8 SRT.
-        else throw new ApiException("INVALID_SUBTITLE");
+        // Only a hint: the receiver sniffs the body (VTT, SRT, ASS/SSA, TTML) itself.
+        String declared = track.optString("mimeType", "").split(";", 2)[0].trim().toLowerCase(Locale.ROOT);
+        String mime = declared.matches("[a-z0-9.+-]{1,40}/[a-z0-9.+-]{1,60}") ? declared : "";
         String language = track.has("language") ? label(track.opt("language"), 32) : "";
-        if (!language.isEmpty() && !language.matches("[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*")) throw new ApiException("INVALID_SUBTITLE");
+        if (!language.isEmpty() && !language.matches("[A-Za-z]{2,3}(?:-[A-Za-z0-9]{1,8})*")) language = "";
         if (track.has("select") && !(track.opt("select") instanceof Boolean)) throw new ApiException("INVALID_SUBTITLE");
         return new Subtitle(url, mime, language, track.has("label") ? label(track.opt("label"), 120) : "", track.optBoolean("select"));
     }

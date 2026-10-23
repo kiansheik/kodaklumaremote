@@ -28,6 +28,7 @@ public final class MainActivity extends Activity implements PlaybackController.U
     private SubtitleOverlay captions;
     private final Player.Listener cueListener = new Player.Listener() {
         @Override public void onCues(CueGroup group) {
+            if (app.playback.externalSelected()) return; // receiver-rendered track owns the overlay
             StringBuilder text = new StringBuilder();
             for (Cue cue : group.cues) if (cue.text != null) { if (text.length() > 0) text.append('\n'); text.append(cue.text); }
             captions.setText(text);
@@ -41,6 +42,17 @@ public final class MainActivity extends Activity implements PlaybackController.U
     private final Runnable hideScrub = () -> scrub.setVisibility(View.GONE);
     private long backArmedUntil;
     private final Runnable hideNotice = () -> notice.setVisibility(View.GONE);
+    private boolean externalShown;
+    /** Draws receiver-rendered captions from the player clock; cheap when nothing changes. */
+    private final Runnable captionTick = new Runnable() {
+        @Override public void run() {
+            boolean external = app.playback.externalSelected();
+            if (external) captions.setText(app.playback.externalText());
+            else if (externalShown) captions.setText("");
+            externalShown = external;
+            captions.postDelayed(this, 100);
+        }
+    };
 
     static void bringToFront(Context context) {
         context.startActivity(new Intent(context, MainActivity.class)
@@ -72,11 +84,14 @@ public final class MainActivity extends Activity implements PlaybackController.U
         app.setPairingUi(code -> render());
         app.setNoticeUi(this::showNotice);
         app.setScrubUi(this::onScrub);
+        app.setSnapshotUi(this::snapshot);
         onDisplayChanged();
         ReceiverApp.startReceiverService(this);
     }
 
-    @Override protected void onResume() { super.onResume(); render(); }
+    @Override protected void onResume() { super.onResume(); render(); captions.removeCallbacks(captionTick); captions.post(captionTick); }
+
+    @Override protected void onPause() { captions.removeCallbacks(captionTick); super.onPause(); }
 
     @Override protected void onStop() {
         // Nothing is visible to watch; keep position and let the phone resume.
@@ -90,6 +105,7 @@ public final class MainActivity extends Activity implements PlaybackController.U
         app.setPairingUi(null);
         app.setNoticeUi(null);
         app.setScrubUi(null);
+        app.setSnapshotUi(null);
         app.playback.player().removeListener(cueListener);
         playerView.setPlayer(null);
         super.onDestroy();
@@ -118,6 +134,15 @@ public final class MainActivity extends Activity implements PlaybackController.U
         onScrub(true, position / 1000.0, 0, null);
         scrub.removeCallbacks(hideScrub);
         scrub.postDelayed(hideScrub, 1500);
+    }
+
+    private android.graphics.Bitmap snapshot() {
+        if (captions.getWidth() == 0) return null;
+        android.graphics.Bitmap bitmap = android.graphics.Bitmap.createBitmap(captions.getWidth(), captions.getHeight(), android.graphics.Bitmap.Config.ARGB_8888);
+        android.graphics.Canvas canvas = new android.graphics.Canvas(bitmap);
+        canvas.drawColor(0xFF3A5A40); // stand-in for video so the outline and panel are visible
+        captions.draw(canvas);
+        return bitmap;
     }
 
     static String clock(double seconds) {

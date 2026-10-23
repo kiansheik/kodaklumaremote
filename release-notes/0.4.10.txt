@@ -1,0 +1,11 @@
+LUMA Remote 0.4.10
+
+Subtitles no longer interrupt the video. LUMA Receiver now downloads the chosen subtitle file itself and draws it, so picking or switching a language never rebuffers or reloads playback. It reads WebVTT, SRT, ASS/SSA and TTML in any common text encoding, skips individual broken lines instead of rejecting the file, removes stray positioning tags, and repairs Hebrew and Arabic files whose punctuation was stored backwards for older players. On a 63-track test episode every file now loads, including languages that previously failed.
+
+Fixes subtitle tracks disappearing from the list when the provider's file name contained a space.
+
+Fixes a crash when holding the scrub bar: a slow preview decode was released while still running. Slow previews now finish safely, and a single slow frame no longer disables previews for the rest of the video.
+
+The app reconnects to the saved projector on its own after it is reopened, instead of forgetting it when the first attempt fails.
+
+LUMA Receiver keeps a smaller video buffer to reduce memory pressure on the projector, and keeps a short diagnostic log across restarts to help investigate freezes.

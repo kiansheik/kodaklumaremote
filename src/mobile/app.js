@@ -571,7 +571,7 @@ function rpc(method, params = {}, { signal, timeoutMs = 10000, onNotSent, onSett
     item = {
       receiptOnly: false,
       resolve: result => { settled(); remove(); resolve(result); },
-      reject: code => { if (mutationReceipt && ['SOURCE_CHANGED', 'RECEIVER_REJECTED', 'SUBTITLE_EXPIRED'].includes(code)) notSent(); settled(); remove(); reject(fixedError(code)); },
+      reject: code => { if (mutationReceipt && ['SOURCE_CHANGED', 'RECEIVER_REJECTED', 'SUBTITLE_EXPIRED', 'SUBTITLE_DOWNLOAD', 'SUBTITLE_INVALID', 'SUBTITLE_TOO_LARGE'].includes(code)) notSent(); settled(); remove(); reject(fixedError(code)); },
     };
     pending.set(id, item);
     signal?.addEventListener('abort', abort, { once: true });
@@ -1038,14 +1038,14 @@ const coordinator = createHandoffCoordinator({
     if (state.skipNextLaunch) { state.skipNextLaunch = false; return Promise.resolve({ accepted: true }); }
     return rpc('luma.launchReceiver', handoffParams(options), options);
   } },
+  // LUMA Receiver downloads and renders the catalog file itself, so there is no
+  // phone-side prepare/delivery step (that existed only because Kodi needed it).
   player: {
     connect: options => handoffRpc('receiver.connect', handoffParams(options), options),
     open: (media, options) => handoffRpc('receiver.open', handoffParams(options, { media, ...(options.onlyIfInactive === true ? { onlyIfInactive: true } : {}) }), options),
     status: async options => { const result = await handoffRpc('receiver.status', handoffParams(options), options); playback(result); return result; },
     getSubtitles: options => handoffRpc('receiver.getSubtitles', handoffParams(options), options),
-    prepareSubtitle: (track, options) => handoffRpc('receiver.prepareSubtitle', handoffParams(options, { track }), options),
     addSubtitle: (track, options) => handoffRpc('receiver.addSubtitle', handoffParams(options, { track, ...(options.preparedId ? { preparedId: options.preparedId } : {}) }), options),
-    subtitleDelivery: (preparedId, track, options) => handoffRpc('receiver.subtitleDelivery', handoffParams(options, { preparedId, track }), options),
     setSubtitle: (index, options) => handoffRpc('receiver.setSubtitle', handoffParams(options, { index }), options),
   },
   remote: { async ready(result, options) {
