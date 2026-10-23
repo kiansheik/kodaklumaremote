@@ -24,15 +24,15 @@
   <p id="status">Finding your home network…</p>
   <form id="setup" hidden autocomplete="off">
     <label for="phone-ip">Phone’s local IP address</label>
-    <input id="phone-ip" type="text" inputmode="url" spellcheck="false" maxlength="64" aria-describedby="hint">
-    <p id="hint">LUMA Remote can fill this automatically, or enter the phone’s private IP address.</p>
+    <input id="phone-ip" type="text" inputmode="numeric" spellcheck="false" maxlength="15" aria-describedby="hint">
+    <p id="hint">Leave this empty, then use Autofill this phone in LUMA Remote, or enter the phone’s private IP address.</p>
     <div id="actions"><button class="primary" type="submit">Connect to phone</button><button id="open-anyway" class="quiet" type="button" hidden>Open saved phone anyway</button></div>
   </form>
   <div id="phones"></div>
   <script>
   /* This speed-dial page keeps private phone addresses only in the TV's local
-     storage. WebRTC may reveal the TV's /24 prefix; the user then enters just
-     the phone's final number. No LAN address is sent to GitHub. */
+     storage. The phone can type its private IP into the focused empty field.
+     No LAN address is sent to GitHub. */
   (function () {
     'use strict';
     var KEY = 'luma-phones', MAX = 8, PORT = 4178, PROBE_MS = 2600;
@@ -50,13 +50,6 @@
       var match = /^([^:]+):(\d{4,5})$/.exec(String(value || '')), host = match && ip(match[1]), port = match ? +match[2] : 0;
       return host && port >= 1024 && port <= 65535 ? host + ':' + port : null;
     }
-    function receiver(value) {
-      value = String(value || '').trim();
-      var direct = /^http:\/\/([^/:]+):(\d{4,5})\/tv\/connect\.html$/.exec(value);
-      if (direct) return address(direct[1] + ':' + direct[2]);
-      var host = ip(value); return host ? host + ':' + PORT : null;
-    }
-    function prefix(value) { var host = ip(String(value || '').split(':')[0]); return host ? host.replace(/\d+$/, '') : ''; }
     function clean(value) { return String(value || '').replace(/[\x00-\x1f\x7f<>]/g, '').slice(0, 40); }
     function load() {
       var saved = [], seen = {};
@@ -106,7 +99,7 @@
     function showSetup(value, message, fallback) {
       list.innerHTML = ''; setup.hidden = false; openAnyway.hidden = !fallback; savedFallback = fallback || null;
       status.textContent = message || 'Enter your phone’s address once. This TV will remember it.';
-      input.value = value || '192.168.1.';
+      input.value = value || '';
       setTimeout(function () { try { input.focus(); input.setSelectionRange(input.value.length, input.value.length); } catch (_) {} }, 0);
     }
     function showChoices(phones) {
@@ -117,28 +110,12 @@
         button.addEventListener('click', function () { go(phone, remember(phone, phones)); }); list.appendChild(button);
       });
       var add = document.createElement('button'); add.type = 'button'; add.className = 'quiet'; add.textContent = 'Use another phone';
-      add.addEventListener('click', function () { detectSubnet(function (found) { showSetup(found || prefix(phones[0].address), 'Enter the new phone’s local address.'); }); });
+      add.addEventListener('click', function () { showSetup('', 'Leave the field empty, then use phone autofill, or enter the new phone’s IP.'); });
       list.appendChild(add); if (list.firstChild) list.firstChild.focus();
     }
-    function detectSubnet(done) {
-      var Peer = window.RTCPeerConnection || window.webkitRTCPeerConnection, finished = false, peer;
-      function finish(value) { if (finished) return; finished = true; try { if (peer) peer.close(); } catch (_) {} done(value || ''); }
-      if (!Peer) { finish(''); return; }
-      try {
-        peer = new Peer({iceServers: []}); peer.createDataChannel('luma');
-        peer.onicecandidate = function (event) {
-          var text = event && event.candidate && (event.candidate.candidate || event.candidate.toString()) || '';
-          var matches = text.match(/(?:\d{1,3}\.){3}\d{1,3}/g) || [];
-          for (var i = 0; i < matches.length; i++) if (ip(matches[i])) { finish(prefix(matches[i])); return; }
-          if (event && event.candidate === null) finish('');
-        };
-        peer.createOffer().then(function (offer) { return peer.setLocalDescription(offer); }).catch(function () { finish(''); });
-        setTimeout(function () { finish(''); }, 1800);
-      } catch (_) { finish(''); }
-    }
     setup.addEventListener('submit', function (event) {
-      event.preventDefault(); var target = receiver(input.value); if (!target) { status.textContent = 'Enter a private address such as 192.168.68.24.'; input.focus(); return; }
-      var host = target.split(':')[0], phone = {address: target, name: 'Phone ' + host.split('.')[3], at: Date.now()};
+      event.preventDefault(); var host = ip(input.value); if (!host) { status.textContent = 'Enter only a private IP such as 192.168.68.24.'; input.focus(); return; }
+      var phone = {address: host + ':' + PORT, name: 'Phone ' + host.split('.')[3], at: Date.now()};
       go(phone, remember(phone, load()));
     });
     openAnyway.addEventListener('click', function () { if (savedFallback) go(savedFallback, remember(savedFallback, load())); });
@@ -154,11 +131,11 @@
       status.textContent = 'Checking your saved phone…';
       probe(phones[0], function (alive) {
         if (alive) go(phones[0], phones);
-        else showSetup(phones[0].address.split(':')[0], 'The saved phone did not answer. Check its address or open it anyway.', phones[0]);
+        else showSetup('', 'The saved phone did not answer. Use phone autofill, enter its IP, or open the saved phone anyway.', phones[0]);
       });
       return;
     }
-    detectSubnet(function (found) { showSetup(found || '192.168.1.', found ? 'Network found. Enter only your phone’s final number.' : 'Enter your phone’s local IP address once.'); });
+    showSetup('', 'Leave the field empty, then use Autofill this phone in LUMA Remote.');
   }());
   </script>
 </body>

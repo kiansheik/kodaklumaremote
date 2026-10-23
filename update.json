@@ -1,12 +1,12 @@
 {
   "schemaVersion": 1,
   "packageName": "dev.framextv.lumaremote",
-  "versionName": "0.4.14",
-  "versionCode": 24,
+  "versionName": "0.4.15",
+  "versionCode": 25,
   "minSdk": 24,
-  "apkUrl": "https://github.com/kiansheik/kodaklumaremote/releases/download/v0.4.14/luma-remote-0.4.14.apk",
-  "sha256": "02d15163f0f64128f5b43e35cd32d5619fd41e6eea68ca1e0db3f685b9be9ad1",
-  "sizeBytes": 9821742,
-  "releasedAt": "2026-10-23T16:58:33.101Z",
-  "notes": "LUMA Remote 0.4.14\n\nPhilips TV typing can now recover when the TV receives a different local network address. Tap Type and open selected address again, enter the new four-digit TV PIN, and the app replaces the saved typing permission only after the new pairing succeeds.\n\nPhilips browser setup now supports a simpler one-speed-dial flow. Save the stable LUMA page as the TV Internet browser's only speed dial, open it, then tap Autofill this phone on LUMA page. The phone types its current direct receiver URL into the focused field and presses Go. The direct browser address remains available as a backup.\n"
+  "apkUrl": "https://github.com/kiansheik/kodaklumaremote/releases/download/v0.4.15/luma-remote-0.4.15.apk",
+  "sha256": "143d996ac1b2d317521094aff5922dc55596d0b50d84bdeeccf643ba8a9df132",
+  "sizeBytes": 9821746,
+  "releasedAt": "2026-10-23T17:16:50.225Z",
+  "notes": "LUMA Remote 0.4.15\n\nThe Philips LUMA speed-dial page now starts with a blank phone field and accepts only a private IP address. Autofill this phone types only the phone's current private IP, without the protocol, port or receiver path, then presses Go.\n\nThe complete direct receiver URL remains available only as the separate browser-address fallback.\n"
 }
