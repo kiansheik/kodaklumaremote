@@ -699,10 +699,11 @@ document.addEventListener('focusin', viewport);
 document.addEventListener('focusout', () => requestAnimationFrame(viewport));
 viewport();
 
-// Without a projector connection and receiver pairing the LUMA remote cannot work,
-// so the Remote tab shows the connect view in its place and swaps back once ready.
+// A saved receiver is still useful while its boot listener is coming online: the
+// Library/capture handoff can wait for it even though live controls stay disabled.
 let remoteRedirected = false;
-function lumaRemoteReady() { return state.connected && state.configured; }
+function lumaWakeable() { return state.configured || state.settings.hasReceiver && state.settings.hasPairing; }
+function lumaRemoteReady() { return state.connected && state.configured || lumaWakeable(); }
 function page(name) {
   let shown = name;
   remoteRedirected = false;
@@ -932,7 +933,7 @@ function renderControls() {
   if (autoNextWanted) $('#auto-next').checked = autoNextWanted.value;
   else if (typeof reportedAutoNext === 'boolean') $('#auto-next').checked = reportedAutoNext;
   $('#show-subtitles').disabled = !active;
-  $('#show-more').disabled = !free || (tv ? !tvConnected() : !state.connected && !state.configured);
+  $('#show-more').disabled = !free || (tv ? !tvConnected() : !lumaWakeable());
   $('#show-tv-inputs').hidden = !tv || !matter.capabilities.inputs;
   $('#show-tv-inputs').disabled = !tvRemote;
   $('#show-matter-setup').hidden = !tv || !matter.available;
@@ -1168,9 +1169,16 @@ async function handoffRpc(method, params, options) {
   }
 }
 const coordinator = createHandoffCoordinator({
-  receiver: { launchReceiver: options => {
+  receiver: { launchReceiver: async options => {
     if (state.skipNextLaunch) { state.skipNextLaunch = false; return Promise.resolve({ accepted: true }); }
-    return rpc('luma.launchReceiver', handoffParams(options), options);
+    try { return await rpc('luma.launchReceiver', handoffParams(options), options); }
+    catch (error) {
+      // During projector boot the receiver's own service may become reachable
+      // before EShare can launch apps. Treat that channel as an optional wake
+      // hint and keep polling the saved receiver within the bounded handoff.
+      if (['NOT_CONNECTED', 'CONNECTION_FAILED', 'TIMEOUT'].includes(error.code)) return { accepted: false };
+      throw error;
+    }
   } },
   // LUMA Receiver downloads and renders the catalog file itself, so there is no
   // phone-side prepare/delivery step (that existed only because Kodi needed it).
@@ -1226,7 +1234,7 @@ async function startCasting() {
     message('This selected video belongs to LUMA. Select LUMA to continue.', true);
     return;
   }
-  if (!state.connected || !state.configured) {
+  if (!lumaWakeable()) {
     reportStatus('setup');
     page('devices');
     deviceStep(state.connected ? 'pair' : 'receiver');

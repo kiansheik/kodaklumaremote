@@ -419,14 +419,14 @@ public final class ServiceInstrumentation {
             activity = (MainActivity) runner.startActivitySync(launch); quietBrowser(activity); bind();
             require(service != original, "Test did not recreate the service");
             service.authorizeToken("active-handoff-fixture");
-            JSONObject restored = call("app.settings.autoConnect");
-            require(restored.getBoolean("connected") && !restored.has("devices"), "Saved projector did not take the cached connection path");
+            JSONObject restored = call("receiver.connect", "sourceToken", "active-handoff-fixture");
+            require(restored.getBoolean("ready"), "A direct handoff did not restore saved receiver configuration");
             JSONObject direct = service.snapshot().getJSONObject("connection");
             require(direct.getBoolean("configured") && direct.getBoolean("receiverConnected") && !direct.getBoolean("nativeConnected"),
-                    "Cached connection did not restore the receiver directly before native navigation");
-            call("receiver.connect");
+                    "Direct handoff did not restore the receiver before native navigation");
             require(fixture("").getInt("connections") == 1 && fixture("").getInt("mutations") == beforeRestore,
                     "Direct receiver restore replayed media or waited for the native projector socket");
+            passed("a direct cast restores the saved receiver before native projector navigation is available");
             JSONObject navigation = call("app.settings.autoConnect");
             require(navigation.getBoolean("connected") && service.snapshot().getJSONObject("connection").getBoolean("nativeConnected")
                     && fixture("").getInt("connections") == 2, "A later retry did not attach native projector navigation");

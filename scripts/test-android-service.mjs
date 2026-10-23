@@ -216,7 +216,7 @@ try {
   if (Number(sdk.trim()) >= 33) await run(adb, ['-s', serial, 'shell', 'pm', 'grant', appPackage, 'android.permission.POST_NOTIFICATIONS'], { timeout: 10000 });
   const { stdout, stderr } = await run(adb, ['-s', serial, 'shell', 'am', 'instrument', '-w', '-e', 'mode', 'service', '-e', 'targetHost', '10.0.2.2', '-e', 'receiverPort', String(receiver.address().port), `${appPackage}.test/dev.framextv.lumaremote.BackendInstrumentation`], { timeout: 150000, maxBuffer: 128 * 1024 });
   process.stdout.write(stdout); if (stderr) process.stderr.write(stderr);
-  assert.match(stdout, /INSTRUMENTATION_RESULT: failures=0/u); assert.match(stdout, /INSTRUMENTATION_RESULT: passed=18/u); assert.match(stdout, /INSTRUMENTATION_CODE: -1/u);
+  assert.match(stdout, /INSTRUMENTATION_RESULT: failures=0/u); assert.match(stdout, /INSTRUMENTATION_RESULT: passed=19/u); assert.match(stdout, /INSTRUMENTATION_CODE: -1/u);
   assert.equal(connections, 3);
   assert.ok(authRejections >= 2);
   assert.deepEqual(commands.filter(command => command.includes('setVolume')), [14, 14, 12, 14, 12, 14, 16, 18, 20, 16]
@@ -249,7 +249,7 @@ try {
     'KEYEVENT\r\n26\r\n\r\n',
   ]);
   assert.ok(commands.every(command => !/^(?:auth|CHECKPASSWORD|STARTAPPEVNET)/u.test(command)));
-  console.log('Android connection service: 18 pairing, lifecycle, Library-sync, canonical-transition, locked-screen, rewind, coalesced-volume, transient-error, pending-catalog, independent-transport, disconnect, power and Matter checks passed against emulator-only fixtures.');
+  console.log('Android connection service: 19 pairing, lifecycle, direct-handoff restore, Library-sync, canonical-transition, locked-screen, rewind, coalesced-volume, transient-error, pending-catalog, independent-transport, disconnect, power and Matter checks passed against emulator-only fixtures.');
 } catch (error) {
   console.error(JSON.stringify({ fixture: { connections, stops, playing, mutations: mutations.map(({ method, params }) => ({ method, ...(typeof params.play === 'boolean' ? { play: params.play } : {}) })) } }));
   throw error;

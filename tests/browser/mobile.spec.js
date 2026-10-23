@@ -123,6 +123,10 @@ async function openApp(page, initialSnapshot = null) {
         window.LumaRPC.receive({ id: request.id, ok: false, error: { code: 'APP_NOT_AVAILABLE', message: 'not installed' } });
         return;
       }
+      if (request.method === 'luma.launchReceiver' && receiver.nativeLaunchUnavailable) {
+        window.LumaRPC.receive({ id: request.id, ok: false, error: { code: 'NOT_CONNECTED', message: 'native startup is not ready' } });
+        return;
+      }
       if (request.method === 'receiver.pairComplete' && (receiver.pairExpired || request.params.code !== receiver.pairCode)) {
         window.LumaRPC.receive({ id: request.id, ok: false, error: { code: receiver.pairExpired ? 'PAIRING_EXPIRED' : 'PAIRING_CODE_WRONG', message: 'private-pairing-token' } });
         return;
@@ -1078,6 +1082,26 @@ test('booted receiver casts before native projector navigation becomes available
     host: '192.168.1.50', name: 'Test LUMA',
   } }));
   await expect(page.getByRole('button', { name: 'Home', exact: true })).toBeEnabled();
+});
+
+test('a saved offline receiver stays castable and waits for its boot service without native launch', async ({ page }) => {
+  await openApp(page, {
+    settings: { hasReceiver: true, hasPairing: true, autoConnect: true },
+    connection: { connected: false, nativeConnected: false, receiverConnected: false, configured: false,
+      host: '192.168.1.50', name: 'Saved LUMA' },
+  });
+  await expect(page.locator('#page-remote')).toBeVisible();
+  await page.evaluate(() => {
+    window.__receiver.running = false;
+    window.__receiver.nativeLaunchUnavailable = true;
+    setTimeout(() => { window.__receiver.running = true; }, 500);
+  });
+  await cast(page);
+  const calls = await page.evaluate(() => window.__calls.map(call => call.method));
+  expect(calls.filter(method => method === 'receiver.connect').length).toBeGreaterThanOrEqual(2);
+  expect(calls).toContain('luma.launchReceiver');
+  expect(calls).toContain('receiver.open');
+  expect(calls.some(method => ['device.connect', 'receiver.pairBegin', 'receiver.pairComplete'].includes(method))).toBe(false);
 });
 
 test('volume taps and slider show the pending value, stay usable and share one cooldown write', async ({ page }) => {

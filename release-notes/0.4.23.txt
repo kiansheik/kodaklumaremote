@@ -1,0 +1,3 @@
+Saved LUMA projectors stay castable while their receiver reconnects, so a Library selection now waits for the boot receiver instead of returning to setup.
+
+LUMA Receiver 0.3.3 starts its listener and brings its own screen forward when the projector finishes booting. Native projector controls may connect later without blocking playback.

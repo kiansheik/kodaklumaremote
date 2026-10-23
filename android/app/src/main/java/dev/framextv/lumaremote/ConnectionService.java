@@ -1122,6 +1122,7 @@ public final class ConnectionService extends Service {
             } else if ("app.settings.rescan".equals(method) || "app.settings.autoConnect".equals(method)) {
                 result = autoConnect(work, "app.settings.rescan".equals(method));
             } else if ("device.connect".equals(method)) result = connectNative(work, args.optString("host"), settings.readPairing());
+            else if ("receiver.connect".equals(method)) result = connectSavedReceiver(work, args);
             else result = work.transport.handle(method, args);
             if ("receiver.pairComplete".equals(method)) {
                 // Persist the issued token immediately (the code proved user intent) and
@@ -1526,6 +1527,19 @@ public final class ConnectionService extends Service {
         settings.saveReceiver(host, name);
         return object("connected", true, "nativeConnected", false, "receiverConnected", true,
                 "name", name, "device", object("name", name));
+    }
+    /** A cast may begin while the boot receiver is still offline and before the
+     * foreground auto-connect loop has hydrated this process's backend. Restore
+     * the saved endpoint/token on the first direct connect instead of making the
+     * WebView return to setup. */
+    private JSONObject connectSavedReceiver(Work work, JSONObject args) throws NativeBackend.BackendException, SettingsStore.SettingsException {
+        if (!work.transport.connectionSnapshot().optBoolean("configured")) {
+            JSONObject saved = settings.readReceiver(), pairing = settings.readPairing();
+            if (saved == null || pairing == null) throw NativeBackend.fail("RECEIVER_CONFIG");
+            JSONObject configured = copy(pairing); put(configured, "host", saved.optString("host"));
+            work.transport.handle("receiver.configure", configured);
+        }
+        return work.transport.handle("receiver.connect", args);
     }
     private JSONObject connectReceiver(Work work, String host) throws NativeBackend.BackendException, SettingsStore.SettingsException {
         JSONObject current = work.transport.connectionSnapshot();
