@@ -149,12 +149,16 @@
   ASS/SSA and TTML alongside WebVTT; generic CAF extraction remains WebVTT-only.
 - `android/`: phone APK shell and native networking; browser WebView has no
   native bridge. MainActivity owns capture/job lifecycle and visible-app retries;
-  ConnectionService owns background TCP/UDP/Kodi, MediaSession/notification and
-  cached state. NativeBackend implements transport; SettingsStore encrypts
-  validated credentials and caches the receiver. Generated assets/APKs ignored.
-  Kodi calls share a five-second multi-RPC budget and subtitle-player readiness;
-  system media actions use bounded wake locks, fresh source/revision guards and
-  Kodi HTTP independently of the projector's TCP connection. Back 30 appears as
+  ConnectionService owns background native-projector and LUMA Receiver traffic,
+  MediaSession/notification and cached state. NativeBackend keeps independent
+  `nativeConnected` (EShare/navigation 8121) and `receiverConnected` (paired
+  receiver HTTP 4191) readiness. Saved auto-connect authenticates receiver HTTP
+  first, so casting can start before projector navigation; later retries attach
+  native controls without dropping direct playback. SettingsStore encrypts the
+  pairing token and caches the private receiver address. Generated assets/APKs
+  are ignored. System media actions use bounded wake locks and fresh
+  source/revision guards independently of the projector's TCP connection;
+  projector volume/navigation actions remain gated on native readiness. Back 30 appears as
   both an explicit notification action and standard MediaSession `ACTION_REWIND`,
   which supplies the lock-screen control only for verified seekable playback.
   Canonical playback observed from another phone is adopted only from stable

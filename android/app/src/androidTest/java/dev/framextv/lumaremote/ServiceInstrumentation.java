@@ -421,9 +421,15 @@ public final class ServiceInstrumentation {
             service.authorizeToken("active-handoff-fixture");
             JSONObject restored = call("app.settings.autoConnect");
             require(restored.getBoolean("connected") && !restored.has("devices"), "Saved projector did not take the cached connection path");
-            require(service.snapshot().getJSONObject("connection").getBoolean("configured"), "Cached connection did not restore the encrypted receiver pairing");
+            JSONObject direct = service.snapshot().getJSONObject("connection");
+            require(direct.getBoolean("configured") && direct.getBoolean("receiverConnected") && !direct.getBoolean("nativeConnected"),
+                    "Cached connection did not restore the receiver directly before native navigation");
             call("receiver.connect");
-            require(fixture("").getInt("connections") == 2 && fixture("").getInt("mutations") == beforeRestore, "Restoring saved setup replayed media or opened extra sockets");
+            require(fixture("").getInt("connections") == 1 && fixture("").getInt("mutations") == beforeRestore,
+                    "Direct receiver restore replayed media or waited for the native projector socket");
+            JSONObject navigation = call("app.settings.autoConnect");
+            require(navigation.getBoolean("connected") && service.snapshot().getJSONObject("connection").getBoolean("nativeConnected")
+                    && fixture("").getInt("connections") == 2, "A later retry did not attach native projector navigation");
             require(fixture("").getInt("volumeSets") == 2 && fixture("").getInt("volume") == 7, "A destroyed/disconnected service sent its old queued volume");
             require(call("receiver.status").getBoolean("active") && !service.snapshot().has("remote"), "An active handoff job was replaced by playback adoption");
             ordinaryCard(waitNotification(true)); waitCard(42, false);
@@ -1015,8 +1021,11 @@ public final class ServiceInstrumentation {
             call("receiver.status");
             waitCanonicalRemote(FIRST, "framextv:tv:42:1:6", "Shared series · S1 E6", "https://media.example/catalog-pt.vtt");
             fixture("?dropTcp=1"); PendingCall hardwareLost = submit("luma.status");
-            require(hardwareLost.ready.await(8, TimeUnit.SECONDS) && hardwareLost.failure.get() != null
-                    && !service.snapshot().getJSONObject("connection").getBoolean("connected"), "Fixture did not disconnect the projector socket");
+            require(hardwareLost.ready.await(8, TimeUnit.SECONDS) && hardwareLost.failure.get() != null,
+                    "Fixture did not disconnect the projector socket");
+            JSONObject receiverOnly = service.snapshot().getJSONObject("connection");
+            require(receiverOnly.getBoolean("connected") && receiverOnly.getBoolean("receiverConnected") && !receiverOnly.getBoolean("nativeConnected"),
+                    "Losing native navigation also disconnected the independent receiver");
             fixture("?source=other&lumaMetadata=0&position=11");
             long contentlessBy = SystemClock.elapsedRealtime() + 5000;
             while (SystemClock.elapsedRealtime() < contentlessBy) {

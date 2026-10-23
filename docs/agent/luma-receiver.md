@@ -49,6 +49,39 @@ runs every 60 s (pull with per-receiver cursor, push with a watermark).
 Coordinator connects first and only launches the receiver over EShare when it
 does not answer. Phone scrubs are mirrored with latest-wins `receiver.scrub`.
 
+## Boot and direct readiness (unreleased after 0.4.10)
+
+The receiver side already has the early path needed for cold boot:
+`StartupReceiver` handles `BOOT_COMPLETED`, `ReceiverService` immediately starts
+the port-4191 control server as a `START_STICKY` foreground service, and an
+accepted `player.open` brings `MainActivity` to the foreground. This path does
+not depend on EShare/navigation port 8121. `ReceiverApp.onCreate` also starts the
+service whenever Android creates the process.
+
+The missing dependency was on the phone. Saved auto-connect previously opened
+8121 before it supplied the saved host/token to the receiver client. It now
+tries port 4191 directly and represents the two transports separately:
+
+- `receiverConnected`: paired receiver HTTP is authenticated; casting and
+  receiver playback controls are available.
+- `nativeConnected`: EShare/navigation TCP is available; Home/Back/D-pad, apps,
+  projector volume and power are available.
+- `connected`: either transport is currently usable, retained for the existing
+  service/UI contract.
+
+After receiver-only readiness, foreground auto-connect retries native readiness
+at 15-second intervals. Receiver status polling does not postpone that timer.
+If the native socket later drops, the service clears projector volume and its
+hardware actions but retains direct playback polling and media controls.
+
+Emulator fixtures prove direct saved-IP/token connection without a native
+socket and loss of native TCP during active receiver playback. Browser fixtures
+prove a direct-only snapshot can cast without `luma.launchReceiver` and enables
+Home only after native readiness. Physical cold-boot timing remains unverified:
+power-cycle the exact projector and measure first UI, first port-4191 response,
+first accepted cast and first port-8121 response. No live device was changed by
+this implementation session.
+
 ## Release
 
 Each phone release now carries `luma-receiver-<v>.apk` and

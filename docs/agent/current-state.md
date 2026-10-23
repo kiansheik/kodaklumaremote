@@ -1,5 +1,28 @@
 # Current state
 
+## Unreleased after 0.4.10: receiver-first cold-boot casting
+
+The receiver APK already requests `BOOT_COMPLETED`, starts a `START_STICKY`
+foreground service that opens port 4191, and brings `MainActivity` forward when
+`player.open` arrives. The phone had nevertheless gated saved setup on the
+projector's unrelated EShare/navigation socket on port 8121. It now configures
+and authenticates directly to the saved private receiver address/token first,
+publishes separate `receiverConnected` and `nativeConnected` readiness, and
+allows casting as soon as the receiver answers. The Activity keeps retrying the
+native socket every 15 s after direct readiness so navigation, apps, volume and
+power arrive later without delaying playback. A native-socket loss preserves
+receiver polling, playback controls and casting while removing hardware-only
+volume/navigation actions.
+
+Validation: Android debug/AndroidTest builds pass; backend 15/15 and service
+18/18 emulator checks pass; the focused handoff suite passes 80/80; and the full
+browser suite passes 158/158, including direct-only cold-boot casting. The full
+Node aggregate was interrupted after it stopped producing output, so no fresh
+aggregate Node count is claimed. No APK was installed on the physical projector
+or phone. A real projector power-cycle still must prove that this firmware sends
+the boot broadcast promptly, keeps the service alive, and exposes port 4191
+before EShare port 8121.
+
 ## Unreleased 0.4.10 / receiver 0.2.3: self-rendered captions and crash fixes
 
 Published 0.4.9 was user-tested. Follow-up fixes (see

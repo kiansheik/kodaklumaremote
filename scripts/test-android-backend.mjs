@@ -198,7 +198,7 @@ try {
     '-e', 'readinessPort', String(readiness.address().port), '-e', 'malformedPort', String(malformed.address().port),
     `${appPackage}.test/dev.framextv.lumaremote.BackendInstrumentation`], { timeout: 90000, maxBuffer: 128 * 1024 });
   process.stdout.write(stdout); if (stderr) process.stderr.write(stderr);
-  assert.match(stdout, /INSTRUMENTATION_RESULT: failures=0/u); assert.match(stdout, /INSTRUMENTATION_RESULT: passed=14/u); assert.match(stdout, /INSTRUMENTATION_CODE: -1/u);
+  assert.match(stdout, /INSTRUMENTATION_RESULT: failures=0/u); assert.match(stdout, /INSTRUMENTATION_RESULT: passed=15/u); assert.match(stdout, /INSTRUMENTATION_CODE: -1/u);
   assert.equal(connections, 2); assert.equal(appLists, 1);
   assert.ok(commands.includes('CONTENT\r\n1\r\n0 Olá 👋\r\n\r\n'));
   assert.equal(commands.filter(command => command === 'KEYEVENT\r\n26\r\n\r\n').length, 1);
@@ -226,7 +226,7 @@ try {
     { position: 60, expectedSourceUrl: FIRST }, { expectedSourceUrl: FIRST },
   ]);
   assert.equal(readinessReads, 6); assert.equal(malformedStatus, 3); assert.equal(deadlineCalls, 2);
-  console.log('Native backend: 14 instrumentation checks and LUMA Receiver wire assertions passed against emulator-only fixtures.');
+  console.log('Native backend: 15 instrumentation checks and LUMA Receiver wire assertions passed against emulator-only fixtures.');
 } finally {
   for (const socket of sockets) socket.destroy();
   for (const server of servers) { server.closeAllConnections?.(); if (server.listening) await new Promise(done => server.close(done)); }

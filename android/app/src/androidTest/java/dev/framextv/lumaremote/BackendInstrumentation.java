@@ -70,6 +70,15 @@ public final class BackendInstrumentation extends UiSmokeInstrumentation {
         backend = new NativeBackend(getTargetContext());
         backend.setSourceGuard(token -> "current".equals(token));
         int receiverPort = Integer.parseInt(args.getString("receiverPort")), slowPort = Integer.parseInt(args.getString("slowPort"));
+        check("saved receiver endpoint works before native navigation", () -> {
+            call("receiver.configure", "host", args.getString("targetHost"), "token", TOKEN, "port", receiverPort);
+            JSONObject ready = call("receiver.connect"), connection = backend.connectionSnapshot();
+            require(ready.getBoolean("ready") && connection.getBoolean("connected")
+                    && connection.getBoolean("receiverConnected") && !connection.getBoolean("nativeConnected"),
+                    "Direct receiver readiness still depended on the native projector protocol");
+            rejects("INVALID_HOST", "receiver.configure", "host", "8.8.8.8", "token", TOKEN, "port", receiverPort);
+            call("device.disconnect");
+        });
         check("connection, pairing and receiver identity", () -> {
             connect();
             rejects("RECEIVER_CONFIG", "receiver.status");

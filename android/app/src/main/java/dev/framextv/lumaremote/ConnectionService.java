@@ -887,7 +887,7 @@ public final class ConnectionService extends Service {
                 result = rememberRemote(work, args);
             } else if ("app.settings.rescan".equals(method) || "app.settings.autoConnect".equals(method)) {
                 result = autoConnect(work, "app.settings.rescan".equals(method));
-            } else if ("device.connect".equals(method)) result = connectReceiver(work, args.optString("host"));
+            } else if ("device.connect".equals(method)) result = connectNative(work, args.optString("host"), settings.readPairing());
             else result = work.transport.handle(method, args);
             if ("receiver.pairComplete".equals(method)) {
                 // Persist the issued token immediately (the code proved user intent) and
@@ -932,9 +932,13 @@ public final class ConnectionService extends Service {
                 if (method != null && (method.startsWith("receiver.") || method.startsWith("luma.")) && !SIDE_CHANNEL.contains(method) && !method.equals("receiver.status") && !method.equals("luma.status")) schedulePoll(250);
             });
         } catch (NativeBackend.BackendException failure) {
+            JSONObject failedConnection = work.transport.connectionSnapshot();
+            boolean nativeLost = method != null && method.startsWith("luma.") && !failedConnection.optBoolean("nativeConnected");
+            if (nativeLost) cancelQueuedVolume();
             synchronized (stateLock) {
                 if (!work.current()) return;
-                put(state, "connection", work.transport.connectionSnapshot());
+                if (nativeLost) { confirmedVolume = null; state.remove("volume"); }
+                put(state, "connection", failedConnection);
                 put(state, "settings", settings.metadata());
                 if (method != null && method.startsWith("receiver.") && !SIDE_CHANNEL.contains(method)) observeReceiverFailure(failure);
             }
@@ -1250,24 +1254,62 @@ public final class ConnectionService extends Service {
             });
         } catch (RejectedExecutionException ignored) { }
     }
-    private JSONObject connectReceiver(Work work, String host) throws NativeBackend.BackendException, SettingsStore.SettingsException {
-        JSONObject current = work.transport.connectionSnapshot(), result;
-        if (current.optBoolean("connected") && host.equals(current.optString("host"))) return object("connected", true, "name", current.optString("name"), "device", object("name", current.optString("name")));
-        result = work.transport.handle("device.connect", object("host", host));
+    private JSONObject connectNative(Work work, String host, JSONObject pairing) throws NativeBackend.BackendException, SettingsStore.SettingsException {
+        JSONObject result = work.transport.handle("device.connect", object("host", host));
         if (!work.current()) return result;
         settings.saveReceiver(host, result.optString("name"));
-        JSONObject saved = settings.readPairing();
-        if (saved != null && work.current()) work.transport.handle("receiver.configure", saved);
+        if (pairing != null && work.current()) {
+            JSONObject configured = copy(pairing); put(configured, "host", host);
+            work.transport.handle("receiver.configure", configured);
+        }
         return result;
+    }
+    /** The receiver has its own boot-time LAN service and does not depend on
+     * EShare's much later navigation socket. A saved pairing can therefore make
+     * casting ready as soon as the projector has Wi-Fi and port 4191. */
+    private JSONObject connectDirectReceiver(Work work, String host, JSONObject pairing) throws NativeBackend.BackendException, SettingsStore.SettingsException {
+        JSONObject configured = copy(pairing); put(configured, "host", host);
+        work.transport.handle("receiver.configure", configured);
+        JSONObject ready = work.transport.handle("receiver.connect", new JSONObject());
+        if (!work.current()) return ready;
+        String name = ready.optString("name", "LUMA Receiver");
+        settings.saveReceiver(host, name);
+        return object("connected", true, "nativeConnected", false, "receiverConnected", true,
+                "name", name, "device", object("name", name));
+    }
+    private JSONObject connectReceiver(Work work, String host) throws NativeBackend.BackendException, SettingsStore.SettingsException {
+        JSONObject current = work.transport.connectionSnapshot();
+        if (current.optBoolean("nativeConnected") && host.equals(current.optString("host")))
+            return object("connected", true, "nativeConnected", true, "receiverConnected", current.optBoolean("receiverConnected"),
+                    "name", current.optString("name"), "device", object("name", current.optString("name")));
+        JSONObject pairing = settings.readPairing();
+        if (pairing != null) {
+            try { return connectDirectReceiver(work, host, pairing); }
+            catch (NativeBackend.BackendException directFailure) {
+                if (!work.current() || !"RECEIVER_UNAVAILABLE".equals(directFailure.code)) throw directFailure;
+            }
+        }
+        return connectNative(work, host, pairing);
     }
     private JSONObject autoConnect(Work work, boolean rescan) throws NativeBackend.BackendException, SettingsStore.SettingsException {
         JSONObject current = work.transport.connectionSnapshot();
-        if (!rescan && current.optBoolean("connected")) return object("connected", true, "name", current.optString("name"), "devices", new JSONArray());
+        if (!rescan && current.optBoolean("nativeConnected")) return object("connected", true, "nativeConnected", true,
+                "receiverConnected", current.optBoolean("receiverConnected"), "name", current.optString("name"), "devices", new JSONArray());
         if (rescan) settings.clear("receiver");
         JSONObject saved = rescan ? null : settings.readReceiver();
         if (saved != null) {
             // A failed attempt (projector booting, Wi-Fi rejoining, the old socket
             // after a crash) must not forget the projector: keep it and retry.
+            if (current.optBoolean("receiverConnected") && saved.optString("host").equals(current.optString("host"))) {
+                try { return connectNative(work, saved.optString("host"), settings.readPairing()); }
+                catch (NativeBackend.BackendException nativeUnavailable) {
+                    if (!work.current()) throw nativeUnavailable;
+                    // Direct casting remains ready. A later foreground retry can
+                    // attach navigation without delaying this successful route.
+                    return object("connected", true, "nativeConnected", false, "receiverConnected", true,
+                            "name", current.optString("name"), "devices", new JSONArray());
+                }
+            }
             try { return connectReceiver(work, saved.optString("host")); }
             catch (NativeBackend.BackendException ignored) { if (!work.current()) throw ignored; }
         }
@@ -1663,13 +1705,14 @@ public final class ConnectionService extends Service {
         String revision = mediaRevision;
         if (expected.isEmpty() || !configured()) return;
         if ("volume-down".equals(method) || "volume-up".equals(method)) {
-            JSONObject volume = snapshot().optJSONObject("volume");
+            if (!hardwareConnected(presentationSnapshot())) return;
+            JSONObject volume = scopedState.optJSONObject("volume");
             if (volume != null && volume.optInt("max") > 0) queueVolume(object("value", Math.max(0, Math.min(volume.optInt("max"),
                     volume.optInt("current") + ("volume-up".equals(method) ? 1 : -1))), "expectedSourceUrl", expected), null);
             return;
         }
         if ("mute".equals(method)) cancelQueuedVolume();
-        if ((method.startsWith("volume-") || method.equals("mute")) && !connected()) return;
+        if ((method.startsWith("volume-") || method.equals("mute")) && !hardwareConnected(presentationSnapshot())) return;
         enqueue(work -> {
             try {
                 JSONObject current = readMediaPlayback(work);
@@ -2052,7 +2095,7 @@ public final class ConnectionService extends Service {
             Bundle revision = new Bundle(); revision.putString("revision", mediaRevision);
             if (canRewind) controls.addCustomAction(new PlaybackState.CustomAction.Builder(BACK_30,
                     "Back 30 seconds", android.R.drawable.ic_media_rew).setExtras(revision).build());
-            if (connection.optBoolean("connected")) {
+            if (hardwareConnected(all)) {
                 controls.addCustomAction(new PlaybackState.CustomAction.Builder(VOLUME_DOWN, "Volume −", R.drawable.ic_volume_down).setExtras(revision).build());
                 controls.addCustomAction(new PlaybackState.CustomAction.Builder(VOLUME_UP, "Volume +", R.drawable.ic_volume_up).setExtras(revision).build());
             }
@@ -2084,7 +2127,7 @@ public final class ConnectionService extends Service {
         String title = verified ? clean(remote.optJSONObject("media").optString("title"), 200) : "LUMA Remote";
         if (title.isEmpty()) title = "Projector video";
         return object("revision", revision, "verified", verified, "playing", playback != null && playback.optBoolean("playing"),
-                "title", title, "projector", playbackSummary(all), "hardwareConnected", connection != null && connection.optBoolean("connected"),
+                "title", title, "projector", playbackSummary(all), "hardwareConnected", hardwareConnected(all),
                 "canRewind", verified && canRewind(playback), "hasNext", remote != null && remote.optJSONObject("nextEpisode") != null,
                 "notice", clean(notice, 200), "foreground", foreground).toString();
     }
@@ -2125,7 +2168,7 @@ public final class ConnectionService extends Service {
                 .setCategory(mediaCard ? Notification.CATEGORY_TRANSPORT : Notification.CATEGORY_SERVICE).setVisibility(Notification.VISIBILITY_PUBLIC);
         if (verified) {
             boolean playing = playback.optBoolean("playing");
-            boolean hardwareConnected = connection.optBoolean("connected");
+            boolean hardwareConnected = hardwareConnected(all);
             boolean canRewind = canRewind(playback);
             if (!mediaCard && hardwareConnected) builder.addAction(new Notification.Action.Builder(R.drawable.ic_volume_down, "Volume −", pending(VOLUME_DOWN, 4, revision)).build());
             if (canRewind) builder.addAction(new Notification.Action.Builder(android.R.drawable.ic_media_rew, "Back 30 seconds", pending(BACK_30, 7, revision)).build());
@@ -2164,6 +2207,14 @@ public final class ConnectionService extends Service {
         JSONObject connection = all.optJSONObject("connection");
         return connection != null && connection.optBoolean("philips".equals(all.optString("selectedTarget")) ? "connected" : "configured")
                 && matches(all.optJSONObject("remote"), all.optJSONObject("playback"));
+    }
+    private static boolean hardwareConnected(JSONObject all) {
+        JSONObject connection = all.optJSONObject("connection");
+        if (connection == null) return false;
+        if ("philips".equals(all.optString("selectedTarget"))) return connection.optBoolean("connected");
+        // Direct receiver readiness keeps casting and playback controls alive,
+        // but hardware keys require EShare's independent native socket.
+        return connection.has("nativeConnected") ? connection.optBoolean("nativeConnected") : connection.optBoolean("connected");
     }
     private static boolean canRewind(JSONObject playback) {
         return playback != null && playback.optBoolean("active") && playback.optBoolean("canSeek")

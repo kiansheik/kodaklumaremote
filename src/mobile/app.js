@@ -99,7 +99,7 @@ const errors = {
   CAMERA_DENIED: 'Camera access is needed to scan. You can enter the setup code instead.',
 };
 const state = {
-  native: false, busy: false, handoff: false, configured: false, connected: false,
+  native: false, busy: false, handoff: false, configured: false, connected: false, nativeConnected: false, receiverConnected: false,
   host: '', name: '', playback: null, activeMedia: null, pendingMedia: null,
   tracks: [], catalog: [], selectedIndex: null, subtitlesEnabled: false, nextEpisode: null, apps: [],
   appPage: 0, subtitlePage: 0, sheet: null, sourceGeneration: 0, sourceChanged: false, autoStart: false, setupError: null,
@@ -275,7 +275,7 @@ async function resumeMedia(media, target, signal) {
 function receiver(target = state.target) { return target === 'philips' ? state.philips : state; }
 function tvConnected() { return state.philips.connected || state.matter.connected; }
 function volumeContext() {
-  if (state.target !== 'philips') return state.connected ? { route: 'luma', key: `luma:${state.host}` } : null;
+  if (state.target !== 'philips') return state.nativeConnected ? { route: 'luma', key: `luma:${state.host}` } : null;
   if (state.matter.connected && state.matter.capabilities.volume && state.matter.volume) return { route: 'matter', key: 'philips:matter' };
   return state.philips.connected ? { route: 'msx', key: `philips:msx:${state.philips.host}:${state.philips.activeMedia?.url || ''}` } : null;
 }
@@ -290,7 +290,7 @@ function remoteVolume() {
   if (state.matter.connected && state.matter.capabilities.volume && state.matter.volume) return state.matter.volume;
   return state.philips.connected ? state.philips.volume : null;
 }
-function navigationReady() { return state.native && !state.busy && !state.handoff && (state.target === 'philips' ? state.matter.connected && state.matter.capabilities.navigation : state.connected); }
+function navigationReady() { return state.native && !state.busy && !state.handoff && (state.target === 'philips' ? state.matter.connected && state.matter.capabilities.navigation : state.nativeConnected); }
 function matterState(value) {
   if (!value || typeof value !== 'object') return;
   const remote = state.matter;
@@ -658,7 +658,8 @@ function renderControls() {
   const matter = state.matter;
   const tvRemote = free && tv && matter.connected;
   const navigation = navigationReady();
-  const luma = free && !tv && state.connected;
+  const projector = free && !tv && state.connected;
+  const luma = free && !tv && state.nativeConnected;
   const player = free && (tv ? remote.connected : state.configured);
   const active = player && playbackMatchesMedia(remote.activeMedia, remote.playback);
   const saved = tv ? remote.connected || matter.paired : state.settings.hasReceiver && state.settings.hasPairing;
@@ -671,7 +672,8 @@ function renderControls() {
   $('#tab-devices').hidden = saved;
   $('#show-settings').hidden = !saved;
   $('#show-settings').disabled = !free;
-  $('#device-badge').textContent = tv ? (matter.connected ? 'TV remote connected' : remote.connected ? 'TV receiver connected' : 'TV not connected') : state.connected ? (state.name || 'Projector connected') : 'No projector connected';
+  $('#device-badge').textContent = tv ? (matter.connected ? 'TV remote connected' : remote.connected ? 'TV receiver connected' : 'TV not connected')
+    : state.receiverConnected && !state.nativeConnected ? 'LUMA Receiver ready' : state.connected ? (state.name || 'Projector connected') : 'No projector connected';
   $('#device-badge').dataset.connected = String(tv ? tvConnected() : state.connected);
   $('#tv-setup-tabs').hidden = !tv || !matter.available;
   $('#tv-setup-remote').setAttribute('aria-selected', String(state.tvSetup === 'remote'));
@@ -778,8 +780,8 @@ function renderControls() {
   $('#connect-device').disabled = !free || state.connected;
   $('#disconnect-device').hidden = !state.connected;
   $('#disconnect-device').disabled = !free;
-  $('#pair-submit').disabled = !luma;
-  $('#pair-show').disabled = !luma;
+  $('#pair-submit').disabled = !projector;
+  $('#pair-show').disabled = !projector;
   for (const input of $('#pair-form').querySelectorAll('input')) input.disabled = !free;
   for (const button of document.querySelectorAll('[data-key]')) { button.disabled = !navigation; if (button.closest('.topline')) button.style.visibility = tv && !matter.capabilities.navigation ? 'hidden' : ''; }
   $('#refresh-volume').disabled = !(tv ? player || tvRemote : luma);
@@ -789,7 +791,7 @@ function renderControls() {
     $('#volume-down').disabled ||= displayedVolume.current <= (displayedVolume.min || 0);
     $('#volume-up').disabled ||= displayedVolume.current >= displayedVolume.max;
   }
-  $('#settings-disconnect').disabled = !(tv ? player || tvRemote : luma);
+  $('#settings-disconnect').disabled = !(tv ? player || tvRemote : projector);
   $('#show-power').hidden = tv && !matter.capabilities.power;
   $('#show-power').setAttribute('aria-label', tv ? 'Power off TV' : 'Power off projector');
   $('#show-power').disabled = !(tv ? tvRemote && matter.capabilities.power : luma);
@@ -939,6 +941,10 @@ function connectionState(snapshot, { initial = false } = {}) {
   const connection = snapshot.connection;
   if (connection && typeof connection === 'object') {
     if (typeof connection.connected === 'boolean') state.connected = connection.connected;
+    if (typeof connection.nativeConnected === 'boolean') state.nativeConnected = connection.nativeConnected;
+    else if (typeof connection.connected === 'boolean') state.nativeConnected = connection.connected;
+    if (typeof connection.receiverConnected === 'boolean') state.receiverConnected = connection.receiverConnected;
+    else if (typeof connection.connected === 'boolean') state.receiverConnected = false;
     if (typeof connection.configured === 'boolean') state.configured = connection.configured;
     if (typeof connection.host === 'string' && privateHost(connection.host)) {
       if (state.host && state.host !== connection.host) {
@@ -956,7 +962,8 @@ function connectionState(snapshot, { initial = false } = {}) {
     }
   }
   volume(snapshot);
-  if (state.connected && $('#message').textContent === 'Connecting to your saved projector…') message('Projector connected. Your remote is ready.');
+  if (state.connected && $('#message').textContent === 'Connecting to your saved projector…')
+    message(state.nativeConnected ? 'Projector connected. Your remote is ready.' : 'LUMA Receiver is ready. You can cast now; projector navigation will connect later.');
   if (!state.handoff) {
     const remote = state.subtitleFlow ? null : restoredRemote(snapshot.remote, snapshot.playback);
     if (remote) {
@@ -978,7 +985,7 @@ function connectionState(snapshot, { initial = false } = {}) {
     message(tvConnected() ? 'Philips TV connected. Your remote is ready.' : state.matter.paired ? 'Reconnecting to your paired TV…' : 'Pair your TV remote or connect its video receiver.');
   } else if (initial && (state.connected || (state.settings.hasReceiver && state.settings.hasPairing))) {
     page('remote');
-    message(state.connected ? 'Projector connected. Your remote is ready.' : 'Connecting to your saved projector…');
+    message(state.connected ? state.nativeConnected ? 'Projector connected. Your remote is ready.' : 'LUMA Receiver is ready. You can cast now; projector navigation will connect later.' : 'Connecting to your saved projector…');
   } else if (initial && state.settings.hasReceiver) {
     deviceStep('pair');
   }
@@ -995,7 +1002,8 @@ async function command(method, params, success, consume) {
   } catch (error) {
     if (method === 'app.capture') reportStatus('error', error.code);
     if (typeof method === 'string' && method.startsWith('luma.') && ['CONNECTION_FAILED', 'TIMEOUT', 'NOT_CONNECTED', 'INVALID_RESPONSE'].includes(error.code)) {
-      state.connected = false;
+      state.nativeConnected = false;
+      state.connected = state.receiverConnected;
       state.apps = [];
       state.volume = null;
       $('#volume-level').textContent = '—';
@@ -1675,6 +1683,8 @@ for (const button of document.querySelectorAll('[data-reset]')) button.addEventL
     }
     if (scope !== 'pairing') {
       state.connected = false;
+      state.nativeConnected = false;
+      state.receiverConnected = false;
       state.configured = false;
       state.settings.hasReceiver = false;
       state.host = '';
@@ -1888,6 +1898,8 @@ $('#receiver-form').addEventListener('submit', async event => {
       $('#playback-status').textContent = 'Choose a video in Browse.';
     }
     state.connected = true;
+    state.nativeConnected = result.nativeConnected !== false;
+    state.receiverConnected = result.receiverConnected === true;
     state.settings.hasReceiver = true;
     state.host = host;
     state.name = safeText(result.device?.name || result.name) || 'LUMA projector';
@@ -1915,6 +1927,8 @@ $('#rescan-projectors').addEventListener('click', async () => {
     connectionState(result);
     if (result?.connected === true) {
       state.connected = true;
+      state.nativeConnected = result.nativeConnected !== false;
+      state.receiverConnected = result.receiverConnected === true;
       state.name = safeText(result.device?.name || result.name) || state.name;
       const found = result.devices?.find(device => privateHost(device?.host || ''));
       if (found) { connectionState({ connection: { host: found.host } }); $('#receiver-host').value = found.host; }
@@ -1931,7 +1945,10 @@ function disconnect() {
     if (state.matter.paired) matterState(await rpc('matter.disconnect', {}));
     return rpc('msx.disconnect', {});
   }, {}, 'TV controls disconnected. A playing video stays on the TV.', result => { state.philips.connected = false; msxState(result); });
-  return command('device.disconnect', {}, 'Disconnected. A playing video stays on the projector.', () => { state.connected = false; state.configured = false; state.apps = []; state.volume = null; $('#volume-level').textContent = '—'; renderApps(); });
+  return command('device.disconnect', {}, 'Disconnected. A playing video stays on the projector.', () => {
+    state.connected = false; state.nativeConnected = false; state.receiverConnected = false; state.configured = false;
+    state.apps = []; state.volume = null; $('#volume-level').textContent = '—'; renderApps();
+  });
 }
 $('#disconnect-device').addEventListener('click', disconnect);
 $('#settings-disconnect').addEventListener('click', async () => { if (await disconnect()) { closeSheet(); page('remote'); } });

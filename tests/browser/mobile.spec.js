@@ -983,6 +983,27 @@ test('saved setup opens the remote while native reconnects and keeps configurati
   await expect(page.locator('#pair-code')).toHaveValue('');
 });
 
+test('booted receiver casts before native projector navigation becomes available', async ({ page }) => {
+  await page.setViewportSize({ width: 360, height: 640 });
+  await openApp(page, {
+    settings: { hasReceiver: true, hasPairing: true, autoConnect: true },
+    connection: { connected: true, nativeConnected: false, receiverConnected: true, configured: true,
+      host: '192.168.1.50', name: 'LUMA Receiver' },
+  });
+  await expect(page.locator('#device-badge')).toHaveText('LUMA Receiver ready');
+  await expect(page.getByRole('button', { name: 'Home', exact: true })).toBeDisabled();
+  await cast(page);
+  const coldBootCalls = await page.evaluate(() => window.__calls.map(call => call.method));
+  expect(coldBootCalls).toContain('receiver.connect');
+  expect(coldBootCalls).toContain('receiver.open');
+  expect(coldBootCalls).not.toContain('luma.launchReceiver');
+  await page.evaluate(() => window.LumaApp.onConnectionState({ connection: {
+    connected: true, nativeConnected: true, receiverConnected: true, configured: true,
+    host: '192.168.1.50', name: 'Test LUMA',
+  } }));
+  await expect(page.getByRole('button', { name: 'Home', exact: true })).toBeEnabled();
+});
+
 test('volume taps and slider show the pending value, stay usable and share one cooldown write', async ({ page }) => {
   await page.clock.install();
   await openApp(page, serviceSnapshot());

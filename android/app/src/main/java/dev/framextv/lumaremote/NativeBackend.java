@@ -71,6 +71,8 @@ public final class NativeBackend {
     private volatile DatagramSocket discovering;
     private volatile HttpURLConnection activeHttp;
     private String host, deviceName, token, activeToken;
+    /** True only after the paired receiver answered directly on port 4191. */
+    private boolean receiverConnected;
     private long receiverDeadline;
     private int receiverPort = RECEIVER_PORT;
     private Map<String, String> apps;
@@ -79,13 +81,18 @@ public final class NativeBackend {
     public void setSourceGuard(SourceGuard guard) { sourceGuard = guard; }
     public void setPreparedSubtitleResolver(PreparedSubtitleResolver resolver) { subtitleResolver = resolver; }
     /** Service worker only: forgetting the receiver pairing does not close projector controls. */
-    public synchronized void clearReceiverConfiguration() { token = null; }
+    public synchronized void clearReceiverConfiguration() { token = null; receiverConnected = false; }
 
     /** Read on the service's network queue; never includes credentials. */
     public synchronized JSONObject connectionSnapshot() {
-        try { return object("connected", !closed && luma != null && !luma.isClosed(),
+        try {
+            boolean nativeConnected = !closed && luma != null && !luma.isClosed();
+            boolean directConnected = !closed && receiverConnected;
+            return object("connected", nativeConnected || directConnected,
+                "nativeConnected", nativeConnected, "receiverConnected", directConnected,
                 "configured", !closed && token != null,
-                "host", host == null ? "" : host, "name", deviceName == null ? "" : deviceName); }
+                "host", host == null ? "" : host, "name", deviceName == null ? "" : deviceName);
+        }
         catch (Exception ignored) { return new JSONObject(); }
     }
 
@@ -177,12 +184,14 @@ public final class NativeBackend {
             if ("device.discover".equals(method)) return object("devices", discover());
             if ("device.connect".equals(method)) return connectDevice(text(params, "host", 64));
             if ("device.disconnect".equals(method)) {
-                closeLuma(); host = null; token = null; return object("connected", false);
+                closeLuma(); host = null; token = null; receiverConnected = false; return object("connected", false);
             }
             if (method != null && method.startsWith("luma.")) return lumaAction(method.substring(5), params);
             if (method != null && method.startsWith("receiver.")) return receiverAction(method.substring(9), params);
             throw fail("INVALID_INPUT");
         } catch (BackendException failure) {
+            if (method != null && method.startsWith("receiver.")
+                    && ("RECEIVER_AUTH".equals(failure.code) || "RECEIVER_UNAVAILABLE".equals(failure.code))) receiverConnected = false;
             if ("RECEIVER_AUTH".equals(failure.code)) token = null;
             throw failure;
         }
@@ -196,7 +205,7 @@ public final class NativeBackend {
     private JSONObject connectDevice(String selected) throws Exception {
         if (!privateAddress(selected)) throw fail("INVALID_HOST");
         closeLuma();
-        if (!selected.equals(host)) { token = null; receiverPort = RECEIVER_PORT; }
+        if (!selected.equals(host)) { token = null; receiverPort = RECEIVER_PORT; receiverConnected = false; deviceName = null; }
         host = selected;
         try {
             Socket socket = new Socket(); luma = socket;
@@ -220,7 +229,10 @@ public final class NativeBackend {
             if (!pairing.matches("(?i)configed\\s+none")) throw fail("PAIRING_UNKNOWN");
             return object("connected", true, "name", deviceName, "device", object("name", deviceName));
         } catch (Exception failure) {
-            closeLuma(); host = null;
+            // Keep the validated endpoint and any independently verified receiver
+            // connection. The projector's EShare service can appear much later
+            // than Wi-Fi and LUMA Receiver during a cold boot.
+            closeLuma();
             if (failure instanceof BackendException) throw failure;
             throw fail(failure instanceof SocketTimeoutException ? "TIMEOUT" : "CONNECTION_FAILED");
         }
@@ -529,14 +541,27 @@ public final class NativeBackend {
     }
     /** Optional fixture port (tests only); the shipped UI never sends one, so 4191 is used. */
     private void receiverPort(JSONObject params) throws BackendException {
-        if (params.has("port")) receiverPort = integer(params.opt("port"), 1024, 65535);
+        if (params.has("port")) {
+            int selected = integer(params.opt("port"), 1024, 65535);
+            if (selected != receiverPort) receiverConnected = false;
+            receiverPort = selected;
+        }
     }
     private JSONObject receiverAction(String action, JSONObject params) throws Exception {
         if ("configure".equals(action) || "pairBegin".equals(action) || "pairComplete".equals(action)) receiverPort(params);
         if ("configure".equals(action)) {
+            if (params.has("host")) {
+                String selected = text(params, "host", 64);
+                if (!privateAddress(selected)) throw fail("INVALID_HOST");
+                if (!selected.equals(host)) {
+                    closeLuma(); token = null; receiverConnected = false; deviceName = null;
+                    host = selected;
+                }
+            }
             requireHost();
             String saved = text(params, "token", 200);
             if (!saved.matches("[A-Za-z0-9_-]{20,200}")) throw fail("RECEIVER_CONFIG");
+            if (!saved.equals(token)) receiverConnected = false;
             token = saved; return object("configured", true);
         }
         if ("pairBegin".equals(action)) {
@@ -559,6 +584,8 @@ public final class NativeBackend {
             JSONObject info = receiverInfo();
             if (!"lumareceiver".equals(info.optString("app"))) throw fail("RECEIVER_RESPONSE");
             playback(); // proves the saved token
+            receiverConnected = true;
+            if (deviceName == null || deviceName.isEmpty()) deviceName = "LUMA Receiver";
             return object("ready", true, "name", "LUMA Receiver", "version", label(info.optString("versionName"), 32),
                 "receiverId", label(info.optString("receiverId"), 64));
         }
@@ -582,7 +609,9 @@ public final class NativeBackend {
             call("player.open", command, true);
             return object("accepted", true);
         }
-        if ("status".equals(action)) return playback();
+        if ("status".equals(action)) {
+            JSONObject current = playback(); receiverConnected = true; return current;
+        }
         if ("getSubtitles".equals(action)) return subtitles(params);
         if ("addSubtitle".equals(action)) {
             JSONObject track = params.optJSONObject("track"); if (track == null) throw fail("INVALID_SUBTITLE");
@@ -653,6 +682,6 @@ public final class NativeBackend {
     public void close() {
         closed = true; closeLuma(); DatagramSocket udp = discovering; if (udp != null) udp.close();
         HttpURLConnection http = activeHttp; if (http != null) http.disconnect(); deadlines.shutdownNow();
-        token = null;
+        token = null; receiverConnected = false;
     }
 }

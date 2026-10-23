@@ -8,6 +8,7 @@ import android.content.pm.PackageManager;
 import android.os.IBinder;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.graphics.Color;
 import android.os.Build;
 import android.os.Bundle;
@@ -50,12 +51,14 @@ public final class MainActivity extends Activity {
     private UpdateManager updateManager;
     private boolean serviceBound;
     private boolean resumed, foregroundStarted, autoConnectPending, notificationAsked;
+    private long autoConnectDue;
     private boolean autoConnectEnabled = true;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ConnectionService.Listener serviceListener = snapshot -> {
         updateCastTarget(snapshot);
         event("onConnectionState", snapshot);
-        scheduleAutoConnect(5000);
+        JSONObject connection = snapshot == null ? null : snapshot.optJSONObject("connection");
+        scheduleAutoConnect(connection != null && connection.optBoolean("receiverConnected") ? 15000 : 5000);
     };
     private final ServiceConnection serviceConnection = new ServiceConnection() {
         @Override public void onServiceConnected(ComponentName name, IBinder binder) {
@@ -87,17 +90,21 @@ public final class MainActivity extends Activity {
     private boolean browserVisible;
     private volatile boolean destroyed;
     private final Runnable autoConnect = () -> {
+        autoConnectDue = 0;
         if (!autoConnectEnabled || !resumed || destroyed || autoConnectPending || connectionService == null) return;
         JSONObject snapshot = connectionService.snapshot();
         JSONObject connection = snapshot.optJSONObject("connection");
-        if (snapshot.optBoolean("autoConnectPaused") || connection != null && connection.optBoolean("connected")) return;
+        boolean nativeConnected = connection != null && (connection.has("nativeConnected")
+                ? connection.optBoolean("nativeConnected") : connection.optBoolean("connected"));
+        if (snapshot.optBoolean("autoConnectPaused") || nativeConnected) return;
         autoConnectPending = true;
         ensureNotificationPermission();
         connectionService.request("app.settings.autoConnect", new JSONObject(), new ConnectionService.Callback() {
             @Override public void success(JSONObject result) {
                 autoConnectPending = false;
                 if (result.optJSONArray("devices") != null && result.optJSONArray("devices").length() > 1) event("onDiscoveryResult", result);
-                scheduleAutoConnect(5000);
+                JSONObject current = connectionService == null ? null : connectionService.snapshot().optJSONObject("connection");
+                scheduleAutoConnect(current != null && current.optBoolean("receiverConnected") ? 15000 : 5000);
             }
             @Override public void failure(String code, String message) {
                 autoConnectPending = false;
@@ -107,8 +114,13 @@ public final class MainActivity extends Activity {
     };
 
     private void scheduleAutoConnect(long delay) {
-        main.removeCallbacks(autoConnect);
-        if (resumed && !destroyed && !autoConnectPending && connectionService != null) main.postDelayed(autoConnect, delay);
+        if (!resumed || destroyed || autoConnectPending || connectionService == null) return;
+        long due = SystemClock.elapsedRealtime() + Math.max(0, delay);
+        // Receiver status can publish every two seconds. Keep the already queued
+        // native-protocol retry instead of postponing it on every healthy poll.
+        if (autoConnectDue != 0 && autoConnectDue <= due) return;
+        main.removeCallbacks(autoConnect); autoConnectDue = due;
+        main.postDelayed(autoConnect, Math.max(0, due - SystemClock.elapsedRealtime()));
     }
 
     private void ensureNotificationPermission() {
@@ -690,7 +702,7 @@ public final class MainActivity extends Activity {
     @Override protected void onPause() {
         if (updateManager != null) updateManager.onPause();
         resumed = false;
-        main.removeCallbacks(autoConnect);
+        main.removeCallbacks(autoConnect); autoConnectDue = 0;
         super.onPause();
     }
 

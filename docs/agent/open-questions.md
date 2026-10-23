@@ -229,6 +229,16 @@ historical, not the current readiness state.
     prove independent browser startup or phone-off playback.
     [Current evidence](msx-local-address-source.md).
 
+20. How early and reliably does the exact projector deliver the LUMA Receiver
+    boot path? Source and emulator checks establish `BOOT_COMPLETED` → sticky
+    foreground service → port 4191, direct phone authentication without port
+    8121, and UI foregrounding on `player.open`. They do not prove the vendor
+    firmware's broadcast timing, background policy or behavior after a hard
+    power cycle. Measure first visible UI, first 4191 response, first accepted
+    cast and first 8121 response on the physical projector. Also verify a second
+    power cycle after force-stop/update, because Android normally suppresses boot
+    delivery after an explicit force-stop until the app is opened again.
+
 Resolved: public reachability confirmed; same-origin embed + declared source
 found statically; existing-page CAF avoids an extension remote-SDK loader;
 public demo live SDK ready over HTTPS. These do not settle receiver feasibility.
@@ -249,7 +259,9 @@ Why did the rapid pause/seek60/resume sequence stop this HLS? MP4 seek worked;
 target HLS seek reliability has not passed. Retest deliberately with settled
 commands before changing transport or introducing a relay.
 
-LUMA native remote now has confirmed app inventory, Kodi launch, navigation and
-ready-device discovery. Remaining: text/volume changes, reverse-screen view and
-touchpad, PIN pairing, actual Samsung acceptance, projector packaging, cold-boot timing and startup
-launcher support on the exact Android/model. See [remote evidence](luma-remote.md).
+LUMA native remote now has confirmed app inventory, receiver launch, navigation
+and ready-device discovery. Remaining: text/volume changes, reverse-screen view
+and touchpad, PIN pairing, actual Samsung acceptance and system-wide launcher
+behavior on the exact Android/model. LUMA Receiver's source-level boot service
+and receiver-first phone path are implemented; their physical cold-boot timing
+is question 20. See [remote evidence](luma-remote.md).

@@ -1,0 +1,5 @@
+LUMA Remote 0.4.11
+
+Casting no longer waits for the projector's native navigation service during startup. The phone connects directly to LUMA Receiver as soon as its boot-time service and saved private address are available, so a video can start while the rest of the projector is still coming online.
+
+Projector navigation, apps, volume and power reconnect separately when the native protocol becomes available. If that connection drops later, receiver playback, casting and media controls remain available while hardware-only controls are hidden.

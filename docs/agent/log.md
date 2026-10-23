@@ -1,5 +1,18 @@
 # Work log
 
+- 2026-10-23 receiver-first cold boot: confirmed the receiver APK already starts
+  its sticky foreground control service from `BOOT_COMPLETED` and foregrounds
+  playback on `player.open`. Removed the phone's accidental dependency on the
+  later EShare port-8121 connection: saved setup now authenticates directly to
+  receiver port 4191, publishes independent receiver/native readiness, casts
+  while native navigation is absent and retries native attachment later. Native
+  loss preserves receiver playback controls but removes projector volume/actions.
+  Android build, backend 15, service 18, handoff 80 and browser 158 pass. The
+  aggregate Node run was interrupted after silence; physical power-cycle timing
+  is still unverified. Release notes for 0.4.11 are prepared; no live device
+  install or release was performed.
+  [Handoff](session-handoffs/2026-10-23-receiver-first-cold-boot.md).
+
 - 2026-10-23 Android fixtures → LUMA Receiver: replaced every Kodi JSON-RPC
   fixture in the backend/service/subtitles/multi-receiver runners with LUMA
   Receiver API fixtures (pairing, Bearer auth, guard-applying writes, receipt
