@@ -1,12 +1,12 @@
 {
   "schemaVersion": 1,
   "packageName": "dev.framextv.lumaremote",
-  "versionName": "0.4.20",
-  "versionCode": 30,
+  "versionName": "0.4.21",
+  "versionCode": 31,
   "minSdk": 24,
-  "apkUrl": "https://github.com/kiansheik/kodaklumaremote/releases/download/v0.4.20/luma-remote-0.4.20.apk",
-  "sha256": "bcd28edc587bfe2a00932a9c1ba9801b5c7644ecfedbb5f118e04eee29a6b57f",
-  "sizeBytes": 9821602,
-  "releasedAt": "2026-10-23T17:54:59.569Z",
-  "notes": "LUMA Remote 0.4.20\n\nTurns a stale Philips browser identity into an explicit Allow TV request instead of a JSON rejection. The incoming private peer may load the receiver shell, but the phone preserves the old approval until you allow the newly observed TV browser identity; approval then saves the real TV address and receiver identity together.\n\nReceiver logs now identify candidate, reapproval, approval, and completed migration stages with their private peer addresses.\n"
+  "apkUrl": "https://github.com/kiansheik/kodaklumaremote/releases/download/v0.4.21/luma-remote-0.4.21.apk",
+  "sha256": "f537aa1e4ee9f6dcad1f3ab25aa6467768dd1824416382777b3931190f693459",
+  "sizeBytes": 9822082,
+  "releasedAt": "2026-10-23T18:10:39.888Z",
+  "notes": "LUMA Remote 0.4.21\n\nKeeps the phone remote steady while a Philips timeline seek is waiting for the TV. Playback controls no longer flash between enabled and disabled, the dragged position stays visible until the TV answers, and another scrub replaces an unsent seek instead of building a backlog.\n"
 }

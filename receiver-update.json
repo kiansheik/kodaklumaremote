@@ -4,9 +4,9 @@
   "versionName": "0.3.2",
   "versionCode": 16,
   "minSdk": 23,
-  "apkUrl": "https://github.com/kiansheik/kodaklumaremote/releases/download/v0.4.20/luma-receiver-0.3.2.apk",
+  "apkUrl": "https://github.com/kiansheik/kodaklumaremote/releases/download/v0.4.21/luma-receiver-0.3.2.apk",
   "sha256": "b45d3e642c988d8eac256e8813fa1613308e50fd0f7577c4929cde7869ac2fdb",
   "sizeBytes": 1134598,
-  "releasedAt": "2026-10-23T17:55:04.515Z",
-  "notes": "LUMA Remote 0.4.20\n\nTurns a stale Philips browser identity into an explicit Allow TV request instead of a JSON rejection. The incoming private peer may load the receiver shell, but the phone preserves the old approval until you allow the newly observed TV browser identity; approval then saves the real TV address and receiver identity together.\n\nReceiver logs now identify candidate, reapproval, approval, and completed migration stages with their private peer addresses.\n"
+  "releasedAt": "2026-10-23T18:10:44.877Z",
+  "notes": "LUMA Remote 0.4.21\n\nKeeps the phone remote steady while a Philips timeline seek is waiting for the TV. Playback controls no longer flash between enabled and disabled, the dragged position stays visible until the TV answers, and another scrub replaces an unsent seek instead of building a backlog.\n"
 }
