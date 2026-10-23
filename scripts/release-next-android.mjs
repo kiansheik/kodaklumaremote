@@ -4,6 +4,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { repositoryOrigin } from './deploy-gh-pages.mjs';
+import { KODI_ADDON_FILES, KODI_ADDON_ID } from './package-kodi-addon.mjs';
 import { loadReleaseConfig, ReleaseConfigError } from './release-config.mjs';
 import { MAX_MANIFEST_BYTES, RELEASE_REPOSITORY, validateUpdateManifest } from '../site/update-manifest.js';
 
@@ -56,9 +57,19 @@ const untrackedExtensions = new Map([
   ['scripts/', new Set(['.js', '.mjs', '.sh'])],
   ['site/', new Set(['.css', '.html', '.js', '.json', '.svg'])],
   ['src/', new Set(['.css', '.html', '.js', '.json', '.svg'])],
-  ['tests/', new Set(['.html', '.java', '.js', '.json', '.md', '.mjs'])],
+  ['tests/', new Set(['.html', '.java', '.js', '.json', '.md', '.mjs', '.py'])],
 ]);
 const rootReleaseFiles = new Set(['Makefile', 'package.json', 'package-lock.json']);
+const unrelatedUntrackedFiles = new Set([
+  'docs/agent/luma-web-receiver.md',
+  'docs/agent/session-handoffs/2026-10-22-luma-web-receiver-assessment.md',
+  'headers.txt',
+  'scripts/receiver-dev.mjs',
+]);
+const kodiAddonReleaseFiles = new Set([
+  'kodi-addon/README.md',
+  ...KODI_ADDON_FILES.map(file => `kodi-addon/${KODI_ADDON_ID}/${file}`),
+]);
 const sensitivePath = /(?:^|\/)(?:\.env(?:[./-]|$)|[^/]*(?:credential|password|secret|keystore|private[-_]?key)[^/]*)/iu;
 const sensitiveExtension = /\.(?:jks|key|keystore|p12|pem|pfx)$/iu;
 const sensitiveContent = /-----BEGIN (?:EC |OPENSSH |RSA )?PRIVATE KEY-----|\bAKIA[A-Z0-9]{16}\b|\bgithub_pat_[A-Za-z0-9_]{20,}\b|\bghp_[A-Za-z0-9]{20,}\b/u;
@@ -66,7 +77,9 @@ const sensitiveContent = /-----BEGIN (?:EC |OPENSSH |RSA )?PRIVATE KEY-----|\bAK
 export function untrackedReleaseDisposition(file) {
   if (typeof file !== 'string' || !file || path.posix.isAbsolute(file) || file.split('/').some(part => part === '..')) return 'reject';
   if (sensitivePath.test(file) || sensitiveExtension.test(file) || file === 'android/local.properties') return 'reject';
+  if (unrelatedUntrackedFiles.has(file) || file.startsWith('android-receiver/')) return 'ignore';
   if (rootReleaseFiles.has(file)) return 'stage';
+  if (file.startsWith('kodi-addon/')) return kodiAddonReleaseFiles.has(file) ? 'stage' : 'reject';
   const rule = [...untrackedExtensions].find(([prefix]) => file.startsWith(prefix));
   if (!rule) return 'ignore';
   return rule[1].has(path.posix.extname(file).toLowerCase()) ? 'stage' : 'reject';

@@ -29,6 +29,11 @@ public final class BackendInstrumentation extends UiSmokeInstrumentation {
         catch (NativeBackend.BackendException error) { require(error.code.equals(expected), "Unexpected error code " + error.code); }
     }
     private JSONObject media(String url) throws Exception { return data("url", url, "contentType", "application/vnd.apple.mpegurl"); }
+    private JSONObject episodeMedia() throws Exception {
+        String title = "Fixture Series · S2 E3";
+        return data("url", FIRST, "contentType", "application/vnd.apple.mpegurl", "title", title,
+                "content", WatchHistory.contentFromCatalog("tv", "42", 2, 3, title));
+    }
     private void connect() throws Exception {
         JSONObject result = call("device.connect", "host", args.getString("targetHost"));
         require(result.getBoolean("connected") && "LUMA fixture".equals(result.getString("name")), "Device identity missing");
@@ -60,6 +65,7 @@ public final class BackendInstrumentation extends UiSmokeInstrumentation {
         if ("service".equals(args.getString("mode"))) { ServiceInstrumentation.run(this, args); return; }
         if ("settings".equals(args.getString("mode"))) { SettingsInstrumentation.run(this); return; }
         if ("subtitles".equals(args.getString("mode"))) { SubtitleInstrumentation.run(this, args); return; }
+        if ("scrub-preview".equals(args.getString("mode"))) { ScrubPreviewInstrumentation.run(this); return; }
         backend = new NativeBackend(getTargetContext());
         backend.setSourceGuard(token -> "current".equals(token));
         int kodiPort = Integer.parseInt(args.getString("kodiPort")), slowPort = Integer.parseInt(args.getString("slowPort"));
@@ -90,13 +96,40 @@ public final class BackendInstrumentation extends UiSmokeInstrumentation {
         });
         check("media open and source guards", () -> {
             call("kodi.open", "media", media(FIRST), "expectedSourceUrl", FIRST, "sourceToken", "current");
-            JSONObject status = call("kodi.status"); require(status.getBoolean("active") && FIRST.equals(status.getString("sourceUrl")), "Current media identity missing");
+            JSONObject status = call("kodi.status"); require(status.getBoolean("active") && FIRST.equals(status.getString("sourceUrl")) && !status.has("content"), "Current media identity missing");
+            JSONObject invalid = episodeMedia(); invalid.getJSONObject("content").put("key", "framextv:tv:42:2:4");
+            call("kodi.open", "media", invalid, "sourceToken", "current");
+            require(!call("kodi.status").has("content"), "Invalid content used the metadata add-on");
+            call("kodi.open", "media", episodeMedia(), "sourceToken", "current");
+            JSONObject adopted = call("kodi.status"), content = adopted.optJSONObject("content");
+            require(content != null && "framextv:tv:42:2:3".equals(content.optString("key"))
+                    && "Fixture Series · S2 E3".equals(content.optString("title")), "Canonical Kodi metadata was not recovered");
+            // The fixture makes the next capability probe report method-not-found.
+            // That read-only failure must fall back to one legacy Player.Open.
+            call("kodi.open", "media", episodeMedia(), "sourceToken", "current");
+            require(!call("kodi.status").has("content"), "Capability fallback invented metadata");
+            call("kodi.open", "media", episodeMedia(), "sourceToken", "current");
+            require(call("kodi.status").has("content"), "Metadata transport did not recover after fallback");
+            rejects("SOURCE_CHANGED", "kodi.open", "media", episodeMedia(), "expectedSourceUrl", FIRST,
+                    "expectedContentKey", "framextv:tv:42:2:4", "sourceToken", "current");
+            rejects("INVALID_INPUT", "kodi.open", "media", episodeMedia(), "expectedSourceUrl", FIRST,
+                    "expectedContentKey", "not-a-canonical-key", "sourceToken", "current");
             rejects("SOURCE_CHANGED", "kodi.open", "media", media(FIRST), "expectedSourceUrl", FIRST, "onlyIfInactive", true, "sourceToken", "current");
             rejects("INVALID_INPUT", "kodi.open", "media", media(FIRST), "onlyIfInactive", "true", "sourceToken", "current");
             rejects("SOURCE_CHANGED", "kodi.open", "media", media(FIRST), "expectedSourceUrl", FIRST, "sourceToken", "stale");
             rejects("SOURCE_CHANGED", "kodi.open", "media", media(FIRST), "expectedSourceUrl", "https://media.example/other.m3u8", "sourceToken", "current");
             rejects("SOURCE_CHANGED", "kodi.pause", "expectedSourceUrl", "https://media.example/other.m3u8", "sourceToken", "current");
             rejects("SOURCE_CHANGED", "luma.setVolume", "value", 7, "expectedSourceUrl", "https://media.example/other.m3u8");
+        });
+        check("cold open rechecks activity after the add-on probe", () -> {
+            configure(Integer.parseInt(args.getString("openingRacePort")));
+            try {
+                rejects("SOURCE_CHANGED", "kodi.open", "media", episodeMedia(),
+                        "expectedSourceUrl", FIRST, "onlyIfInactive", true, "sourceToken", "current");
+                configure(Integer.parseInt(args.getString("fallbackRacePort")));
+                rejects("SOURCE_CHANGED", "kodi.open", "media", episodeMedia(),
+                        "expectedSourceUrl", FIRST, "onlyIfInactive", true, "sourceToken", "current");
+            } finally { configure(kodiPort); }
         });
         check("public URL and credential boundaries", () -> {
             rejects("INVALID_MEDIA", "kodi.open", "media", media("http://192.168.1.2/private"), "sourceToken", "current");

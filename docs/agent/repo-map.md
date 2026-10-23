@@ -100,6 +100,18 @@
   localhost boundaries and real UI with mocked receiver. `tests/manual-kodi.md`:
   setup/discovery, Kodi 21.2 public MP4 and frameXTV HLS/subtitle evidence, including
   the unresolved rapid-seek stop and remaining phone-off acceptance.
+- `kodi-addon/script.lumaremote.metadata/`: source-only Kodi companion that
+  validates a strict versioned payload, opens the exact public source with
+  canonical movie/episode `ListItem` metadata and records a LUMA unique ID.
+  `NativeBackend` brackets playback properties with two item reads and exposes
+  identity only when source and metadata are stable. A joining phone may then
+  adopt the item, hydrate fixed details/subtitle endpoints without resolving a
+  replacement stream, and update its own WatchHistory/Library from Kodi polls.
+  [Contract and acceptance boundary](kodi-metadata-sync.md).
+- `scripts/package-kodi-addon.mjs`, `tests/kodi-addon-package.test.mjs`: bounded,
+  deterministic add-on ZIP and exact-tree/release-asset validation. The guarded
+  release path places the ZIP beside the APK and update manifest and uploads all
+  three only from matching committed source.
 - `docs/agent/`: concise evidence, decisions, and reproducible handoffs.
 - `scripts/luma-{protocol,discovery,controller}.mjs`: archived-APK-derived native
   LUMA transport, bounded UDP discovery and loopback HTTP bridge. Persistent TCP
@@ -121,9 +133,16 @@
 - `src/mobile/{index.html,app.js,capture.js}`: no-scroll combined phone remote,
   native RPC adapters, same-origin declared source/track capture and matched pause.
   The main remote exposes scrub, back 30 and catalog-proven next episode. The same
-  exact successor is projected to notification/MediaSession skip-next; system
-  activation returns through the app's guarded catalog selection rather than
-  guessing or reusing an old stream URL.
+  exact successor is projected to notification/MediaSession skip-next. A
+  notification tap returns through the app's guarded catalog selection, while a
+  lock-screen MediaSession action resolves and opens it in the service without an
+  Activity or unlock; neither path guesses or reuses an old stream URL. Scrub input requests the latest
+  phone-only preview without seeking until commit; unsupported previews leave
+  ordinary scrubbing available. `ScrubPreviewManager.java` extracts bounded
+  low-resolution sync frames on demand from direct HTTPS, unencrypted VOD HLS
+  media playlists for the exact verified source and canonical content, with an
+  adaptive memory-only cache revoked on source/content/service changes.
+  [Provider profile and acceptance boundary](scrub-preview-profile.md).
   Native capture accepts the current HTTPS `framextv.cc` and legacy `.xyz`
   exact origins. Packaged UI fixtures exercise capture across that page change,
   not only mocked capture metadata. The native opt-in captures declared SRT,
@@ -134,8 +153,13 @@
   cached state. NativeBackend implements transport; SettingsStore encrypts
   validated credentials and caches the receiver. Generated assets/APKs ignored.
   Kodi calls share a five-second multi-RPC budget and subtitle-player readiness;
-  system media actions use bounded wake locks, fresh source guards and Kodi HTTP
-  independently of the projector's TCP connection. The
+  system media actions use bounded wake locks, fresh source/revision guards and
+  Kodi HTTP independently of the projector's TCP connection. Back 30 appears as
+  both an explicit notification action and standard MediaSession `ACTION_REWIND`,
+  which supplies the lock-screen control only for verified seekable playback.
+  Canonical playback observed from another phone is adopted only from stable
+  add-on metadata; source/content transitions revoke subtitle delivery, reject
+  stale work and cannot attribute the new timestamp to the prior Library item. The
   service also owns a two-second coalesced absolute-volume queue shared by the
   main remote and system media buttons, preserving its projected value while
   polling and cancelling unsent writes on receiver/source changes. The
@@ -145,7 +169,9 @@
   conversion to UTF-8 SRT and source/receiver-scoped RAM capabilities. Separate
   fetch work does not block Kodi controls. Up to128 tracks/16MiB stay available
   for the active source; disconnect/config/source/service teardown revokes them.
-  Public DNS addresses are checked per redirect, not pinned to the HTTP socket.
+  Every redirect hop resolves once, rejects mixed public/private answers and
+  connects only to an approved address while preserving Host/SNI/TLS hostname
+  verification; the validation result is pinned to the HTTP socket.
   Timed SRT/VTT may discard at most 10 cues and 2 percent of a track, retaining the
   discard count; larger malformed fractions still fail the whole preparation.
   JVM runners cover parser/transport; Android subtitle fixtures cover runtime

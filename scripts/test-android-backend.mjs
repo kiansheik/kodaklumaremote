@@ -16,7 +16,20 @@ const androidSdk = process.env.ANDROID_HOME || `${homedir()}/Library/Android/sdk
 if (!/^dev\.framextv\.lumaremote(?:\.receiverfixture)?$/u.test(appPackage)) throw new Error('Unsupported Android fixture package.');
 if (!/^emulator-\d+$/u.test(serial)) throw new Error('Select an Android emulator test target.');
 const commands = [], mutations = [], sockets = new Set();
-let currentSource = '', position = 0, playing = true, appLists = 0, connections = 0;
+let currentSource = '', currentMetadata = null, position = 0, playing = true, appLists = 0, connections = 0, addonProbes = 0;
+let openingRaceActive = false, openingRaceWrites = 0, fallbackRaceActive = false, fallbackRaceWrites = 0;
+function lumaMetadata(params) {
+  assert.equal(params.addonid, 'script.lumaremote.metadata');
+  assert.equal(params.wait, true); assert.ok(Array.isArray(params.params) && params.params.length === 1);
+  assert.match(params.params[0], /^[A-Za-z0-9_-]+$/u);
+  const payload = JSON.parse(Buffer.from(params.params[0], 'base64url').toString('utf8'));
+  assert.deepEqual(Object.keys(payload).sort(), ['content', 'contentType', 'showTitle', 'source', 'title', 'version']);
+  assert.deepEqual(Object.keys(payload.content).sort(), ['contentId', 'episode', 'key', 'kind', 'season', 'watchUrl']);
+  assert.equal(payload.version, 1); assert.equal(payload.source, currentSource || 'https://media.example/first.m3u8');
+  assert.equal(payload.content.key, 'framextv:tv:42:2:3'); assert.equal(payload.showTitle, 'Fixture Series');
+  return { type: 'episode', title: payload.title, showtitle: payload.showTitle,
+    season: payload.content.season, episode: payload.content.episode, uniqueid: { luma: `v1:${payload.content.key}` } };
+}
 function appFrame() {
   const fields = [];
   for (const [name, pkg] of [['Kodi', 'org.xbmc.kodi'], ['Vídeo', 'example.video']]) {
@@ -73,17 +86,29 @@ const kodi = http.createServer(async (request, response) => {
     }
     if (method === 'JSONRPC.Ping') result = 'pong';
     else if (method === 'Application.GetProperties') result = { name: 'Kodi', version: { major: 21, minor: 2 } };
+    else if (method === 'Addons.GetAddonDetails') {
+      addonProbes++;
+      if (addonProbes === 2) {
+        response.writeHead(200, { 'Content-Type': 'application/json' });
+        response.end(JSON.stringify({ jsonrpc: '2.0', id, error: { code: -32601, message: 'Method not found' } }));
+        return;
+      }
+      result = { addon: { addonid: 'script.lumaremote.metadata', type: 'xbmc.python.script', enabled: true } };
+    }
     else if (method === 'Player.GetActivePlayers') result = currentSource ? [{ playerid: 1, type: 'video' }] : [];
-    else if (method === 'Player.GetItem') result = { item: { file: currentSource } };
+    else if (method === 'Player.GetItem') result = { item: { file: currentSource, ...(currentMetadata || {}) } };
+    else if (method === 'Addons.ExecuteAddon') {
+      mutations.push(message); currentMetadata = lumaMetadata(params); currentSource = 'https://media.example/first.m3u8'; position = 0; result = 'OK';
+    }
     else if (method === 'Player.GetProperties') result = params.properties.includes('subtitles')
       ? { subtitles: [{ index: 0, name: 'English', language: 'en' }, { index: 1, name: 'Português', language: 'pt-br' }], currentsubtitle: { index: -1 }, subtitleenabled: false }
       : { speed: playing ? 1 : 0, time: { hours: 0, minutes: Math.floor(position / 60), seconds: position % 60 }, totaltime: { hours: 0, minutes: 22, seconds: 35 }, canseek: true };
     else {
       mutations.push(message); result = 'OK';
-      if (method === 'Player.Open') { currentSource = params.item.file; position = 0; }
+      if (method === 'Player.Open') { currentSource = params.item.file; currentMetadata = null; position = 0; }
       if (method === 'Player.PlayPause') playing = params.play;
       if (method === 'Player.Seek') { const time = params.value.time; position = time.hours * 3600 + time.minutes * 60 + time.seconds; }
-      if (method === 'Player.Stop') currentSource = '';
+      if (method === 'Player.Stop') { currentSource = ''; currentMetadata = null; }
     }
     response.writeHead(200, { 'Content-Type': 'application/json' }); response.end(JSON.stringify({ jsonrpc: '2.0', id, result }));
   } catch { response.writeHead(400); response.end(); }
@@ -124,17 +149,45 @@ const readiness = http.createServer(async (request, response) => {
   }
   response.writeHead(200, { 'Content-Type': 'application/json' }); response.end(JSON.stringify({ jsonrpc: '2.0', id, result }));
 });
+const openingRace = http.createServer(async (request, response) => {
+  const chunks = []; for await (const bytes of request) chunks.push(bytes);
+  const { method, id } = JSON.parse(Buffer.concat(chunks).toString()); let result;
+  if (method === 'Player.GetActivePlayers') result = openingRaceActive ? [{ playerid: 1, type: 'video' }] : [];
+  else if (method === 'Addons.GetAddonDetails') {
+    openingRaceActive = true;
+    result = { addon: { addonid: 'script.lumaremote.metadata', type: 'xbmc.python.script', enabled: true } };
+  } else if (method === 'Addons.ExecuteAddon' || method === 'Player.Open') {
+    openingRaceWrites++;
+    result = 'OK';
+  } else throw new Error(`Unexpected opening-race method ${method}`);
+  response.writeHead(200, { 'Content-Type': 'application/json' }); response.end(JSON.stringify({ jsonrpc: '2.0', id, result }));
+});
+const fallbackRace = http.createServer(async (request, response) => {
+  const chunks = []; for await (const bytes of request) chunks.push(bytes);
+  const { method, id } = JSON.parse(Buffer.concat(chunks).toString()); let result;
+  if (method === 'Player.GetActivePlayers') result = fallbackRaceActive ? [{ playerid: 1, type: 'video' }] : [];
+  else if (method === 'Addons.GetAddonDetails') {
+    fallbackRaceActive = true;
+    response.writeHead(200, { 'Content-Type': 'application/json' });
+    response.end(JSON.stringify({ jsonrpc: '2.0', id, error: { code: -32601, message: 'Method not found' } }));
+    return;
+  } else if (method === 'Addons.ExecuteAddon' || method === 'Player.Open') {
+    fallbackRaceWrites++;
+    result = 'OK';
+  } else throw new Error(`Unexpected fallback-race method ${method}`);
+  response.writeHead(200, { 'Content-Type': 'application/json' }); response.end(JSON.stringify({ jsonrpc: '2.0', id, result }));
+});
 function listen(server, port) { return new Promise((done, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', done); }); }
 try {
-  await listen(tcp, 8121); await listen(kodi, 0); await listen(slow, 0); await listen(deadline, 0); await listen(changing, 0); await listen(readiness, 0);
+  await listen(tcp, 8121); await listen(kodi, 0); await listen(slow, 0); await listen(deadline, 0); await listen(changing, 0); await listen(readiness, 0); await listen(openingRace, 0); await listen(fallbackRace, 0);
   for (const [apk, expected] of [['android/app/build/outputs/apk/debug/app-debug.apk', appPackage], ['android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk', `${appPackage}.test`]]) {
   const { stdout: apkMetadata } = await run(resolve(androidSdk, 'build-tools/36.0.0/aapt2'), ['dump', 'badging', resolve(apk)], { timeout: 10000 });
   assert.equal(apkMetadata.match(/^package: name='([^']+)'/mu)?.[1], expected, 'Build the intended fixture package before installing.');
     await run(adb, ['-s', serial, 'install', '-r', resolve(apk)], { timeout: 60000 });
   }
-  const { stdout, stderr } = await run(adb, ['-s', serial, 'shell', 'am', 'instrument', '-w', '-e', 'targetHost', '10.0.2.2', '-e', 'kodiPort', String(kodi.address().port), '-e', 'slowPort', String(slow.address().port), '-e', 'deadlinePort', String(deadline.address().port), '-e', 'changingPort', String(changing.address().port), '-e', 'readinessPort', String(readiness.address().port), `${appPackage}.test/dev.framextv.lumaremote.BackendInstrumentation`], { timeout: 60000, maxBuffer: 128 * 1024 });
+  const { stdout, stderr } = await run(adb, ['-s', serial, 'shell', 'am', 'instrument', '-w', '-e', 'targetHost', '10.0.2.2', '-e', 'kodiPort', String(kodi.address().port), '-e', 'slowPort', String(slow.address().port), '-e', 'deadlinePort', String(deadline.address().port), '-e', 'changingPort', String(changing.address().port), '-e', 'readinessPort', String(readiness.address().port), '-e', 'openingRacePort', String(openingRace.address().port), '-e', 'fallbackRacePort', String(fallbackRace.address().port), `${appPackage}.test/dev.framextv.lumaremote.BackendInstrumentation`], { timeout: 60000, maxBuffer: 128 * 1024 });
   process.stdout.write(stdout); if (stderr) process.stderr.write(stderr);
-  assert.match(stdout, /INSTRUMENTATION_RESULT: failures=0/u); assert.match(stdout, /INSTRUMENTATION_RESULT: passed=12/u); assert.match(stdout, /INSTRUMENTATION_CODE: -1/u);
+  assert.match(stdout, /INSTRUMENTATION_RESULT: failures=0/u); assert.match(stdout, /INSTRUMENTATION_RESULT: passed=13/u); assert.match(stdout, /INSTRUMENTATION_CODE: -1/u);
   assert.equal(connections, 2); assert.equal(appLists, 1);
   assert.ok(commands.includes('CONTENT\r\n1\r\n0 Olá 👋\r\n\r\n'));
   assert.equal(commands.filter(command => command === 'KEYEVENT\r\n26\r\n\r\n').length, 1);
@@ -142,11 +195,15 @@ try {
   assert.equal(commands.filter(command => command.startsWith('STARTAPPEVNET')).length, 1);
   assert.deepEqual(commands.filter(command => command.includes('setVolume')), ['MediaControl\r\nsetVolume 14\r\n\r\n']);
   assert.ok(commands.every(command => !/^(?:auth|CHECKPASSWORD|getServerInfo)/u.test(command)));
-  assert.deepEqual(mutations.map(message => message.method), ['Player.Open', 'Player.AddSubtitle', 'Player.SetSubtitle', 'Player.PlayPause', 'Player.PlayPause', 'Player.Seek', 'Player.Stop']);
-  assert.equal(mutations[2].params.subtitle, 1);
+  assert.deepEqual(mutations.map(message => message.method), ['Player.Open', 'Player.Open', 'Addons.ExecuteAddon', 'Player.Open', 'Addons.ExecuteAddon', 'Player.AddSubtitle', 'Player.SetSubtitle', 'Player.PlayPause', 'Player.PlayPause', 'Player.Seek', 'Player.Stop']);
+  assert.equal(mutations.find(message => message.method === 'Player.SetSubtitle').params.subtitle, 1);
+  assert.equal(addonProbes, 3);
+  assert.ok(mutations.filter(message => message.method === 'Addons.ExecuteAddon').every(message => !message.params.params[0].includes('https://')));
   assert.equal(readinessReads, 4);
-  console.log('Native backend: 12 instrumentation checks and wire assertions passed against emulator-only fixtures.');
+  assert.equal(openingRaceWrites, 0);
+  assert.equal(fallbackRaceWrites, 0);
+  console.log('Native backend: 13 instrumentation checks and wire assertions passed against emulator-only fixtures.');
 } finally {
   for (const socket of sockets) socket.destroy();
-  for (const server of [tcp, kodi, slow, deadline, changing, readiness]) { server.closeAllConnections?.(); await new Promise(done => server.close(done)); }
+  for (const server of [tcp, kodi, slow, deadline, changing, readiness, openingRace, fallbackRace]) { server.closeAllConnections?.(); await new Promise(done => server.close(done)); }
 }

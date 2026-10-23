@@ -16,7 +16,7 @@ const appPackage = process.env.ANDROID_TEST_PACKAGE || 'dev.framextv.lumaremote.
 if (!/^emulator-\d+$/u.test(serial)) throw new Error('Select an Android emulator test target.');
 assert.equal(appPackage, 'dev.framextv.lumaremote.receiverfixture', 'This test only resets the isolated receiver fixture app.');
 const sockets = new Set(), keys = [], mutations = [];
-let connections = 0, stops = 0, playing = true;
+let connections = 0, stops = 0, playing = true, position = 20;
 const currentSource = 'https://media.example/luma-first.m3u8';
 const tcp = net.createServer(socket => {
   connections++; sockets.add(socket); socket.on('error', () => {}); socket.on('close', () => sockets.delete(socket));
@@ -36,7 +36,7 @@ const kodi = http.createServer(async (request, response) => {
   try {
     response.setHeader('Content-Type', 'application/json');
     if (request.method === 'GET' && request.url === '/fixture') {
-      response.end(JSON.stringify({connections, stops, playing, mutations: mutations.length})); return;
+      response.end(JSON.stringify({connections, stops, playing, position, mutations: mutations.length})); return;
     }
     assert.equal(request.url, '/jsonrpc');
     assert.equal(request.headers.authorization, `Basic ${Buffer.from('fixture:fixture').toString('base64')}`);
@@ -46,11 +46,12 @@ const kodi = http.createServer(async (request, response) => {
     else if (method === 'Application.GetProperties') result = {name: 'Kodi', version: {major: 21, minor: 2}};
     else if (method === 'Player.GetActivePlayers') result = [{playerid: 1, type: 'video'}];
     else if (method === 'Player.GetItem') result = {item: {file: currentSource}};
-    else if (method === 'Player.GetProperties') result = {speed: playing ? 1 : 0, time: {hours: 0, minutes: 0, seconds: 20},
+    else if (method === 'Player.GetProperties') result = {speed: playing ? 1 : 0, time: {hours: Math.floor(position / 3600), minutes: Math.floor(position / 60) % 60, seconds: position % 60},
       totaltime: {hours: 0, minutes: 2, seconds: 0}, canseek: true, subtitles: [], currentsubtitle: {index: -1}, subtitleenabled: false};
     else {
       mutations.push({method, params}); result = 'OK';
       if (method === 'Player.PlayPause') playing = params.play;
+      if (method === 'Player.Seek') { const time = params.value.time; position = time.hours * 3600 + time.minutes * 60 + time.seconds; }
       if (method === 'Player.Stop') stops++;
     }
     response.end(JSON.stringify({jsonrpc: '2.0', id, result}));
@@ -73,11 +74,14 @@ try {
   const {stdout, stderr} = await run(adb, ['-s', serial, 'shell', 'am', 'instrument', '-w', '-e', 'mode', 'multi-receiver',
     '-e', 'targetHost', '10.0.2.2', '-e', 'kodiPort', String(kodi.address().port), `${appPackage}.test/dev.framextv.lumaremote.BackendInstrumentation`], {timeout: 90000, maxBuffer: 128 * 1024});
   process.stdout.write(stdout); if (stderr) process.stderr.write(stderr);
-  assert.match(stdout, /INSTRUMENTATION_RESULT: failures=0/u); assert.match(stdout, /INSTRUMENTATION_RESULT: passed=4/u); assert.match(stdout, /INSTRUMENTATION_CODE: -1/u);
+  assert.match(stdout, /INSTRUMENTATION_RESULT: failures=0/u); assert.match(stdout, /INSTRUMENTATION_RESULT: passed=5/u); assert.match(stdout, /INSTRUMENTATION_CODE: -1/u);
   assert.equal(connections, 2); assert.equal(stops, 0); assert.equal(playing, false);
-  assert.deepEqual(mutations, [{method: 'Player.PlayPause', params: {playerid: 1, play: false}}]);
+  assert.deepEqual(mutations, [
+    {method: 'Player.Seek', params: {playerid: 1, value: {time: {hours: 0, minutes: 0, seconds: 0, milliseconds: 0}}}},
+    {method: 'Player.PlayPause', params: {playerid: 1, play: false}},
+  ]);
   assert.deepEqual(keys, ['KEYEVENT\r\n22\r\n\r\n']);
-  console.log('Android dual receiver: 4 independent-transport, queue, selected-system-control and disconnect checks passed.');
+  console.log('Android dual receiver: 5 independent-transport, canonical-handoff, queue, selected-system-control and disconnect checks passed.');
 } catch (error) {
   console.error(JSON.stringify({fixture: {connections, stops, playing, mutations: mutations.map(({method}) => method), keys: keys.length}})); throw error;
 } finally {

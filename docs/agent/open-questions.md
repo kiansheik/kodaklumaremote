@@ -8,6 +8,22 @@ remain unverified. The user ended Philips device work, then authorized publicati
 and added a durable offline viewing Library for Philips/Kodak. Follow
 [current state](current-state.md) over the older chronological observations below.
 
+Current Kodi questions: install the packaged metadata add-on on the physical
+LUMA, start an episode from one updated phone, then join from a second updated
+phone and verify title/season/episode, Resume movement over time, subtitle
+selection and next-episode transition. Only the active canonical Kodi item is
+synchronized; historical progress that exists solely on the first phone is not.
+Kodi has no atomic compare-and-open RPC: the final source/key read rejects an
+already-observed switch, but another controller can still switch in the narrow
+gap before `ExecuteAddon`/`Player.Open`; physical two-phone acceptance must cover
+that residual race.
+Also measure whether representative direct HTTPS, unencrypted VOD HLS sources
+yield timely 256 x 144 phone scrub previews on API 27+. DASH, progressive and
+unsupported HLS sources intentionally remain timestamp-only unless a validated
+provider-native storyboard path is found. The provider sample exposed no such
+asset, and emulator extraction does not establish physical-device codec/network
+support.
+
 Current scope: Android work in the existing phone app is explicitly authorized.
 The browser-first direct LAN handshake works. The actual TV reports matching
 loaded/server debug revision d66f118d4c: Ping ACK0→1, fixed-label ACK and Reload

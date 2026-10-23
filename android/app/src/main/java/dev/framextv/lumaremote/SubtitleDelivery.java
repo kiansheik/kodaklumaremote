@@ -1,21 +1,21 @@
 package dev.framextv.lumaremote;
 
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.DatagramSocket;
-import java.net.HttpURLConnection;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.NetworkInterface;
-import java.net.Proxy;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -23,6 +23,7 @@ import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -32,11 +33,16 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import java.util.function.LongSupplier;
 import java.util.zip.GZIPInputStream;
+import javax.net.ssl.SNIHostName;
+import javax.net.ssl.SSLParameters;
+import javax.net.ssl.SSLSocket;
+import javax.net.ssl.SSLSocketFactory;
 
 /** Selected subtitles only: bounded public fetch, normalization and an ephemeral
  * receiver-pinned RAM file. This class never serves arbitrary URLs or files. */
 public final class SubtitleDelivery implements AutoCloseable {
     public interface UrlValidator { String validate(String value) throws Exception; }
+    interface AddressResolver { InetAddress[] resolve(String host) throws Exception; }
     public static final class DeliveryException extends Exception {
         public final String code;
         DeliveryException(String code) { super(code); this.code = code; }
@@ -49,8 +55,10 @@ public final class SubtitleDelivery implements AutoCloseable {
         }
     }
     private static final int MAX_BYTES = 2 * 1024 * 1024, MAX_ENTRIES = 128, MAX_CACHE_BYTES = 16 * 1024 * 1024, MAX_HEADER = 8192, MAX_REQUESTS = 16;
+    private static final int ENDPOINT_TIMEOUT = 2500;
     private final Object lock = new Object();
     private final UrlValidator validator;
+    private final AddressResolver addressResolver;
     private final boolean loopbackFixture;
     private final int fetchTimeout;
     private final SecureRandom random = new SecureRandom();
@@ -58,6 +66,7 @@ public final class SubtitleDelivery implements AutoCloseable {
     private final Set<Socket> clients = new HashSet<>();
     private final Set<FetchJob> fetching = new HashSet<>();
     private final ThreadPoolExecutor fetchers = pool(2, 4, "Subtitle fetch");
+    private final ThreadPoolExecutor resolvers = pool(2, 4, "Subtitle DNS");
     private final ThreadPoolExecutor requests = pool(2, 8, "Subtitle delivery");
     private final ScheduledExecutorService deadlines = Executors.newSingleThreadScheduledExecutor(task -> daemon(task, "Subtitle timeouts"));
     private ServerSocket listener;
@@ -83,20 +92,46 @@ public final class SubtitleDelivery implements AutoCloseable {
         Body(byte[] bytes, String type) { this.bytes = bytes; this.type = type; }
     }
     private static final class FetchJob {
-        final AtomicReference<HttpURLConnection> connection = new AtomicReference<>();
+        final AtomicReference<Socket> connection = new AtomicReference<>();
+        final AtomicReference<Future<?>> resolution = new AtomicReference<>();
         volatile boolean cancelled;
         Future<Body> future;
-        void cancel() { cancelled = true; HttpURLConnection active = connection.get(); if (active != null) active.disconnect(); if (future != null) future.cancel(true); }
+        void cancel() {
+            cancelled = true;
+            Socket active = connection.get(); if (active != null) try { active.close(); } catch (IOException ignored) { }
+            Future<?> lookup = resolution.get(); if (lookup != null) lookup.cancel(true);
+            if (future != null) future.cancel(true);
+        }
     }
-    public SubtitleDelivery(UrlValidator validator) { this(validator, () -> System.nanoTime() / 1000000, false, 8000); }
-    private SubtitleDelivery(UrlValidator validator, LongSupplier clock, boolean fixture, int timeout) {
-        if (validator == null || clock == null) throw new IllegalArgumentException("Subtitle validator required");
-        this.validator = validator; loopbackFixture = fixture; fetchTimeout = timeout;
+    private static final class Headers {
+        final int status;
+        final Map<String, String> values;
+        Headers(int status, Map<String, String> values) { this.status = status; this.values = values; }
+    }
+    private static final class Response {
+        final int status;
+        final String location, type;
+        final byte[] bytes;
+        Response(int status, String location, String type, byte[] bytes) {
+            this.status = status; this.location = location; this.type = type; this.bytes = bytes;
+        }
+    }
+    public SubtitleDelivery(UrlValidator validator) {
+        this(validator, () -> System.nanoTime() / 1000000, false, 8000, InetAddress::getAllByName);
+    }
+    private SubtitleDelivery(UrlValidator validator, LongSupplier clock, boolean fixture, int timeout, AddressResolver resolver) {
+        if (validator == null || clock == null || resolver == null) throw new IllegalArgumentException("Subtitle validator required");
+        this.validator = validator; addressResolver = resolver; loopbackFixture = fixture; fetchTimeout = timeout;
     }
     /** Package-private host-JVM fixture only; no production bridge can select it. */
     static SubtitleDelivery loopbackFixture(UrlValidator validator, LongSupplier clock, int timeout) {
         if (timeout < 1 || timeout > 8000) throw new IllegalArgumentException("Invalid fixture timeout");
-        return new SubtitleDelivery(validator, clock, true, timeout);
+        return new SubtitleDelivery(validator, clock, true, timeout, InetAddress::getAllByName);
+    }
+    /** Host-JVM fixture for proving DNS pinning without changing production policy. */
+    static SubtitleDelivery loopbackFixture(UrlValidator validator, LongSupplier clock, int timeout, AddressResolver resolver) {
+        if (timeout < 1 || timeout > 8000) throw new IllegalArgumentException("Invalid fixture timeout");
+        return new SubtitleDelivery(validator, clock, true, timeout, resolver);
     }
     private static Thread daemon(Runnable task, String name) { Thread thread = new Thread(task, name); thread.setDaemon(true); return thread; }
     private static ThreadPoolExecutor pool(int threads, int capacity, String name) {
@@ -191,55 +226,249 @@ public final class SubtitleDelivery implements AutoCloseable {
     private Body fetch(String initial, long generation, BooleanSupplier guard, FetchJob job) throws DeliveryException {
         String address = initial; long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(fetchTimeout);
         for (int redirect = 0; redirect <= 4; redirect++) {
-            check(generation, guard); if (job.cancelled) throw failure("SOURCE_CHANGED");
-            HttpURLConnection connection = null;
+            checkFetch(generation, guard, job, deadline);
             try {
                 URI uri = new URI(validate(address));
-                validateDestination(uri);
-                int remaining = (int) Math.max(1, TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime()));
-                if (job.cancelled || System.nanoTime() >= deadline) throw failure("SUBTITLE_FETCH");
-                connection = (HttpURLConnection) uri.toURL().openConnection(Proxy.NO_PROXY); job.connection.set(connection);
-                connection.setConnectTimeout(remaining); connection.setReadTimeout(remaining); connection.setInstanceFollowRedirects(false); connection.setUseCaches(false);
-                connection.setRequestProperty("Accept-Encoding", "gzip"); connection.setRequestProperty("Cookie", "");
-                int status = connection.getResponseCode();
-                if (status == 301 || status == 302 || status == 303 || status == 307 || status == 308) {
-                    String location = connection.getHeaderField("Location");
-                    if (redirect == 4 || location == null || location.length() > 8192) throw failure("SUBTITLE_FETCH");
-                    URI next = uri.resolve(location);
+                InetAddress[] approved = resolveDestination(uri, generation, guard, job, deadline);
+                Response response = request(uri, approved, generation, guard, job, deadline);
+                checkFetch(generation, guard, job, deadline);
+                if (response.status == 301 || response.status == 302 || response.status == 303 || response.status == 307 || response.status == 308) {
+                    if (redirect == 4 || response.location == null || response.location.isEmpty() || response.location.length() > 8192) throw failure("SUBTITLE_FETCH");
+                    URI next = uri.resolve(response.location);
                     if ("https".equalsIgnoreCase(uri.getScheme()) && !"https".equalsIgnoreCase(next.getScheme())) throw failure("SUBTITLE_FETCH");
                     address = validate(next.toString()); continue;
                 }
-                if (status != 200) throw failure("SUBTITLE_FETCH");
-                if (connection.getContentLengthLong() > MAX_BYTES) throw failure("SUBTITLE_TOO_LARGE");
-                String encoding = connection.getHeaderField("Content-Encoding");
-                try (InputStream input = connection.getInputStream()) {
-                    InputStream decoded = input;
-                    if (encoding != null && !encoding.trim().isEmpty() && !"identity".equalsIgnoreCase(encoding.trim())) {
-                        if (!"gzip".equalsIgnoreCase(encoding.trim())) throw failure("SUBTITLE_FORMAT");
-                        decoded = new GZIPInputStream(input);
-                    }
-                    ByteArrayOutputStream output = new ByteArrayOutputStream(); byte[] chunk = new byte[8192]; int count;
-                    while ((count = decoded.read(chunk)) != -1) {
-                        check(generation, guard); if (job.cancelled || System.nanoTime() >= deadline) throw failure("SUBTITLE_FETCH");
-                        if (output.size() + count > MAX_BYTES) throw failure("SUBTITLE_TOO_LARGE");
-                        output.write(chunk, 0, count);
-                    }
-                    check(generation, guard);
-                    return new Body(output.toByteArray(), connection.getContentType());
-                }
+                if (response.status != 200 || response.bytes == null) throw failure("SUBTITLE_FETCH");
+                return new Body(response.bytes, response.type);
             } catch (DeliveryException error) { throw error; }
             catch (Exception ignored) { throw failure("SUBTITLE_FETCH"); }
-            finally { if (connection != null) connection.disconnect(); job.connection.set(null); }
         }
         throw failure("SUBTITLE_FETCH");
     }
-    private void validateDestination(URI uri) throws Exception {
-        if (!("http".equals(uri.getScheme()) || "https".equals(uri.getScheme())) || uri.getUserInfo() != null || uri.getHost() == null) throw failure("INVALID_SUBTITLE");
-        if (loopbackFixture) {
-            if (!"127.0.0.1".equals(uri.getHost())) throw failure("SUBTITLE_NETWORK");
-            return;
+    private InetAddress[] resolveDestination(URI uri, long generation, BooleanSupplier guard, FetchJob job, long deadline) throws DeliveryException {
+        validateDestination(uri);
+        String host = normalizedHost(uri);
+        Future<InetAddress[]> lookup;
+        try { lookup = resolvers.submit(() -> addressResolver.resolve(host)); }
+        catch (RejectedExecutionException unavailable) { throw failure("SUBTITLE_FETCH"); }
+        job.resolution.set(lookup);
+        if (job.cancelled) lookup.cancel(true);
+        try {
+            InetAddress[] addresses = lookup.get(remaining(deadline), TimeUnit.MILLISECONDS);
+            checkFetch(generation, guard, job, deadline);
+            validateResolvedAnswers(addresses, loopbackFixture);
+            return addresses.clone();
+        } catch (TimeoutException timeout) { lookup.cancel(true); throw failure("SUBTITLE_FETCH"); }
+        catch (InterruptedException interrupted) { lookup.cancel(true); Thread.currentThread().interrupt(); throw failure("SOURCE_CHANGED"); }
+        catch (ExecutionException unavailable) { throw failure("SUBTITLE_FETCH"); }
+        finally { job.resolution.compareAndSet(lookup, null); }
+    }
+    private static void validateDestination(URI uri) throws DeliveryException {
+        if (uri == null || !("http".equalsIgnoreCase(uri.getScheme()) || "https".equalsIgnoreCase(uri.getScheme()))
+                || uri.getUserInfo() != null || uri.getHost() == null || uri.getHost().isEmpty()
+                || uri.getPort() == 0 || uri.getPort() < -1 || uri.getPort() > 65535) throw failure("INVALID_SUBTITLE");
+    }
+    static void validateResolvedAnswers(InetAddress[] addresses, boolean loopback) throws DeliveryException {
+        if (addresses == null || addresses.length == 0 || addresses.length > 8) throw failure("SUBTITLE_NETWORK");
+        for (InetAddress address : addresses) {
+            if (address == null || (loopback ? !address.isLoopbackAddress() : !publicAddress(address))) {
+                throw failure("SUBTITLE_NETWORK");
+            }
         }
-        for (InetAddress address : InetAddress.getAllByName(uri.getHost())) if (!publicAddress(address)) throw failure("SUBTITLE_NETWORK");
+    }
+    private Response request(URI uri, InetAddress[] approved, long generation, BooleanSupplier guard, FetchJob job, long deadline) throws DeliveryException {
+        String host = normalizedHost(uri);
+        int port = uri.getPort() >= 0 ? uri.getPort() : "https".equalsIgnoreCase(uri.getScheme()) ? 443 : 80;
+        for (InetAddress address : approved) {
+            Socket raw = null, connection = null;
+            try {
+                checkFetch(generation, guard, job, deadline);
+                raw = new Socket(); own(job, raw);
+                raw.connect(new InetSocketAddress(address, port), endpointTimeout(deadline));
+                raw.setSoTimeout(endpointTimeout(deadline));
+                checkFetch(generation, guard, job, deadline);
+                connection = raw;
+                if ("https".equalsIgnoreCase(uri.getScheme())) {
+                    String tlsHost = host.endsWith(".") ? host.substring(0, host.length() - 1) : host;
+                    SSLSocket secure = (SSLSocket) ((SSLSocketFactory) SSLSocketFactory.getDefault()).createSocket(raw, tlsHost, port, true);
+                    connection = secure; own(job, secure); configureTls(secure, tlsHost);
+                    secure.setSoTimeout(endpointTimeout(deadline)); secure.startHandshake();
+                    checkFetch(generation, guard, job, deadline);
+                }
+                writeRequest(connection.getOutputStream(), uri, host, port);
+                Headers headers = readHeaders(connection, connection.getInputStream(), generation, guard, job, deadline);
+                if (headers.status == 301 || headers.status == 302 || headers.status == 303 || headers.status == 307 || headers.status == 308) {
+                    return new Response(headers.status, headers.values.get("location"), null, null);
+                }
+                if (headers.status != 200) return new Response(headers.status, null, null, null);
+                byte[] encoded = readBody(connection, connection.getInputStream(), headers.values, generation, guard, job, deadline);
+                byte[] decoded = decode(encoded, headers.values.get("content-encoding"), generation, guard, job, deadline);
+                return new Response(headers.status, null, headers.values.get("content-type"), decoded);
+            } catch (DeliveryException error) { throw error; }
+            catch (Exception unavailable) { checkFetch(generation, guard, job, deadline); }
+            finally {
+                Socket owned = connection != null ? connection : raw;
+                if (owned != null) try { owned.close(); } catch (IOException ignored) { }
+                if (owned != null) job.connection.compareAndSet(owned, null);
+                if (raw != null) job.connection.compareAndSet(raw, null);
+            }
+        }
+        throw failure("SUBTITLE_FETCH");
+    }
+    private static void own(FetchJob job, Socket socket) throws DeliveryException {
+        job.connection.set(socket);
+        if (job.cancelled || Thread.currentThread().isInterrupted()) {
+            try { socket.close(); } catch (IOException ignored) { }
+            throw failure("SOURCE_CHANGED");
+        }
+    }
+    static void configureTls(SSLSocket socket, String host) throws DeliveryException {
+        try {
+            if (socket == null || host == null || host.isEmpty()) throw new IllegalArgumentException();
+            SSLParameters parameters = socket.getSSLParameters();
+            parameters.setEndpointIdentificationAlgorithm("HTTPS");
+            if (!host.matches("[0-9.]+") && !host.contains(":")) {
+                parameters.setServerNames(Collections.singletonList(new SNIHostName(host)));
+            }
+            socket.setSSLParameters(parameters);
+        } catch (RuntimeException invalid) { throw failure("SUBTITLE_FETCH"); }
+    }
+    private static String normalizedHost(URI uri) throws DeliveryException {
+        String host = uri == null ? null : uri.getHost();
+        if (host == null) throw failure("INVALID_SUBTITLE");
+        if (host.startsWith("[") && host.endsWith("]")) host = host.substring(1, host.length() - 1);
+        if (host.isEmpty()) throw failure("INVALID_SUBTITLE");
+        return host;
+    }
+    private static void writeRequest(OutputStream output, URI uri, String host, int port) throws IOException {
+        String path = uri.getRawPath(); if (path == null || path.isEmpty()) path = "/";
+        if (uri.getRawQuery() != null) path += "?" + uri.getRawQuery();
+        String authority = host.contains(":") ? "[" + host + "]" : host;
+        boolean defaultPort = "https".equalsIgnoreCase(uri.getScheme()) ? port == 443 : port == 80;
+        if (!defaultPort) authority += ":" + port;
+        String request = "GET " + path + " HTTP/1.1\r\nHost: " + authority
+                + "\r\nAccept: */*\r\nAccept-Encoding: gzip\r\nConnection: close\r\nUser-Agent: LUMA-Subtitle/1\r\n\r\n";
+        output.write(request.getBytes(StandardCharsets.US_ASCII)); output.flush();
+    }
+    private Headers readHeaders(Socket socket, InputStream input, long generation, BooleanSupplier guard, FetchJob job, long deadline) throws Exception {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream(); int state = 0;
+        while (bytes.size() < MAX_HEADER) {
+            socket.setSoTimeout(endpointTimeout(deadline)); int value = input.read();
+            if (value < 0 || value == 0 || value == 127 || value < 32 && value != '\r' && value != '\n' && value != '\t') throw failure("SUBTITLE_FETCH");
+            bytes.write(value); checkFetch(generation, guard, job, deadline);
+            if (state == 0) {
+                if (value == '\r') state = 1; else if (value == '\n') throw failure("SUBTITLE_FETCH");
+            } else if (state == 1) {
+                if (value != '\n') throw failure("SUBTITLE_FETCH"); state = 2;
+            } else if (state == 2) {
+                if (value == '\r') state = 3; else if (value == '\n') throw failure("SUBTITLE_FETCH"); else state = 0;
+            } else if (value == '\n') break;
+            else throw failure("SUBTITLE_FETCH");
+        }
+        if (state != 3 || bytes.size() >= MAX_HEADER) throw failure("SUBTITLE_FETCH");
+        String[] lines = bytes.toString(StandardCharsets.ISO_8859_1.name()).split("\\r\\n", -1);
+        if (lines.length < 3 || !lines[0].matches("HTTP/1\\.[01] [0-9]{3}(?: .*)?")) throw failure("SUBTITLE_FETCH");
+        int status = Integer.parseInt(lines[0].substring(9, 12)); Map<String, String> values = new LinkedHashMap<>();
+        for (int index = 1; index < lines.length - 2; index++) {
+            String line = lines[index]; int colon = line.indexOf(':');
+            if (colon <= 0 || line.charAt(0) == ' ' || line.charAt(0) == '\t') throw failure("SUBTITLE_FETCH");
+            String name = line.substring(0, colon).toLowerCase(java.util.Locale.ROOT);
+            if (!name.matches("[!#$%&'*+.^_`|~0-9a-z-]+")) throw failure("SUBTITLE_FETCH");
+            String value = line.substring(colon + 1).trim();
+            if (values.containsKey(name) && ("content-length".equals(name) || "transfer-encoding".equals(name)
+                    || "content-encoding".equals(name) || "content-type".equals(name) || "location".equals(name))) throw failure("SUBTITLE_FETCH");
+            values.putIfAbsent(name, value);
+        }
+        return new Headers(status, values);
+    }
+    private byte[] readBody(Socket socket, InputStream input, Map<String, String> headers,
+            long generation, BooleanSupplier guard, FetchJob job, long deadline) throws Exception {
+        String transfer = headers.get("transfer-encoding"), lengthValue = headers.get("content-length");
+        if (transfer != null && lengthValue != null) throw failure("SUBTITLE_FETCH");
+        if (transfer != null && !"chunked".equalsIgnoreCase(transfer.trim())) throw failure("SUBTITLE_FETCH");
+        ByteArrayOutputStream output = new ByteArrayOutputStream(Math.min(32 * 1024, MAX_BYTES));
+        if (transfer != null) {
+            while (true) {
+                String line = readLine(socket, input, 128, generation, guard, job, deadline);
+                String size = line.split(";", 2)[0]; if (!size.matches("[0-9A-Fa-f]{1,8}")) throw failure("SUBTITLE_FETCH");
+                long count = Long.parseLong(size, 16);
+                if (count == 0) {
+                    int trailers = 0; String trailer;
+                    do { trailer = readLine(socket, input, MAX_HEADER - trailers, generation, guard, job, deadline); trailers += trailer.length() + 2; }
+                    while (!trailer.isEmpty() && trailers < MAX_HEADER);
+                    if (!trailer.isEmpty()) throw failure("SUBTITLE_FETCH");
+                    break;
+                }
+                if (count > MAX_BYTES - output.size()) throw failure("SUBTITLE_TOO_LARGE");
+                readExact(socket, input, output, (int) count, generation, guard, job, deadline);
+                if (readByte(socket, input, generation, guard, job, deadline) != '\r'
+                        || readByte(socket, input, generation, guard, job, deadline) != '\n') throw failure("SUBTITLE_FETCH");
+            }
+        } else if (lengthValue != null) {
+            if (!lengthValue.matches("[0-9]{1,10}")) throw failure("SUBTITLE_FETCH");
+            long length = Long.parseLong(lengthValue); if (length > MAX_BYTES) throw failure("SUBTITLE_TOO_LARGE");
+            readExact(socket, input, output, (int) length, generation, guard, job, deadline);
+        } else {
+            byte[] chunk = new byte[8192]; int count;
+            while (true) {
+                socket.setSoTimeout(remaining(deadline)); count = input.read(chunk);
+                if (count < 0) break; checkFetch(generation, guard, job, deadline); if (count == 0) continue;
+                if (output.size() > MAX_BYTES - count) throw failure("SUBTITLE_TOO_LARGE");
+                output.write(chunk, 0, count);
+            }
+        }
+        return output.toByteArray();
+    }
+    private byte[] decode(byte[] encoded, String encoding, long generation, BooleanSupplier guard, FetchJob job, long deadline) throws Exception {
+        if (encoding == null || encoding.trim().isEmpty() || "identity".equalsIgnoreCase(encoding.trim())) return encoded;
+        if (!"gzip".equalsIgnoreCase(encoding.trim())) throw failure("SUBTITLE_FORMAT");
+        ByteArrayOutputStream output = new ByteArrayOutputStream(); byte[] chunk = new byte[8192]; int count;
+        try (InputStream input = new GZIPInputStream(new ByteArrayInputStream(encoded))) {
+            while ((count = input.read(chunk)) != -1) {
+                checkFetch(generation, guard, job, deadline);
+                if (output.size() > MAX_BYTES - count) throw failure("SUBTITLE_TOO_LARGE");
+                output.write(chunk, 0, count);
+            }
+        }
+        return output.toByteArray();
+    }
+    private void readExact(Socket socket, InputStream input, ByteArrayOutputStream output, int total,
+            long generation, BooleanSupplier guard, FetchJob job, long deadline) throws Exception {
+        byte[] chunk = new byte[Math.min(8192, Math.max(1, total))]; int left = total;
+        while (left > 0) {
+            socket.setSoTimeout(remaining(deadline)); int count = input.read(chunk, 0, Math.min(chunk.length, left));
+            if (count <= 0) throw failure("SUBTITLE_FETCH");
+            output.write(chunk, 0, count); left -= count; checkFetch(generation, guard, job, deadline);
+        }
+    }
+    private String readLine(Socket socket, InputStream input, int maximum,
+            long generation, BooleanSupplier guard, FetchJob job, long deadline) throws Exception {
+        if (maximum < 1) throw failure("SUBTITLE_FETCH"); ByteArrayOutputStream line = new ByteArrayOutputStream();
+        while (line.size() < maximum) {
+            int value = readByte(socket, input, generation, guard, job, deadline);
+            if (value == '\r') {
+                if (readByte(socket, input, generation, guard, job, deadline) != '\n') throw failure("SUBTITLE_FETCH");
+                return line.toString(StandardCharsets.US_ASCII.name());
+            }
+            if (value < 32 || value > 126) throw failure("SUBTITLE_FETCH"); line.write(value);
+        }
+        throw failure("SUBTITLE_FETCH");
+    }
+    private int readByte(Socket socket, InputStream input, long generation, BooleanSupplier guard, FetchJob job, long deadline) throws Exception {
+        socket.setSoTimeout(remaining(deadline)); int value = input.read(); if (value < 0) throw failure("SUBTITLE_FETCH");
+        checkFetch(generation, guard, job, deadline); return value;
+    }
+    private static int remaining(long deadline) throws DeliveryException {
+        long value = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime());
+        if (value <= 0) throw failure("SUBTITLE_FETCH"); return (int) Math.min(Integer.MAX_VALUE, value);
+    }
+    private static int endpointTimeout(long deadline) throws DeliveryException {
+        return Math.min(ENDPOINT_TIMEOUT, remaining(deadline));
+    }
+    private void checkFetch(long generation, BooleanSupplier guard, FetchJob job, long deadline) throws DeliveryException {
+        if (job.cancelled || Thread.currentThread().isInterrupted()) throw failure("SOURCE_CHANGED");
+        if (System.nanoTime() >= deadline) throw failure("SUBTITLE_FETCH");
+        check(generation, guard);
     }
     private static boolean publicAddress(InetAddress address) {
         if (address.isAnyLocalAddress() || address.isLoopbackAddress() || address.isLinkLocalAddress() || address.isSiteLocalAddress() || address.isMulticastAddress()) return false;
@@ -357,6 +586,6 @@ public final class SubtitleDelivery implements AutoCloseable {
     }
     @Override public void close() {
         synchronized (lock) { if (closed) return; closed = true; revokeAll(); }
-        fetchers.shutdownNow(); requests.shutdownNow(); deadlines.shutdownNow();
+        fetchers.shutdownNow(); resolvers.shutdownNow(); requests.shutdownNow(); deadlines.shutdownNow();
     }
 }

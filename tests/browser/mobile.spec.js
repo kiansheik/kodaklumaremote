@@ -40,12 +40,13 @@ async function openApp(page, initialSnapshot = null) {
   await page.route('**/*', route => new URL(route.request().url()).origin === appUrl ? route.continue() : route.abort());
   await page.addInitScript(({ initialSnapshot }) => {
     window.__calls = [];
-    window.__receiver = { active: false, playing: true, sourceUrl: null, tracks: [], enabled: false, currentIndex: null, position: 12, volume: 6, failText: false, holdMethod: null, held: [], job: 0 };
+    window.__receiver = { active: false, playing: true, sourceUrl: null, content: null, tracks: [], enabled: false, currentIndex: null, position: 12, volume: 6, failText: false, holdMethod: null, held: [], job: 0, previewDelays: {} };
     const receiver = window.__receiver;
     if (initialSnapshot?.playback) {
       receiver.active = initialSnapshot.playback.active === true;
       receiver.playing = initialSnapshot.playback.playing !== false;
       receiver.sourceUrl = initialSnapshot.playback.sourceUrl || null;
+      receiver.content = initialSnapshot.playback.content || null;
       receiver.position = initialSnapshot.playback.positionSeconds || 0;
     }
     if (initialSnapshot?.remote) {
@@ -85,10 +86,10 @@ async function openApp(page, initialSnapshot = null) {
         case 'luma.apps': return { apps: Array.from({ length: 12 }, (_, index) => ({ packageName: `test.app${index}`, label: index === 0 ? '<img src=x onerror="window.appExecuted=true">' : `App ${index}` })) };
         case 'luma.text': return { accepted: true };
         case 'kodi.connect': return { ready: true };
-        case 'kodi.open': receiver.active = true; receiver.playing = true; receiver.sourceUrl = params.media.url; receiver.tracks = []; receiver.enabled = false; receiver.currentIndex = null; return { accepted: true };
+        case 'kodi.open': receiver.active = true; receiver.playing = true; receiver.sourceUrl = params.media.url; receiver.content = params.media.content || null; receiver.tracks = []; receiver.enabled = false; receiver.currentIndex = null; return { accepted: true };
         case 'kodi.pause': receiver.playing = false; return { accepted: true };
         case 'kodi.resume': receiver.playing = true; return { accepted: true };
-        case 'kodi.status': return { active: receiver.active, playing: receiver.playing, sourceUrl: receiver.sourceUrl, positionSeconds: receiver.position, durationSeconds: 600, canSeek: true, ...(receiver.stale ? {stale:true} : {}) };
+        case 'kodi.status': return { active: receiver.active, playing: receiver.playing, sourceUrl: receiver.sourceUrl, positionSeconds: receiver.position, durationSeconds: 600, canSeek: true, ...(receiver.content ? {content: receiver.content} : {}), ...(receiver.stale ? {stale:true} : {}) };
         case 'kodi.getSubtitles':
           if (receiver.pendingTrack && --receiver.subtitleDelayReads <= 0) { receiver.tracks.push(receiver.pendingTrack); receiver.pendingTrack = null; }
           return { tracks: receiver.tracks.map((track, index) => ({ index, name: 'External' })), enabled: receiver.enabled, currentIndex: receiver.currentIndex };
@@ -96,8 +97,9 @@ async function openApp(page, initialSnapshot = null) {
         case 'kodi.subtitleDelivery': return { downloaded: !receiver.holdDelivery };
         case 'kodi.addSubtitle': if (receiver.subtitleDelayReads > 0) receiver.pendingTrack = params.track; else receiver.tracks.push(params.track); return { accepted: true };
         case 'kodi.setSubtitle': receiver.enabled = params.index !== 'off'; receiver.currentIndex = receiver.enabled ? params.index : null; return { accepted: true };
-        case 'kodi.seek': if(!receiver.seekNoEffect) receiver.position = params.position; if(receiver.staleAfterSeek) receiver.stale=true; return { accepted: true };
+        case 'kodi.seek': if(!receiver.seekNoEffect) receiver.position = params.position; if(receiver.staleAfterSeek) receiver.stale=true; if(receiver.contentAfterSeek) receiver.content=receiver.contentAfterSeek; return { accepted: true };
         case 'kodi.stop': receiver.active = false; return { active: false };
+        case 'preview.frame': return { available: true, dataUri: 'data:image/webp;base64,UklGRiIAAABXRUJQVlA4IBYAAAAwAQCdASoBAAEAAUAmJaQAA3AA/vuUAAA=', positionSeconds: params.position };
         default: throw new Error('Unexpected fixture method');
       }
     };
@@ -142,11 +144,17 @@ async function openApp(page, initialSnapshot = null) {
         window.LumaRPC.receive({ id: request.id, ok: false, error: { code: 'CONNECTION_FAILED', message: 'private-source-token <img src=x onerror="window.errorExecuted=true">' } });
         return;
       }
+      if (request.method === 'preview.frame' && receiver.previewUnsupported) {
+        window.LumaRPC.receive({ id: request.id, ok: false, error: { code: 'PREVIEW_UNSUPPORTED', message: 'Preview unavailable' } });
+        return;
+      }
       const response = { id: request.id, ok: true, result: result(request) };
       if (request.method === 'kodi.open' && receiver.holdOpenResponse) {
         receiver.openResponse = response;
         return;
       }
+      const previewDelay = request.method === 'preview.frame' ? receiver.previewDelays[String(request.params.position)] || 0 : 0;
+      if (previewDelay) { setTimeout(() => window.LumaRPC.receive(response), previewDelay); return; }
       window.LumaRPC.receive(response);
     };
     window.__release = () => { receiver.holdMethod = null; for (const request of receiver.held.splice(0)) respond(request); };
@@ -235,7 +243,7 @@ test('native saved content resumes Kodi after playback proof and persists metada
   await expect(page.locator('#playback-status')).toContainText('2:05');
   const calls=await page.evaluate(()=>window.__calls);
   expect(calls.filter(call=>call.method==='kodi.open')).toHaveLength(1);
-  expect(calls.filter(call=>call.method==='kodi.seek').map(call=>call.params)).toEqual([{position:125,expectedSourceUrl:media.url}]);
+  expect(calls.filter(call=>call.method==='kodi.seek').map(call=>call.params)).toEqual([{position:125,expectedSourceUrl:media.url,expectedContentKey:content.key}]);
   const ready=calls.find(call=>call.method==='app.handoffReady');
   expect(ready.params.resumeApplied).toBe(true);
   expect(ready.params.remote.media).toMatchObject({content,resumeSeconds:125});
@@ -261,6 +269,23 @@ test('stale Kodi state near the requested position cannot confirm resume', async
   await expect(page.locator('#message')).toContainText('saved position could not be restored');
   expect(await page.evaluate(()=>window.__receiver.position)).toBe(125);
   expect(await page.evaluate(()=>window.__calls.find(call=>call.method==='app.handoffReady').params.resumeApplied)).toBe(false);
+});
+
+test('same-URL canonical replacement cannot confirm or remember a stale resume', async ({page}) => {
+  await page.clock.install(); await openApp(page); await setup(page);
+  const selected={key:'framextv:tv:42:1:2',kind:'tv',contentId:'42',season:1,episode:2,watchUrl:'https://framextv.cc/watch/42/1/2',title:'Household series · S1 E2'};
+  const replacement={key:'framextv:tv:42:1:3',kind:'tv',contentId:'42',season:1,episode:3,watchUrl:'https://framextv.cc/watch/42/1/3',title:'Household series · S1 E3'};
+  await page.evaluate(({media,selected,replacement})=>{
+    window.__receiver.contentAfterSeek=replacement;
+    window.LumaApp.onCapturedMedia({...media,content:selected,resumeSeconds:125});
+  },{media,selected,replacement});
+  await expect.poll(()=>page.evaluate(()=>window.__calls.some(call=>call.method==='kodi.seek'))).toBe(true);
+  await page.clock.runFor(1100);
+  await expect.poll(()=>page.evaluate(()=>window.__calls.filter(call=>call.method==='kodi.status'&&call.params.expectedContentKey).length)).toBeGreaterThan(0);
+  const calls=await page.evaluate(()=>window.__calls);
+  expect(calls.filter(call=>call.method==='kodi.status'&&call.params.expectedSourceUrl===media.url).every(call=>call.params.expectedContentKey===selected.key)).toBe(true);
+  expect(calls.filter(call=>call.method==='app.handoffReady')).toHaveLength(0);
+  await expect(page.locator('#message')).toContainText('selected video changed');
 });
 
 test('captured video starts without subtitle commands and keeps every language for manual selection without exposing sources', async ({ page }) => {
@@ -332,7 +357,7 @@ test('main remote exposes back 30, scrub and catalog-proven next episode control
   const nextMedia = {...media,url:'https://media.example.org/next.m3u8',sourceToken:'capture-next',content:{...content,key:'framextv:tv:284833:1:2',episode:2,watchUrl:'https://framextv.cc/watch/284833/1/2'}};
   await openApp(page, {
     connection:{connected:true,configured:true,host:'192.168.1.50',name:'Test LUMA'}, settings:{hasReceiver:true,hasKodi:true,autoConnect:true},
-    playback:{active:true,playing:true,sourceUrl:media.url,positionSeconds:75,durationSeconds:600,canSeek:true},
+    playback:{active:true,playing:true,sourceUrl:media.url,content,positionSeconds:75,durationSeconds:600,canSeek:true},
     remote:{media:{...media,content},tracks:[],catalog:[],selectedIndex:null,subtitlesEnabled:false,nextEpisode:{kind:'tv',id:'284833',season:1,episode:2}},
   });
   await page.evaluate(value => { window.__catalogMedia = value; }, nextMedia);
@@ -342,6 +367,125 @@ test('main remote exposes back 30, scrub and catalog-proven next episode control
   await expect.poll(() => page.evaluate(() => window.__calls.find(call => call.method === 'kodi.seek')?.params.position)).toBe(45);
   await page.getByRole('button', {name:'Next episode',exact:true}).click();
   await expect.poll(() => page.evaluate(() => window.__calls.find(call => call.method === 'app.chooseCatalog')?.params)).toEqual({kind:'tv',id:'284833',season:1,episode:2,resume:true});
+});
+
+test('same-URL canonical transition hides stale controls until exact metadata arrives', async ({ page }) => {
+  const first = {key:'framextv:tv:284833:1:1',kind:'tv',contentId:'284833',season:1,episode:1,watchUrl:'https://framextv.cc/watch/284833/1/1',title:'Episode one'};
+  const second = {...first,key:'framextv:tv:284833:1:2',episode:2,watchUrl:'https://framextv.cc/watch/284833/1/2',title:'Episode two'};
+  const connection = {connected:true,configured:true,host:'192.168.1.50',name:'Test LUMA'};
+  await openApp(page, {
+    connection, settings:{hasReceiver:true,hasKodi:true,autoConnect:true},
+    playback:{active:true,playing:true,sourceUrl:media.url,content:first,positionSeconds:75,durationSeconds:600,canSeek:true},
+    remote:{media:{...media,content:first},tracks:[],catalog:[],selectedIndex:null,subtitlesEnabled:false,nextEpisode:{kind:'tv',id:'284833',season:1,episode:2}},
+  });
+  await page.evaluate(({connection,media,first}) => window.LumaApp.onConnectionState({
+    connection, playback:{active:true,playing:true,sourceUrl:media.url,positionSeconds:2,durationSeconds:600,canSeek:true},
+    remote:{media:{...media,content:first},tracks:[],catalog:[],selectedIndex:null,subtitlesEnabled:false,nextEpisode:{kind:'tv',id:'284833',season:1,episode:2}},
+  }), {connection,media,first});
+  await expect(page.locator('#media-title')).toHaveText('Now playing');
+  await expect(page.getByRole('button', {name:'Back 30 seconds'})).toBeDisabled();
+  await expect(page.getByRole('button', {name:'Next episode',exact:true})).toBeDisabled();
+  await expect(page.getByLabel('Playback position')).toBeDisabled();
+
+  await page.evaluate(({connection,media,second}) => window.LumaApp.onConnectionState({
+    connection, playback:{active:true,playing:true,sourceUrl:media.url,content:second,positionSeconds:61,durationSeconds:600,canSeek:true},
+    remote:{media:{...media,title:'Episode two',content:second},tracks:[],catalog:[],selectedIndex:null,subtitlesEnabled:false,nextEpisode:{kind:'tv',id:'284833',season:1,episode:3}},
+  }), {connection,media,second});
+  await expect(page.locator('#media-title')).toHaveText('Episode two');
+  await expect(page.getByRole('button', {name:'Back 30 seconds'})).toBeEnabled();
+  await expect(page.getByRole('button', {name:'Next episode',exact:true})).toBeEnabled();
+});
+
+test('late next-episode catalog result cannot replace a newer same-URL canonical item', async ({ page }) => {
+  const first = {key:'framextv:tv:284833:1:1',kind:'tv',contentId:'284833',season:1,episode:1,watchUrl:'https://framextv.cc/watch/284833/1/1',title:'Episode one'};
+  const second = {...first,key:'framextv:tv:284833:1:2',episode:2,watchUrl:'https://framextv.cc/watch/284833/1/2',title:'Episode two'};
+  const connection = {connected:true,configured:true,host:'192.168.1.50',name:'Test LUMA'};
+  const nextMedia = {...media,url:'https://media.example.org/next.m3u8',sourceToken:'capture-next',content:second};
+  await openApp(page, {
+    connection, settings:{hasReceiver:true,hasKodi:true,autoConnect:true},
+    playback:{active:true,playing:true,sourceUrl:media.url,content:first,positionSeconds:75,durationSeconds:600,canSeek:true},
+    remote:{media:{...media,content:first},tracks:[],catalog:[],selectedIndex:null,subtitlesEnabled:false,nextEpisode:{kind:'tv',id:'284833',season:1,episode:2}},
+  });
+  await page.evaluate(value => { window.__catalogMedia = value; window.__receiver.holdMethod = 'app.chooseCatalog'; }, nextMedia);
+  await page.getByRole('button', {name:'Next episode',exact:true}).click();
+  await expect.poll(() => page.evaluate(() => window.__receiver.held.length)).toBe(1);
+  await page.evaluate(({connection,media,second}) => window.LumaApp.onConnectionState({
+    connection, playback:{active:true,playing:true,sourceUrl:media.url,content:second,positionSeconds:5,durationSeconds:600,canSeek:true},
+    remote:{media:{...media,title:'Episode two',content:second},tracks:[],catalog:[],selectedIndex:null,subtitlesEnabled:false,nextEpisode:{kind:'tv',id:'284833',season:1,episode:3}},
+  }), {connection,media,second});
+  await page.evaluate(() => window.__release());
+  await expect(page.locator('#message')).toContainText('selected video changed');
+  expect(await page.evaluate(() => window.__calls.some(call => call.method === 'kodi.open' || call.method === 'app.beginHandoff'))).toBe(false);
+  await expect(page.locator('#media-title')).toHaveText('Episode two');
+});
+
+test('scrub preview is debounced and latest-wins without seeking until change', async ({ page }) => {
+  const content = {key:'framextv:tv:284833:1:1',kind:'tv',contentId:'284833',season:1,episode:1,watchUrl:'https://framextv.cc/watch/284833/1/1',title:'Household episode'};
+  await openApp(page, {
+    connection:{connected:true,configured:true,host:'192.168.1.50',name:'Test LUMA'}, settings:{hasReceiver:true,hasKodi:true,autoConnect:true},
+    playback:{active:true,playing:true,sourceUrl:media.url,content,positionSeconds:12,durationSeconds:600,canSeek:true},
+    remote:{media:{...media,content},tracks:[],catalog:[],selectedIndex:null,subtitlesEnabled:false},
+  });
+  await page.evaluate(() => { window.__receiver.previewDelays['60'] = 350; });
+  const range = page.getByLabel('Playback position');
+  const preview = page.locator('#scrub-preview');
+  await range.evaluate(element => { element.value = '60'; element.dispatchEvent(new Event('input', {bubbles:true})); });
+  await expect(preview).toBeVisible();
+  await expect(page.locator('#scrub-preview-time')).toHaveText('1:00');
+  expect(await page.evaluate(() => window.__calls.some(call => call.method === 'preview.frame'))).toBe(false);
+  await expect.poll(() => page.evaluate(() => window.__calls.filter(call => call.method === 'preview.frame').map(call => call.params.position))).toEqual([60]);
+  await range.evaluate(element => { element.value = '120'; element.dispatchEvent(new Event('input', {bubbles:true})); });
+  await expect.poll(() => page.evaluate(() => window.__calls.filter(call => call.method === 'preview.frame').map(call => call.params.position))).toEqual([60, 120]);
+  await expect(preview).toHaveAttribute('data-image', 'true');
+  await expect(preview).toHaveAttribute('data-position', '120');
+  await expect(page.locator('#scrub-preview-time')).toHaveText('2:00');
+  expect(await page.evaluate(() => window.__calls.some(call => call.method === 'kodi.seek'))).toBe(false);
+  await page.waitForTimeout(400);
+  await expect(preview).toHaveAttribute('data-position', '120');
+  expect(await page.locator('body').innerText()).not.toContain('private-source-token');
+  const previewCalls = await page.evaluate(() => window.__calls.filter(call => call.method === 'preview.frame'));
+  expect(previewCalls.map(call => call.params)).toEqual([
+    {expectedSourceUrl:media.url,contentKey:content.key,position:60},
+    {expectedSourceUrl:media.url,contentKey:content.key,position:120},
+  ]);
+
+  await range.evaluate(element => element.dispatchEvent(new Event('change', {bubbles:true})));
+  await expect(preview).toBeHidden();
+  await expect.poll(() => page.evaluate(() => window.__calls.filter(call => call.method === 'kodi.seek').map(call => call.params.position))).toEqual([120]);
+
+  await range.evaluate(element => { element.value = '180'; element.dispatchEvent(new Event('input', {bubbles:true})); });
+  await expect(preview).toBeVisible();
+  await page.evaluate(() => window.LumaApp.onConnectionState({selectedTarget:'philips'}));
+  await expect(preview).toBeHidden();
+  await page.evaluate(() => window.LumaApp.onConnectionState({selectedTarget:'luma'}));
+  await range.evaluate(element => { element.value = '200'; element.dispatchEvent(new Event('input', {bubbles:true})); });
+  await expect(preview).toBeVisible();
+  await page.evaluate(() => window.LumaApp.onSourceChanged());
+  await expect(preview).toBeHidden();
+  await range.evaluate(element => { element.value = '220'; element.dispatchEvent(new Event('input', {bubbles:true})); });
+  await expect(preview).toBeVisible();
+  await page.evaluate(() => window.LumaApp.onConnectionState({playback:{active:false}}));
+  await expect(preview).toBeHidden();
+});
+
+test('unsupported scrub frames leave a usable timestamp-only scrubber', async ({ page }) => {
+  const content = {key:'framextv:tv:284833:1:1',kind:'tv',contentId:'284833',season:1,episode:1,watchUrl:'https://framextv.cc/watch/284833/1/1',title:'Household episode'};
+  await openApp(page, {
+    connection:{connected:true,configured:true,host:'192.168.1.50',name:'Test LUMA'}, settings:{hasReceiver:true,hasKodi:true,autoConnect:true},
+    playback:{active:true,playing:true,sourceUrl:media.url,content,positionSeconds:12,durationSeconds:600,canSeek:true},
+    remote:{media:{...media,content},tracks:[],catalog:[],selectedIndex:null,subtitlesEnabled:false},
+  });
+  await page.evaluate(() => { window.__receiver.previewUnsupported = true; });
+  const range = page.getByLabel('Playback position');
+  const preview = page.locator('#scrub-preview');
+  await range.evaluate(element => { element.value = '90'; element.dispatchEvent(new Event('input', {bubbles:true})); });
+  await expect.poll(() => page.evaluate(() => window.__calls.filter(call => call.method === 'preview.frame').length)).toBe(1);
+  await expect(preview).toBeVisible();
+  await expect(preview).toHaveAttribute('data-image', 'false');
+  await expect(page.locator('#scrub-preview-time')).toHaveText('1:30');
+  expect(await page.evaluate(() => window.__calls.some(call => call.method === 'kodi.seek'))).toBe(false);
+  await range.evaluate(element => element.dispatchEvent(new Event('pointercancel', {bubbles:true})));
+  await expect(preview).toBeHidden();
 });
 
 test('apps paginate as text and failed typing keeps its draft while clearing a lost projector connection', async ({ page }) => {
@@ -929,6 +1073,26 @@ for (const rejectedMethod of ['kodi.open']) {
     await expect(page.locator('body')).not.toContainText('private-subtitle-token');
   });
 }
+
+test('a synchronous bridge write failure is explicit not-sent proof and permits retry', async ({ page }) => {
+  await openApp(page); await setup(page);
+  await page.evaluate(() => {
+    const post = window.LumaNative.postMessage.bind(window.LumaNative);
+    window.__bridgeThrows = 0;
+    window.LumaNative.postMessage = text => {
+      const request = JSON.parse(text);
+      if (request.method === 'kodi.open' && window.__bridgeThrows++ === 0) throw new Error('fixture bridge unavailable before write');
+      post(text);
+    };
+  });
+  await page.evaluate(value => window.LumaApp.onCapturedMedia(value), media);
+  await expect(page.getByRole('button', { name: 'Try again', exact: true })).toBeEnabled();
+  await page.getByRole('button', { name: 'Try again', exact: true }).click();
+  await expect(page.locator('#message')).toHaveText('Video is playing. Choose a language in Subtitles.');
+  expect(await page.evaluate(() => window.__bridgeThrows)).toBe(2);
+  expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'kodi.open').length)).toBe(1);
+  expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'app.handoffReady').length)).toBe(1);
+});
 
 test('playing video finishes casting without subtitle work while the Open response is still outstanding', async ({ page }) => {
   await openApp(page); await setup(page);

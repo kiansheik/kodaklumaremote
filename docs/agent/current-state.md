@@ -1,30 +1,70 @@
 # Current state
 
-## Unreleased: main/system next, scrub/back and malformed-cue tolerance
+## Unreleased 0.4.8: cross-phone Kodi metadata and system playback controls
 
-Android is now versioned as the 0.4.7/code 17 candidate with checked-in release
-notes. The full Gradle debug APK build passes and produces a correctly versioned
-artifact, but that debug certificate cannot update an installed production app.
-The user completed the private local production-signing configuration. No
-commit, push, release, Pages deployment or phone installation has occurred yet.
+Android source is versioned as 0.4.8/code 18. A production-signed local candidate
+was built at `.local/releases/v0.4.8/luma-remote-0.4.8.apk` (9,793,842 bytes,
+SHA-256 `09b72de640663539af191a4e4f32305ced99f90d65a148b8eb3bd1d9897d3202`)
+with `script.lumaremote.metadata-1.0.0.zip` (8,426 bytes, SHA-256
+`a4aa9fe6513395520d8073c13177e5d44946bd7cd8c17e80540742bc71950b8e`).
+The APK package/version/minSdk, sole production signer, update-manifest hash,
+notes and exact five-file add-on contents were independently revalidated.
+Nothing was published, installed on a phone or installed in Kodi. A debug APK
+cannot update the production-signed app. The user completed the private local
+production-signing configuration.
 `make deploy-gh-pages` is now the guarded complete-release entry point: it
 auto-increments the next patch/code, checks and signs before committing, pushes
-the exact source, publishes, and deploys the validated update page. Bounded,
+the exact source, publishes the APK, update manifest and deterministic Kodi
+metadata add-on ZIP, and deploys the validated update page. Bounded,
 allowlisted new text source/test/docs files auto-stage; unrelated untracked files
 remain untouched, while sensitive-looking or unsupported additions fail closed.
+The current local web-receiver docs, dev script, Android receiver tree and header
+capture are explicit local-only exclusions and remain untracked and unstaged.
 It never extracts credentials from other repositories.
 One-time `make configure-release` saves the required SDK/tool/signing values in
 Git-ignored `.luma-release.json` with mode 0600; subsequent releases load it
 automatically, while explicit environment variables retain precedence.
 `make deploy-page` preserves page-only resynchronization.
 
-The main phone remote now has a visible playback scrubber, source-guarded back
-30 seconds and a catalog-proven next-episode button. The exact current content
-identity and cached successor survive service restoration. Android MediaSession
-advertises standard skip-next and both notification surfaces include Next episode
-when an exact successor is known. The system action carries the current media
-revision, opens the app and reuses the existing guarded catalog-resolution/cast
-flow; it never synthesizes an episode number or directly replays a URL.
+The main phone remote has a visible playback scrubber, source-guarded Back 30
+and catalog-proven next episode. Back 30 is now also an explicit notification
+action and standard MediaSession `ACTION_REWIND`, making it available to the
+lock screen for verified active, seekable playback. The service reads fresh
+Kodi status and performs a revision/source-bound absolute seek clamped at zero.
+Next episode retains the exact successor and uses the existing guarded catalog
+resolution flow; it never guesses an episode number or replays a stale URL. The
+notification action is a direct user-initiated app `PendingIntent`. MediaSession/
+lock-screen Next instead runs inside the service, rechecks the exact source and
+canonical key after catalog resolution and Kodi's add-on probe, and neither opens
+an Activity nor unlocks the screen in the API 36 fixture. Kodi does not provide
+an atomic compare-and-open operation: an identity change observed by the final
+pre-write check is rejected, but another controller could still switch playback
+in the narrow gap between that read and `ExecuteAddon`/`Player.Open`.
+
+The source-only Kodi metadata add-on starts app-selected playback with strict
+canonical movie/episode metadata. A second configured phone can adopt that exact
+active item, hydrate title and subtitle metadata from fixed details/subtitles
+catalog endpoints without replacing the playing stream, and bind Kodi's roughly
+four-second timestamp observations to its own WatchHistory and durable Library.
+That restores Resume, subtitle selection, next episode and current-item details
+on the joining phone. Source/content/revision guards reject observed stale work,
+including a same-URL next episode updating the prior episode. Transitions revoke
+old phone-hosted subtitle tickets; each phone prepares its own selected subtitle.
+This does not retroactively import another phone's older viewing history. Kodi
+does not expose a per-Open nonce through this adapter, so an invisible player
+recreation with both the identical source and canonical key may retain a cached
+external subtitle index until a discrepancy becomes observable.
+
+Scrub input now requests a phone-only preview after a short latest-wins debounce
+without seeking until commit. On Android 8.1/API 27 or newer, a bounded direct
+HTTPS, unencrypted VOD HLS media playlist may yield 256 x 144 JPEG quality-55
+sync frames through `MediaMetadataRetriever`. The decoder receives only bounded
+in-memory playlist-segment bytes, never a remote URL. The adaptive memory-only
+cache is revoked on source/content/service changes. Master, live, encrypted and
+byte-range HLS, DASH and progressive sources remain unsupported. The current
+five-title provider sample exposed no storyboard, image adaptation set or
+trick-play manifest, so previews remain best-effort and ordinary scrubbing
+continues when extraction is unsupported.
 
 A current homepage/API profile sampled five titles and 12 EN/PT/PT-BR bodies.
 Four titles exposed 42/64/51/72 tracks; one exposed none. Eleven bodies already
@@ -33,14 +73,22 @@ one reversed timestamp. Timed-text normalization now discards only a bounded
 minority (maximum 10 and 2 percent), reports the discard count and preserves
 strict failure for materially malformed files. All 12 sampled bodies now normalize.
 Phone-hosted receiver-pinned SRT delivery already existed for Kodi and Philips;
-the reproduced blocker was whole-file rejection, not absence of hosting.
+the reproduced blocker was whole-file rejection, not absence of hosting. Public
+subtitle downloads now resolve every redirect hop once, reject an answer set if
+any address is non-public, and connect only within that approved set while
+preserving the original Host, TLS SNI and certificate hostname verification.
+This is tested hardening, not physical proof that captions now render reliably.
 
-Validation: Node 249, JVM normalizer 25, JVM delivery 10 and all 81 relevant
-mobile browser scenarios pass. Changed production Java compiles manually against
-Android 35, and the full Gradle debug APK build passes for 0.4.7/code 17. No
-production-signed APK, emulator or physical-device acceptance is claimed. See the
-[profile](subtitle-provider-profile.md) and
-[handoff](session-handoffs/2026-10-22-remote-controls-subtitle-profile.md).
+Verified checks: Node 269/269; browser 155/155, including mobile 45/45;
+handoff 78/78; Android backend 13/13, service 17/17, subtitles 9/9, scrub
+preview 7/7 and multi-receiver 5/5; catalog/history/Library/TV-catalog/resolver
+groups 6/6/6/5/4; JVM subtitle delivery 13/13 and normalizer 25/25; and
+package/release 13/13. `assembleRelease`, release lint and final artifact
+verification also passed. No physical-phone, two-phone or physical-Kodi
+acceptance is claimed. See the
+[metadata contract](kodi-metadata-sync.md),
+[preview profile](scrub-preview-profile.md), [subtitle profile](subtitle-provider-profile.md)
+and [handoff](session-handoffs/2026-10-22-cross-phone-metadata-and-scrub-previews.md).
 
 ## Published0.4.6: Philips player and offline viewing library
 

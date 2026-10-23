@@ -29,6 +29,7 @@ public final class CatalogInstrumentation {
             rejects("CATALOG_INVALID_INPUT", client, "search", object("kind", "all", "query", "hello\nworld"));
             rejects("CATALOG_INVALID_INPUT", client, "resolve", object("kind", "movie", "id", "1", "season", 1));
             rejects("CATALOG_INVALID_INPUT", client, "resolve", object("kind", "tv", "id", "1", "season", 1, "episode", 1, "url", "https://media.example/a.mp4"));
+            rejects("CATALOG_INVALID_INPUT", client, "hydrate", object("kind", "tv", "id", "1", "season", 1, "episode", 1, "url", "https://media.example/a.mp4"));
             require(requests.isEmpty(), "Invalid selection reached network");
             client.search(object("query", "a&b ? café", "kind", "all", "page", 2));
             require(requests.size() == 1 && requests.get(0).equals("https://api.framextv.tech/api/search?q=a%26b+%3F+caf%C3%A9&type=all&page=2"), "Search was not bounded/encoded");
@@ -76,6 +77,21 @@ public final class CatalogInstrumentation {
             require(first.getJSONObject("content").getString("key").equals("framextv:tv:42:0:2") && first.getJSONObject("content").getString("watchUrl").equals("https://framextv.cc/watch/42/0/2"), "Stable episode identity wrong");
             for (String url : requests) require(url.startsWith("https://api.framextv.tech/api/"), "Media/subtitle was fetched by catalog client");
             require(requests.size() == 6, "Resolve was not a fresh bounded API operation");
+        });
+        names.add("active playback hydration never selects a replacement source"); checks.add(() -> {
+            List<String> requests = new ArrayList<>(); CatalogClient client = new CatalogClient((url, ms) -> {
+                requests.add(url);
+                if (url.contains("/api/details")) return reply(object("success", true, "id", 42, "type", "tv", "title", "Shared series"));
+                if (url.contains("/api/subtitles")) return reply(object("success", true, "subtitles", new JSONArray()
+                    .put(object("url", "https://media.example/pt.vtt", "language", "pt-BR", "label", "Português", "format", "vtt"))));
+                throw new AssertionError("Hydration attempted to resolve media");
+            });
+            JSONObject result = client.hydrate(object("kind", "tv", "id", "42", "season", 1, "episode", 3));
+            require(result.getString("title").equals("Shared series · S1 E3"), "Hydrated title lost episode identity");
+            require(result.getJSONObject("content").getString("key").equals("framextv:tv:42:1:3"), "Hydrated canonical identity changed");
+            require(result.getJSONArray("tracks").length() == 1 && result.getBoolean("subtitleCatalogComplete"), "Hydrated subtitles were not retained");
+            require(requests.size() == 2 && requests.stream().noneMatch(url -> url.contains("/api/stream")), "Hydration selected a replacement source");
+            require(!result.has("url"), "Hydration exposed a media source");
         });
         names.add("failover is fixed and malformed source responses stay failures"); checks.add(() -> {
             List<String> requests = new ArrayList<>(); CatalogClient client = new CatalogClient((url, ms) -> { requests.add(url); return requests.size() == 1 ? new CatalogClient.Response(503, "") : reply(object("success", true, "results", new JSONArray())); });

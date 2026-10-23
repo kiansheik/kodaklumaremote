@@ -906,3 +906,47 @@
   v2signature match; only encryptedSDKdependencyblock differs with identical
   plaintext. Normal publisher retry accepted. No phone/TV update or Kodak playback
   change. [Release/evidence](session-handoffs/2026-10-20-release-0.4.6.md).
+
+- 2026-10-22 LUMA-without-Kodi assessment: live inventory shows TV Bro and a
+  WebView shell; EShare client has no install/open-URL command; read-only probe
+  found 8121/8080 open, ADB5555 closed. Philips receiver is reusable as-is; phone
+  routing is the coupling. No projector launch/typing/install. See
+  [LUMA web receiver](luma-web-receiver.md) and
+  [handoff](session-handoffs/2026-10-22-luma-web-receiver-assessment.md).
+- 2026-10-22 LUMA browser device test (user watching): TV Bro stuck white;
+  WebView shell opened a Mac URL via EShare text + KEYEVENT66. Chrome66 WebView;
+  receiver scripts/hls.js run; EShare key unlocks unmuted play. hls.js and native
+  HLS both play with sound but user reports choppy (native better). Favours own
+  APK. Details in [LUMA web receiver](luma-web-receiver.md).
+
+- 2026-10-22 cross-phone Kodi metadata and scrub previews: notification/lock-screen
+  Back 30 now uses an explicit action plus MediaSession rewind with fresh
+  source/revision guards. Notification Next remains a direct app `PendingIntent`;
+  MediaSession Next resolves and opens the exact retained successor inside the
+  service with source/content/add-on-probe guards and no Activity or unlock. A
+  strict source-only Kodi add-on preserves canonical movie/episode identity;
+  another configured phone can adopt the active item, hydrate fixed details/
+  subtitles without changing its stream and update its own WatchHistory/Library
+  from roughly four-second Kodi timestamps. Selected subtitle downloads now pin
+  each redirect to its once-resolved all-public address set while retaining Host,
+  SNI and hostname verification. Phone-only 256 x 144 quality-55 previews are
+  latest-wins and memory-only for supported direct HTTPS unencrypted VOD HLS on
+  API 27+; DASH/progressive and unsupported HLS remain timestamp-only. The bounded
+  live provider sample exposed no storyboard/trick-play asset. The release pipeline
+  packages the deterministic add-on ZIP with APK/update metadata and explicitly
+  leaves the unrelated local web-receiver docs/dev script/Android tree/header
+  capture untracked and unstaged. Node269,
+  browser155/mobile45, handoff78, backend13, service17, Android subtitles9,
+  preview7, multi-receiver5, catalog groups6/6/6/5/4, JVM delivery13/normalizer25
+  and package/release13 pass. Release assemble/lint and independent package,
+  version, minSdk, signer, manifest, notes and add-on-content verification pass.
+  The combined release-manifest/add-on boundary audit passes 18/18.
+  The local signed 0.4.8/code-18 APK is 9,793,842 bytes with SHA-256
+  `09b72de640663539af191a4e4f32305ced99f90d65a148b8eb3bd1d9897d3202`;
+  the 8,426-byte add-on ZIP is
+  `a4aa9fe6513395520d8073c13177e5d44946bd7cd8c17e80540742bc71950b8e`.
+  Kodi lacks atomic compare-and-open, so a second controller can still switch in
+  the narrow final-read/write gap. Neither artifact was published or installed,
+  and no physical Kodi/two-phone validation is claimed. [Metadata](kodi-metadata-sync.md),
+  [preview profile](scrub-preview-profile.md),
+  [handoff](session-handoffs/2026-10-22-cross-phone-metadata-and-scrub-previews.md).

@@ -48,6 +48,7 @@ public final class MultiReceiverInstrumentation {
     private ServiceConnection binding;
     private String base, session, phase = "setup", tvSource = FIRST;
     private boolean tvPaused;
+    private double tvPosition = 15;
     private boolean fixtureAuthorized;
     private long after;
     private int checks;
@@ -99,7 +100,7 @@ public final class MultiReceiverInstrumentation {
     private void tvState() throws Exception { tvState(true); }
     private void tvState(boolean active) throws Exception {
         request(base + "state", object("client", CLIENT, "sessionId", session, "playback", object("active", active, "source", tvSource,
-                "title", "TV fixture", "paused", tvPaused, "positionSeconds", 15, "durationSeconds", 120, "canSeek", true,
+                "title", "TV fixture", "paused", tvPaused, "positionSeconds", tvPosition, "durationSeconds", 120, "canSeek", true,
                 "volume", object("current", 40, "max", 100), "tracks", new JSONArray(), "selectedIndex", -1, "subtitlesEnabled", false,
                 "receiverDebug", object("revision", JSONObject.NULL, "uptimeSeconds", 2, "pingCount", 0, "remoteReload", true, "remoteCommands", true))));
     }
@@ -258,31 +259,60 @@ public final class MultiReceiverInstrumentation {
             require(fixture().getInt("stops") == 0, "LUMA disconnect sent Stop"); connectLuma(); bothConnected();
             passed("pending TV Open permits status and LUMA controls; LUMA disconnect preserves its receipt");
 
+            phase = "TV canonical ownership";
+            JSONObject tvContent = WatchHistory.contentFromCatalog("tv", "42", 1, 1, "TV fixture · S1 E1");
+            JSONObject tvMedia = object("url", SECOND, "contentType", "application/vnd.apple.mpegurl", "title", "TV fixture · S1 E1",
+                    "tracks", new JSONArray(), "content", tvContent, "resumeSeconds", 0);
+            runner.runOnMainSync(() -> service.rememberWatchHandoff(tvMedia, "philips", true)); runner.waitForIdleSync();
+            java.lang.reflect.Field televisionMedia = ConnectionService.class.getDeclaredField("televisionMedia"); televisionMedia.setAccessible(true);
+            JSONObject retainedTvMedia = (JSONObject) televisionMedia.get(service);
+            require(retainedTvMedia != null && tvContent.getString("key").equals(retainedTvMedia.getJSONObject("content").getString("key")),
+                    "Accepted TV handoff lost its canonical metadata because MSX playback has no content tags");
+            JSONArray tvHistory = call("watch.history").getJSONArray("items"); JSONObject tvProgress = null;
+            for (int index = 0; index < tvHistory.length(); index++) {
+                JSONObject candidate = tvHistory.getJSONObject(index);
+                if (tvContent.getString("key").equals(candidate.optString("key"))) { tvProgress = candidate; break; }
+            }
+            require(tvProgress != null && tvProgress.getDouble("positionSeconds") == tvPosition && "philips".equals(tvProgress.getString("lastReceiver")),
+                    "Accepted TV handoff did not bind canonical progress to the observed MSX timestamp");
+            passed("TV handoff retains canonical metadata and progress even though MSX exposes only the exact source");
+
             phase = "selected system controls";
             call("app.selectTarget", "target", "luma"); call("kodi.status"); rememberLuma();
             Notification lumaCard = waitCard("LUMA fixture video", "Pause"); PendingIntent staleLumaPause = action(lumaCard, "Pause");
+            PendingIntent staleLumaBack = action(lumaCard, "Back 30 seconds");
             MediaController controller = new MediaController(context, service.getMediaSessionToken());
             PlaybackState.CustomAction staleLumaStop = null;
             for (PlaybackState.CustomAction candidate : controller.getPlaybackState().getCustomActions()) if ("Stop video".contentEquals(candidate.getName())) staleLumaStop = candidate;
             require(staleLumaStop != null, "LUMA system Stop action missing");
             int mutations = fixture().getInt("mutations");
-            call("app.selectTarget", "target", "philips"); waitCard("TV fixture", "Pause");
+            call("app.selectTarget", "target", "philips"); Notification rewindCard = waitCard("TV fixture", "Back 30 seconds");
+            PendingIntent staleTvBack = action(rewindCard, "Back 30 seconds");
+            require((controller.getPlaybackState().getActions() & PlaybackState.ACTION_REWIND) != 0, "Selected TV did not advertise MediaSession rewind");
+            controller.getTransportControls().rewind(); JSONObject rewind = nextCommand();
+            require("seek".equals(rewind.getString("method")) && rewind.getJSONObject("params").getDouble("seconds") == 0
+                    && SECOND.equals(rewind.getJSONObject("params").getString("expectedSourceUrl")), "MediaSession did not route a source-guarded TV Back 30");
+            tvPosition = 0; acknowledge(rewind);
             controller.getTransportControls().pause(); JSONObject pause = nextCommand();
             require("playPause".equals(pause.getString("method")) && !pause.getJSONObject("params").getBoolean("play")
                     && SECOND.equals(pause.getJSONObject("params").getString("expectedSourceUrl")), "MediaSession did not route a source-guarded TV pause");
             tvPaused = true; acknowledge(pause); Notification tvCard = waitCard("TV fixture", "Play"); PendingIntent staleTvPlay = action(tvCard, "Play");
-            staleLumaPause.send(); controller.getTransportControls().sendCustomAction(staleLumaStop.getAction(), staleLumaStop.getExtras()); Thread.sleep(350);
+            staleLumaPause.send(); staleLumaBack.send(); controller.getTransportControls().sendCustomAction(staleLumaStop.getAction(), staleLumaStop.getExtras()); Thread.sleep(350);
             require(poll().length() == 0 && fixture().getInt("mutations") == mutations, "Stale LUMA actions changed a receiver after target switch");
-            tvSource = THIRD; tvPaused = false; tvState(); call("msx.status"); staleTvPlay.send(); Thread.sleep(200);
+            tvSource = THIRD; tvPaused = false; tvPosition = 15; tvState(); call("msx.status"); staleTvPlay.send(); staleTvBack.send(); Thread.sleep(200);
             require(poll().length() == 0, "Stale TV notification changed replacement video");
             PendingCall staleSource = submit("msx.playPause", "play", false, "expectedSourceUrl", SECOND);
             require(staleSource.ready.await(3, TimeUnit.SECONDS) && "SOURCE_CHANGED".equals(staleSource.error.get()), "TV source guard accepted a stale source");
-            call("app.selectTarget", "target", "luma"); waitCard("LUMA fixture video", "Pause"); controller.getTransportControls().pause();
+            call("app.selectTarget", "target", "luma"); waitCard("LUMA fixture video", "Back 30 seconds"); controller.getTransportControls().rewind();
+            long rewindDeadline = SystemClock.elapsedRealtime() + 4000;
+            while (fixture().getInt("position") != 0 && SystemClock.elapsedRealtime() < rewindDeadline) Thread.sleep(50);
+            require(fixture().getInt("position") == 0 && fixture().getInt("mutations") == mutations + 1, "Selected LUMA MediaSession Back 30 was not observed exactly once");
+            controller.getTransportControls().pause();
             long deadline = SystemClock.elapsedRealtime() + 4000;
             while (fixture().getBoolean("playing") && SystemClock.elapsedRealtime() < deadline) Thread.sleep(50);
-            require(!fixture().getBoolean("playing") && fixture().getInt("mutations") == mutations + 1, "Selected LUMA system pause was not observed exactly once");
-            staleTvPlay.send(); Thread.sleep(200); require(poll().length() == 0 && fixture().getInt("mutations") == mutations + 1, "Stale TV action retargeted to LUMA");
-            passed("MediaSession routes the selected receiver and stale notifications/source identities cannot cross targets");
+            require(!fixture().getBoolean("playing") && fixture().getInt("mutations") == mutations + 2, "Selected LUMA system pause was not observed exactly once");
+            staleTvPlay.send(); staleTvBack.send(); Thread.sleep(200); require(poll().length() == 0 && fixture().getInt("mutations") == mutations + 2, "Stale TV action retargeted to LUMA");
+            passed("MediaSession routes source-guarded Back 30 and playback to the selected receiver without crossing stale targets");
 
             phase = "immediate TV disconnect";
             call("app.selectTarget", "target", "philips"); PendingCall pending = open(FOURTH); JSONObject last = nextCommand();

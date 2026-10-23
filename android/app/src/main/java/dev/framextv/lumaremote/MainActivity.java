@@ -82,6 +82,7 @@ public final class MainActivity extends Activity {
     private JSONObject capturedMedia;
     private boolean localReady;
     private boolean pendingPlayNext;
+    private boolean pendingPlayNextCheck;
     private String pendingPlayNextRevision;
     private boolean browserVisible;
     private volatile boolean destroyed;
@@ -237,7 +238,7 @@ public final class MainActivity extends Activity {
                     else return emptyResponse();
                     HashMap<String,String> headers = new HashMap<>();
                     headers.put("Cache-Control", "no-store");
-                    headers.put("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; connect-src 'none'; img-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'");
+                    headers.put("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; connect-src 'none'; img-src data:; frame-src 'none'; base-uri 'none'; form-action 'none'");
                     return new WebResourceResponse(mime, "UTF-8", 200, "OK", headers, getAssets().open(asset));
                 } catch (Exception ignored) { return emptyResponse(); }
             }
@@ -560,24 +561,32 @@ public final class MainActivity extends Activity {
             }
             else if (method.equals("app.handoffReady")) {
                 String token = params.optString("sourceToken", "");
-                if (!token.equals(capturedToken) || capturedGeneration != pageGeneration.get() || capturedMedia == null) {
-                    reply(id, null, "SOURCE_CHANGED", "The page changed. The projector is playing independently."); return;
-                }
-                if (!"philips".equals(params.optString("target")) && connectionService != null && params.optJSONObject("remote") != null) {
-                    if (!connectionService.rememberHandoff(capturedMedia, params.getJSONObject("remote"))) {
-                        android.util.Log.i("LumaHandoff", "remote metadata rejected INVALID_SUBTITLE");
-                        reply(id, null, "INVALID_SUBTITLE", "Could not retain the subtitle catalog. The projector is playing independently."); return;
+                // Always end adoption suppression once Kodi reports completion,
+                // including validation failures. On success the finally block
+                // queues completion after rememberHandoff/rememberWatchHandoff,
+                // preserving their FIFO use of prepared metadata.
+                try {
+                    if (!token.equals(capturedToken) || capturedGeneration != pageGeneration.get() || capturedMedia == null) {
+                        reply(id, null, "SOURCE_CHANGED", "The page changed. The projector is playing independently."); return;
                     }
-                    android.util.Log.i("LumaHandoff", "remote metadata accepted");
+                    if (!"philips".equals(params.optString("target")) && connectionService != null && params.optJSONObject("remote") != null) {
+                        if (!connectionService.rememberHandoff(capturedMedia, params.getJSONObject("remote"))) {
+                            android.util.Log.i("LumaHandoff", "remote metadata rejected INVALID_SUBTITLE");
+                            reply(id, null, "INVALID_SUBTITLE", "Could not retain the subtitle catalog. The projector is playing independently."); return;
+                        }
+                        android.util.Log.i("LumaHandoff", "remote metadata accepted");
+                    }
+                    if (connectionService != null) connectionService.rememberWatchHandoff(capturedMedia,
+                            params.optString("target", "luma"), params.optBoolean("resumeApplied", false));
+                    String script;
+                    try (InputStream input = getAssets().open("capture.js")) {
+                        script = new String(readBounded(input, 256 * 1024), StandardCharsets.UTF_8);
+                    }
+                    browser.evaluateJavascript(script + ";LumaCapture.pauseMatchingSource(" + JSONObject.quote(capturedMedia.getString("url")) + ");", value ->
+                        reply(id, new JSONObject(), null, null));
+                } finally {
+                    if (connectionService != null) connectionService.completeHandoff(token);
                 }
-                if (connectionService != null) connectionService.rememberWatchHandoff(capturedMedia,
-                        params.optString("target", "luma"), params.optBoolean("resumeApplied", false));
-                String script;
-                try (InputStream input = getAssets().open("capture.js")) {
-                    script = new String(readBounded(input, 256 * 1024), StandardCharsets.UTF_8);
-                }
-                browser.evaluateJavascript(script + ";LumaCapture.pauseMatchingSource(" + JSONObject.quote(capturedMedia.getString("url")) + ");", value ->
-                    reply(id, new JSONObject(), null, null));
             }
             else if (method.equals("app.showRemote")) { showBrowser(false); reply(id, new JSONObject().put("accepted", true), null, null); }
             else reply(id, null, "INVALID_REQUEST", "Unknown app action.");
@@ -619,11 +628,25 @@ public final class MainActivity extends Activity {
     }
 
     private void deliverPendingNext() {
-        if (!pendingPlayNext || !localReady || destroyed || connectionService == null) return;
-        pendingPlayNext = false;
-        if (!connectionService.nextLaunchCurrent(pendingPlayNextRevision)) { pendingPlayNextRevision = null; return; }
-        pendingPlayNextRevision = null;
-        event("onPlayNext", null);
+        if (!pendingPlayNext || pendingPlayNextCheck || !localReady || destroyed || connectionService == null) return;
+        final String revision = pendingPlayNextRevision;
+        if (!connectionService.nextLaunchCurrent(revision)) {
+            pendingPlayNext = false; pendingPlayNextRevision = null; return;
+        }
+        pendingPlayNextCheck = true;
+        String target = connectionService.snapshot().optString("selectedTarget", "luma");
+        connectionService.request("philips".equals(target) ? "msx.status" : "kodi.status", new JSONObject(), new ConnectionService.Callback() {
+            @Override public void success(JSONObject result) { finish(true); }
+            @Override public void failure(String code, String message) { finish(false); }
+            private void finish(boolean observed) {
+                pendingPlayNextCheck = false;
+                if (destroyed || !pendingPlayNext || !java.util.Objects.equals(revision, pendingPlayNextRevision)) {
+                    deliverPendingNext(); return;
+                }
+                pendingPlayNext = false; pendingPlayNextRevision = null;
+                if (observed && connectionService != null && connectionService.nextLaunchCurrent(revision)) event("onPlayNext", null);
+            }
+        });
     }
 
     @Override public void onBackPressed() {

@@ -1,0 +1,11 @@
+LUMA Remote 0.4.8
+
+Adds Back 30 seconds to the main remote, notification and Android lock-screen media controls. Scrubbing remains source-guarded and now shows best-effort, low-quality phone previews for supported direct HTTPS, unencrypted VOD HLS media playlists on Android 8.1 or newer. Preview frames are generated on demand and cached only in memory for the current media item.
+
+Adds catalog-verified Next episode controls to the main remote, notification and lock screen. Locked-screen Next resolves and opens the exact successor in the background without opening or unlocking the app, and rechecks the current Kodi identity immediately before opening so observed changes from another phone are rejected.
+
+Adds a source-only Kodi metadata companion ZIP beside the APK. Once installed in Kodi, it preserves canonical movie/episode identity so another configured phone can join playback already in progress, recover the title, subtitle catalog and next episode, and update that phone's Resume and Library position from Kodi's roughly four-second polls while connected. Older viewing history is not copied between phones.
+
+Improves SRT and WebVTT compatibility with a small bounded number of malformed cues. Selected subtitles are downloaded through DNS-pinned, redirect-checked public connections, normalized on the phone and temporarily hosted only for the selected receiver.
+
+Current sampling covered five homepage titles and 12 English/Portuguese subtitle bodies; all 12 normalize with this release. Preview support is intentionally best-effort because the sampled providers exposed no storyboard track. Physical two-phone Kodi, visible subtitle, preview-performance and OEM lock-screen acceptance still need testing.

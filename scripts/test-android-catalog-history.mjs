@@ -18,7 +18,7 @@ for (const [file, expected] of [['android/app/build/outputs/apk/debug/app-debug.
   assert.equal(stdout.match(/^package: name='([^']+)'/mu)?.[1], expected);
   await run(adb, ['-s', serial, 'install', '-r', apk], {timeout: 60000});
 }
-const modes = [['catalog', 5], ['watch-history', 6], ['library', 6], ['tv-catalog', 5], ['web-content', 4]];
+const modes = [['catalog', 6], ['watch-history', 6], ['library', 6], ['tv-catalog', 5], ['web-content', 4]];
 if (process.env.LUMA_LIVE_WEB_CONTENT === '1') modes.push(['web-content-live', 1]);
 for (const [mode, count] of modes) {
   const {stdout, stderr} = await run(adb, ['-s', serial, 'shell', 'am', 'instrument', '-w', '-e', 'mode', mode, `${packageName}.test/dev.framextv.lumaremote.BackendInstrumentation`], {timeout: 90000, maxBuffer: 128 * 1024});

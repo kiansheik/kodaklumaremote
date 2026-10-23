@@ -22,6 +22,7 @@ Device follow-up: [Philips TV evidence](philips-tv.md),
 [native Android Matter build](matter-android-path.md),
 [mobile phone-off target](mobile-target.md),
 [Kodak LUMA options](luma-receiver-options.md),
+[LUMA without Kodi: browser receiver or own APK](luma-web-receiver.md),
 [Kodi/VLC receiver interfaces](receiver-apps.md).
 Working Kodi stepping stone: [setup and physical test](../../tests/manual-kodi.md).
 Latest device result: [actual frameXTV and Portuguese subtitles](session-handoffs/2026-10-18-framextv-kodi-subtitles.md).
@@ -47,7 +48,10 @@ Latest acceptance: [user-confirmed TV picture and sound](session-handoffs/2026-1
 Native phone implementation: [Matter pairing and hardware remote](session-handoffs/2026-10-18-native-matter-phone.md).
 Current published release: [0.4.6 Philips player and offline Library](session-handoffs/2026-10-20-release-0.4.6.md).
 Current unreleased work: [remote next/scrub/back and subtitle provider profile](session-handoffs/2026-10-22-remote-controls-subtitle-profile.md),
-[sample matrix](subtitle-provider-profile.md).
+[subtitle sample matrix](subtitle-provider-profile.md),
+[scrub-preview provider profile](scrub-preview-profile.md),
+[Kodi metadata and cross-phone progress](kodi-metadata-sync.md), and the
+[combined feature handoff](session-handoffs/2026-10-22-cross-phone-metadata-and-scrub-previews.md).
 Release preparation: [0.4.7 candidate and signing boundary](session-handoffs/2026-10-22-release-0.4.7-preparation.md).
 Local release setup: [persistent ignored signing configuration](session-handoffs/2026-10-22-local-release-config.md).
 Release staging: [safe automatic inclusion of new text files](session-handoffs/2026-10-22-release-auto-stage.md).

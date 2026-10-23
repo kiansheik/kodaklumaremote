@@ -5,17 +5,25 @@ import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.zip.GZIPOutputStream;
+import javax.net.ssl.SNIHostName;
+import javax.net.ssl.SNIServerName;
+import javax.net.ssl.SSLSocket;
+import javax.net.ssl.SSLSocketFactory;
 
 /** Host-JVM localhost transport fixtures. Never contacts a household receiver. */
 public final class SubtitleDeliveryTest {
@@ -55,15 +63,24 @@ public final class SubtitleDeliveryTest {
     }
     public static void main(String[] args) throws Exception {
         HttpServer upstream = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 8);
+        int upstreamPort = upstream.getAddress().getPort();
         java.util.concurrent.ExecutorService upstreamThreads = Executors.newCachedThreadPool(task -> { Thread thread = new Thread(task); thread.setDaemon(true); return thread; });
         upstream.setExecutor(upstreamThreads);
         AtomicInteger hits = new AtomicInteger(); CountDownLatch slowEntered = new CountDownLatch(1), releaseSlow = new CountDownLatch(1);
         CountDownLatch cancelEntered = new CountDownLatch(1), releaseCancel = new CountDownLatch(1);
+        AtomicReference<String> pinnedDirectHost = new AtomicReference<>(), pinnedRedirectHost = new AtomicReference<>(), pinnedFinalHost = new AtomicReference<>();
         upstream.createContext("/", exchange -> {
             hits.incrementAndGet();
             try {
                 String path = exchange.getRequestURI().getPath(); byte[] body = SRT;
                 require(exchange.getRequestHeaders().getFirst("Authorization") == null && (exchange.getRequestHeaders().getFirst("Cookie") == null || exchange.getRequestHeaders().getFirst("Cookie").isEmpty()), "Credentials were forwarded to subtitle provider");
+                if (path.equals("/pinned-direct")) pinnedDirectHost.set(exchange.getRequestHeaders().getFirst("Host"));
+                if (path.equals("/pinned-redirect")) {
+                    pinnedRedirectHost.set(exchange.getRequestHeaders().getFirst("Host"));
+                    exchange.getResponseHeaders().add("Location", "http://redirect.test:" + upstreamPort + "/pinned-final");
+                    exchange.sendResponseHeaders(302, -1); return;
+                }
+                if (path.equals("/pinned-final")) pinnedFinalHost.set(exchange.getRequestHeaders().getFirst("Host"));
                 if (path.equals("/redirect")) { exchange.getResponseHeaders().add("Location", "/vtt"); exchange.sendResponseHeaders(302, -1); return; }
                 if (path.equals("/redirect-private")) { exchange.getResponseHeaders().add("Location", "http://192.168.1.1/subtitle.srt"); exchange.sendResponseHeaders(302, -1); return; }
                 if (path.equals("/loop")) { exchange.getResponseHeaders().add("Location", "/loop"); exchange.sendResponseHeaders(302, -1); return; }
@@ -82,11 +99,11 @@ public final class SubtitleDeliveryTest {
                     try (GZIPOutputStream gzip = new GZIPOutputStream(packed)) { gzip.write(path.equals("/gzip") ? SRT : new byte[2 * 1024 * 1024 + 1]); }
                     body = packed.toByteArray(); exchange.getResponseHeaders().add("Content-Encoding", "gzip");
                 }
-                exchange.getResponseHeaders().add("Content-Type", "text/vtt; charset=utf-8"); exchange.sendResponseHeaders(200, body.length);
+                exchange.getResponseHeaders().add("Content-Type", "text/vtt; charset=utf-8"); exchange.sendResponseHeaders(200, path.equals("/chunked") ? 0 : body.length);
                 try (OutputStream output = exchange.getResponseBody()) { output.write(body); }
             } catch (Exception ignored) { } finally { exchange.close(); }
         });
-        upstream.start(); String origin = "http://127.0.0.1:" + upstream.getAddress().getPort();
+        upstream.start(); String origin = "http://127.0.0.1:" + upstreamPort;
         AtomicLong clock = new AtomicLong(10000); AtomicBoolean current = new AtomicBoolean(true);
         try {
         try (SubtitleDelivery delivery = SubtitleDelivery.loopbackFixture(SubtitleDeliveryTest::valid, clock::get, 8000)) {
@@ -107,6 +124,7 @@ public final class SubtitleDeliveryTest {
             check("redirects and gzip use body sniffing and bounded decompression", () -> {
                 require(delivery.prepare(SOURCE, origin + "/redirect", "127.0.0.1", current::get).format.equals("vtt"), "Redirected WebVTT not converted");
                 require(delivery.prepare(SOURCE, origin + "/gzip", "127.0.0.1", current::get).format.equals("srt"), "gzip SRT not decoded");
+                require(delivery.prepare(SOURCE, origin + "/chunked", "127.0.0.1", current::get).format.equals("srt"), "chunked SRT not decoded");
                 rejects("SUBTITLE_TOO_LARGE", () -> delivery.prepare(SOURCE, origin + "/gzip-large", "127.0.0.1", current::get));
                 rejects("SUBTITLE_TOO_LARGE", () -> delivery.prepare(SOURCE, origin + "/large", "127.0.0.1", current::get));
                 rejects("SUBTITLE_FETCH", () -> delivery.prepare(SOURCE, origin + "/loop", "127.0.0.1", current::get));
@@ -177,6 +195,54 @@ public final class SubtitleDeliveryTest {
                 rejects("SUBTITLE_NETWORK", () -> production.prepare(SOURCE, origin + "/srt", "192.168.1.2", () -> true));
             }
             require(hits.get() == before, "Production private destination was fetched");
+        });
+        check("DNS answers are pinned once per redirect while the original Host is preserved", () -> {
+            Map<String, AtomicInteger> lookups = new ConcurrentHashMap<>();
+            SubtitleDelivery.AddressResolver resolver = host -> {
+                lookups.computeIfAbsent(host, ignored -> new AtomicInteger()).incrementAndGet();
+                if (!host.equals("captions.test") && !host.equals("redirect.test")) throw new java.net.UnknownHostException();
+                return new InetAddress[] { InetAddress.getByAddress(host, new byte[] { 127, 0, 0, 1 }) };
+            };
+            try (SubtitleDelivery pinned = SubtitleDelivery.loopbackFixture(SubtitleDeliveryTest::valid, clock::get, 1500, resolver)) {
+                String direct = "http://captions.test:" + upstreamPort + "/pinned-direct";
+                require(pinned.prepare(SOURCE, direct, "127.0.0.1", current::get).format.equals("srt"), "Pinned direct fetch failed");
+                require(lookups.get("captions.test").get() == 1, "Direct hop resolved more than once");
+                require(("captions.test:" + upstreamPort).equals(pinnedDirectHost.get()), "Pinned connection replaced the original Host header");
+                lookups.clear();
+                String fallback = "http://captions.test:" + upstreamPort + "/pinned-direct?fallback";
+                try (SubtitleDelivery alternate = SubtitleDelivery.loopbackFixture(SubtitleDeliveryTest::valid, clock::get, 4000, host -> {
+                    lookups.computeIfAbsent(host, ignored -> new AtomicInteger()).incrementAndGet();
+                    return new InetAddress[] { InetAddress.getByName("127.0.0.2"), InetAddress.getByName("127.0.0.1") };
+                })) {
+                    require(alternate.prepare(SOURCE, fallback, "127.0.0.1", current::get).format.equals("srt"), "A failed first approved endpoint prevented fallback");
+                }
+                require(lookups.get("captions.test").get() == 1, "Approved-address fallback performed another DNS lookup");
+                lookups.clear();
+                String redirected = "http://captions.test:" + upstreamPort + "/pinned-redirect";
+                require(pinned.prepare(SOURCE, redirected, "127.0.0.1", current::get).format.equals("srt"), "Pinned redirect fetch failed");
+                require(lookups.get("captions.test").get() == 1 && lookups.get("redirect.test").get() == 1, "A redirect hop was not resolved exactly once");
+                require(("captions.test:" + upstreamPort).equals(pinnedRedirectHost.get()), "Initial redirect Host was not preserved");
+                require(("redirect.test:" + upstreamPort).equals(pinnedFinalHost.get()), "Redirect target Host was not preserved");
+            }
+        });
+        check("one disallowed address rejects the complete DNS answer set before connection", () -> {
+            InetAddress publicAddress = InetAddress.getByName("8.8.8.8"), privateAddress = InetAddress.getByName("192.168.1.8");
+            rejects("SUBTITLE_NETWORK", () -> SubtitleDelivery.validateResolvedAnswers(new InetAddress[] { publicAddress, privateAddress }, false));
+            int before = hits.get();
+            try (SubtitleDelivery mixed = SubtitleDelivery.loopbackFixture(SubtitleDeliveryTest::valid, clock::get, 1500,
+                    host -> new InetAddress[] { InetAddress.getByName("127.0.0.1"), privateAddress })) {
+                rejects("SUBTITLE_NETWORK", () -> mixed.prepare(SOURCE, "http://mixed.test:" + upstreamPort + "/srt", "127.0.0.1", current::get));
+            }
+            require(hits.get() == before, "Mixed DNS answers reached an upstream endpoint");
+        });
+        check("pinned HTTPS sockets retain endpoint identification and SNI for the original host", () -> {
+            try (SSLSocket socket = (SSLSocket) ((SSLSocketFactory) SSLSocketFactory.getDefault()).createSocket()) {
+                SubtitleDelivery.configureTls(socket, "captions.example");
+                require("HTTPS".equals(socket.getSSLParameters().getEndpointIdentificationAlgorithm()), "HTTPS certificate hostname verification is disabled");
+                java.util.List<SNIServerName> names = socket.getSSLParameters().getServerNames();
+                require(names != null && names.size() == 1 && names.get(0) instanceof SNIHostName
+                        && "captions.example".equals(((SNIHostName) names.get(0)).getAsciiName()), "Original DNS host was not retained for SNI");
+            }
         });
         check("total fetch timeout and revocation remain bounded before delivery is prepared", () -> {
             try (SubtitleDelivery timeout = SubtitleDelivery.loopbackFixture(SubtitleDeliveryTest::valid, clock::get, 150)) {

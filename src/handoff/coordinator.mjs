@@ -21,6 +21,9 @@
 // open options.onNotSent() accepts the same explicit pre-write proof as Add.
 // open options.onSettled() reports an actual native response, even when its
 // receiver write outcome is unknown. JS timeout/abort alone must not call it.
+// addSubtitle uses the same receipt callbacks. A settled Add remains globally
+// exclusive until its registration is observed for that exact media identity;
+// settlement alone cannot identify Kodi subtitle entries that omit their URL.
 
 const MESSAGES = Object.freeze({
   INVALID_MEDIA: 'The page did not provide a supported video and subtitle list.',
@@ -29,6 +32,7 @@ const MESSAGES = Object.freeze({
   SOURCE_CHANGED: 'The selected video changed. Start casting again.',
   KODI_START_TIMEOUT: 'Kodi did not become ready in time.',
   VIDEO_TIMEOUT: 'Kodi did not start the selected video in time.',
+  METADATA_UNAVAILABLE: 'Video started, but Kodi did not preserve LUMA metadata. Install or enable the LUMA metadata add-on in Kodi, then cast again.',
   SUBTITLE_TIMEOUT: 'Kodi did not register a subtitle in time.',
   HANDOFF_TIMEOUT: 'Casting setup took too long. Try again.',
   SUBTITLE_BINDING: 'Kodi changed the subtitle list unexpectedly. Start the video again.',
@@ -63,6 +67,25 @@ function sourceUrl(value) {
   } catch { throw fail('INVALID_MEDIA'); }
 }
 
+function canonicalContent(value) {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'object' || !['movie', 'tv'].includes(value.kind)
+      || typeof value.contentId !== 'string' || !/^[1-9][0-9]{0,9}$/u.test(value.contentId)) throw fail('INVALID_MEDIA');
+  const tv = value.kind === 'tv';
+  if (tv && (!Number.isInteger(value.season) || value.season < 0 || value.season > 9999
+      || !Number.isInteger(value.episode) || value.episode < 1 || value.episode > 9999)) throw fail('INVALID_MEDIA');
+  if (!tv && (value.season !== null || value.episode !== null)) throw fail('INVALID_MEDIA');
+  const key = `framextv:${value.kind}:${value.contentId}${tv ? `:${value.season}:${value.episode}` : ''}`;
+  const watchUrl = `https://framextv.cc/watch/${value.contentId}${tv ? `/${value.season}/${value.episode}` : ''}`;
+  if (value.key !== key || value.watchUrl !== watchUrl || typeof value.title !== 'string') throw fail('INVALID_MEDIA');
+  return { key, kind: value.kind, contentId: value.contentId, season: tv ? value.season : null,
+    episode: tv ? value.episode : null, watchUrl, title: safeText(value.title, 200) };
+}
+
+function observedContent(value) {
+  try { return canonicalContent(value); } catch { return null; }
+}
+
 function mediaSnapshot(input, maxTracks) {
   if (!input || typeof input !== 'object' || typeof input.contentType !== 'string'
       || !/^(?:video\/[a-z0-9!#$&^_.+-]+|application\/(?:vnd\.apple\.mpegurl|x-mpegurl|dash\+xml))$/iu.test(input.contentType)
@@ -77,7 +100,9 @@ function mediaSnapshot(input, maxTracks) {
     tracks.push({ url, contentType: 'text/vtt', language: safeText(track.language, 64), label: safeText(track.label, 200), active: track.active === true });
   }
   if (tracks.length > maxTracks) throw fail('INVALID_MEDIA');
-  return { url: sourceUrl(input.url), contentType: input.contentType.toLowerCase(), title: safeText(input.title, 200), tracks };
+  const content = canonicalContent(input.content);
+  return { url: sourceUrl(input.url), contentType: input.contentType.toLowerCase(), title: safeText(input.title, 200), tracks,
+    ...(content ? { content } : {}) };
 }
 
 function language(track) {
@@ -126,6 +151,8 @@ export function createHandoffCoordinator({
   // the still-active source. Unknown existing external tracks are not inferred.
   const sources = new Map();
   let preparedSource = null;
+  let activeOpening = null;
+  let activeAddition = null;
   let current = null;
   let lastMutationAt = -Infinity;
 
@@ -163,7 +190,8 @@ export function createHandoffCoordinator({
       const result = await Promise.race([
         Promise.resolve().then(() => {
           check(ctx);
-          return operation({ signal: operationController.signal, timeoutMs: Math.ceil(remaining), expectedSourceUrl: ctx.media.url, phase: ctx.phase });
+          return operation({ signal: operationController.signal, timeoutMs: Math.ceil(remaining), expectedSourceUrl: ctx.media.url,
+            ...(ctx.media.content ? { expectedContentKey: ctx.media.content.key } : {}), phase: ctx.phase });
         }),
         stopped,
         // An exact-source playback observation can finish waiting for Open's
@@ -225,7 +253,10 @@ export function createHandoffCoordinator({
   async function assertPlayback(ctx, window = stage(ctx, settings.subtitle, 'SUBTITLE_TIMEOUT'), waitForActive = false) {
     while (true) {
       const playback = await read(ctx, options => kodi.status(options), window);
-      if (playback?.active && playback.sourceUrl === ctx.media.url) return;
+      if (playback?.active && playback.sourceUrl === ctx.media.url) {
+        if (!ctx.media.content || observedContent(playback.content)?.key === ctx.media.content.key) return;
+        throw fail('SOURCE_CHANGED');
+      }
       if (!waitForActive || playback?.active !== false) throw fail('SOURCE_CHANGED');
       await pause(ctx, window);
     }
@@ -248,20 +279,26 @@ export function createHandoffCoordinator({
 
   async function finishPending(ctx, cache, snapshot, window = stage(ctx, settings.subtitle, 'SUBTITLE_TIMEOUT')) {
     if (!cache.pending) return snapshot;
+    const pending = cache.pending;
     while (true) {
-      if (!cache.pending.invoked) { cache.pending = null; return snapshot; }
-      const added = snapshot.tracks.filter(track => !cache.pending.before.has(track.index));
+      if (!pending.invoked) {
+        if (cache.pending === pending) cache.pending = null;
+        if (activeAddition === pending) activeAddition = null;
+        return snapshot;
+      }
+      const added = snapshot.tracks.filter(track => !pending.before.has(track.index));
       if (added.length > 1) throw fail('SUBTITLE_BINDING');
       if (added.length === 1) {
         const track = added[0];
-        if (track.url !== undefined && track.url !== cache.pending.url) throw fail('SUBTITLE_BINDING');
-        cache.pending.boundIndex = track.index;
-        cache.bindings.set(cache.pending.url, track.index);
-        cache.retiredIndices.get(cache.pending.url)?.delete(track.index);
+        if (track.url !== undefined && track.url !== pending.url) throw fail('SUBTITLE_BINDING');
+        pending.boundIndex = track.index;
+        cache.bindings.set(pending.url, track.index);
+        cache.retiredIndices.get(pending.url)?.delete(track.index);
         // An unknown Add retains its own receipt identity even if navigation
         // cleared reusable tickets. Binding it cannot skip delivery verification.
-        if (cache.pending.preparedId) cache.prepared.set(cache.pending.url, cache.pending.preparedId);
-        cache.pending = null;
+        if (pending.preparedId) cache.prepared.set(pending.url, pending.preparedId);
+        if (cache.pending === pending) cache.pending = null;
+        if (activeAddition === pending) activeAddition = null;
         return snapshot;
       }
       await pause(ctx, window);
@@ -269,10 +306,39 @@ export function createHandoffCoordinator({
     }
   }
 
+  function mediaIdentity(media) {
+    // A provider may reuse one HLS URL for multiple episodes. Subtitle
+    // receipts and Kodi indices belong to the canonical item, not merely the
+    // transport URL. Legacy captures without catalog identity stay URL-only.
+    return `${media.url}\n${media.content?.key || ''}`;
+  }
+
+  function attemptIdentity(attempt) {
+    return attempt ? `${attempt.sourceUrl}\n${attempt.contentKey || ''}` : '';
+  }
+
+  function safeOpening(attempt) {
+    return !attempt?.invoked || attempt.unsent || (attempt.nativeSettled && attempt.playbackObserved);
+  }
+
   function cacheFor(media) {
-    let cache = sources.get(media.url);
-    if (!cache) { cache = { bindings: new Map(), prepared: new Map(), retiredTickets: new Set(), retiredIndices: new Map(), pending: null, opening: null }; sources.set(media.url, cache); }
-    while (sources.size > 4) sources.delete(sources.keys().next().value);
+    const identity = mediaIdentity(media);
+    let cache = sources.get(identity);
+    if (!cache) { cache = { bindings: new Map(), prepared: new Map(), retiredTickets: new Set(), retiredIndices: new Map(), pending: null, opening: null }; sources.set(identity, cache); }
+    // Never erase the only receipt for an Add/Open whose receiver outcome is
+    // still unknown. Prefer four hot identities, with a bounded safety reserve
+    // for unresolved mutations rather than authorizing a duplicate write.
+    for (const [key, candidate] of sources) {
+      if (sources.size <= 4) break;
+      const opening = candidate.opening;
+      const uncertainOpen = opening?.invoked && !opening.unsent
+        && !(opening.nativeSettled && opening.playbackObserved);
+      if (key !== identity && !candidate.pending?.invoked && !uncertainOpen) sources.delete(key);
+    }
+    if (sources.size > 16) {
+      sources.delete(identity);
+      throw fail('ADAPTER_FAILED');
+    }
     return cache;
   }
 
@@ -289,6 +355,11 @@ export function createHandoffCoordinator({
   }
 
   async function observeTracks(ctx, cache) {
+    // A cancelled Add for another canonical item may still be executing in
+    // Kodi. Its eventual anonymous index cannot be reconciled against this
+    // item's list, so only explicit proof that it was not sent can release it.
+    const foreign = stage(ctx, settings.subtitle, 'SUBTITLE_TIMEOUT');
+    while (activeAddition && activeAddition.cache !== cache) await pause(ctx, foreign);
     let snapshot = await subtitles(ctx);
     snapshot = await finishPending(ctx, cache, snapshot);
     const present = new Set(snapshot.tracks.map(track => track.index));
@@ -334,21 +405,29 @@ export function createHandoffCoordinator({
     }
     // Preparation is read-only. A failed/cancelled download must not create an
     // uncertain Add that blocks a later explicit retry.
-    const pending = { url: track.url, preparedId, before: new Set(snapshot.tracks.map(item => item.index)), invoked: false };
+    if (activeAddition && activeAddition !== cache.pending) throw fail('SUBTITLE_TIMEOUT');
+    const pending = { cache, url: track.url, preparedId, before: new Set(snapshot.tracks.map(item => item.index)), invoked: false,
+      nativeSettled: false, unsent: false };
     cache.pending = pending;
     const window = stage(ctx, settings.subtitle, 'SUBTITLE_TIMEOUT');
     let rejected;
     try {
       await mutate(ctx, options => {
+        if (activeAddition && activeAddition !== pending) throw fail('SUBTITLE_TIMEOUT');
+        activeAddition = pending;
         pending.invoked = true;
         return kodi.addSubtitle(track, {
           ...options,
           ...(preparedId ? { preparedId } : {}),
           onNotSent() {
             pending.invoked = false;
+            pending.unsent = true;
             cache.prepared.delete(pending.url);
             if (pending.boundIndex !== undefined && cache.bindings.get(pending.url) === pending.boundIndex) cache.bindings.delete(pending.url);
+            if (cache.pending === pending) cache.pending = null;
+            if (activeAddition === pending) activeAddition = null;
           },
+          onSettled() { pending.nativeSettled = true; },
         });
       }, window, true);
     } catch (error) {
@@ -424,9 +503,13 @@ export function createHandoffCoordinator({
   }
 
   function sendOpen(ctx, cache, window, onlyIfInactive) {
-    const attempt = { owner: ctx, invoked: false, settled: false, acknowledged: false, acceptedAt: null, unsent: false };
+    const attempt = { owner: ctx, sourceUrl: ctx.media.url, contentKey: ctx.media.content?.key || null,
+      invoked: false, settled: false, acknowledged: false, acceptedAt: null, unsent: false };
     const forgetCompletedPlayback = () => {
-      if (attempt.nativeSettled && attempt.playbackObserved && cache.opening === attempt) cache.opening = null;
+      if (attempt.nativeSettled && attempt.playbackObserved) {
+        if (cache.opening === attempt) cache.opening = null;
+        if (activeOpening === attempt) activeOpening = null;
+      }
     };
     const observed = new Promise(resolve => { attempt.observed = () => {
       attempt.playbackObserved = true;
@@ -434,6 +517,7 @@ export function createHandoffCoordinator({
       resolve();
     }; });
     cache.opening = attempt;
+    activeOpening = attempt;
     attempt.completion = call(ctx, options => {
       // Keep settlement independently of the cancelled JS run: a new run must
       // not overlap an old native request whose receiver outcome is unknown.
@@ -445,6 +529,8 @@ export function createHandoffCoordinator({
           onNotSent() {
             attempt.unsent = true; attempt.invoked = false;
             attempt.settled = true; attempt.acknowledged = false;
+            if (cache.opening === attempt) cache.opening = null;
+            if (activeOpening === attempt) activeOpening = null;
           },
         }));
       })
@@ -464,23 +550,70 @@ export function createHandoffCoordinator({
   async function openVideo(ctx, cache, initial) {
     const active = stage(ctx, settings.active, 'VIDEO_TIMEOUT');
     const previousSource = initial?.active ? initial.sourceUrl : null;
-    let attempt = cache.opening;
+    let previousContentKey = initial?.active ? observedContent(initial.content)?.key ?? null : null;
+    let supersededPlayback = null;
+    let attempt = activeOpening || cache.opening;
     let sent = 1;
-    if (!attempt?.invoked || (attempt.settled && (previousSource !== null || !attempt.acknowledged))) {
+    if (!attempt?.invoked || (safeOpening(attempt) && (previousSource !== null || !attempt.acknowledged))) {
       attempt = sendOpen(ctx, cache, active, false);
     }
     let inactiveSince = null;
+    let selectedWithoutMetadata = false;
     while (true) {
       let playback;
       try { playback = await call(ctx, options => kodi.status(options), active); }
       catch (error) {
+        if (selectedWithoutMetadata && error.code === 'VIDEO_TIMEOUT') throw fail('METADATA_UNAVAILABLE');
         if (error.adapterCode === 'SOURCE_CHANGED') throw fail('SOURCE_CHANGED');
         if (error.code !== 'ADAPTER_FAILED' || error.retryable !== true) throw error;
       }
       if (playback?.active) {
-        if (playback.sourceUrl === ctx.media.url) { attempt?.observed(); return; }
-        if (!previousSource || playback.sourceUrl !== previousSource) throw fail('SOURCE_CHANGED');
+        const playbackContentKey = observedContent(playback.content)?.key ?? null;
+        const previousAttemptPlayback = attempt?.owner !== ctx && playback.sourceUrl === attempt?.sourceUrl
+          && (attempt.contentKey ? playbackContentKey === attempt.contentKey : playbackContentKey === null);
+        const knownSupersededPlayback = supersededPlayback && playback.sourceUrl === supersededPlayback.sourceUrl
+          && (supersededPlayback.contentKey ? playbackContentKey === supersededPlayback.contentKey : playbackContentKey === null);
+        if (previousAttemptPlayback) {
+          supersededPlayback = { sourceUrl: attempt.sourceUrl, contentKey: attempt.contentKey };
+          attempt.observed?.();
+        }
+        const expectedPreviousPlayback = previousAttemptPlayback || knownSupersededPlayback;
+        if (playback.sourceUrl === ctx.media.url) {
+          if (!ctx.media.content) {
+            const sameAttempt = !attempt || attemptIdentity(attempt) === mediaIdentity(ctx.media);
+            if (sameAttempt) attempt?.observed?.();
+            if (sameAttempt || safeOpening(attempt)) return;
+          }
+          const content = observedContent(playback.content);
+          if (ctx.media.content && content?.key === ctx.media.content.key) {
+            const sameAttempt = !attempt || attemptIdentity(attempt) === mediaIdentity(ctx.media);
+            if (sameAttempt) attempt?.observed?.();
+            // Exact playback selected by somebody else does not neutralize an
+            // unresolved Open for another canonical item; that older command
+            // can still land after we report B ready.
+            if (sameAttempt || safeOpening(attempt)) return;
+          }
+          // Kodi can expose the old item's add-on tag only after the initial
+          // contentless status. Adopt at most one stable non-target key as the
+          // pre-Open identity; a second different key is a real source race.
+          // A cancelled attempt for another canonical item may land after the
+          // new run has already observed its selected item. Observe that old
+          // receipt and wait until it is safe to issue the replacement Open;
+          // do not misclassify the expected late identity as a third-party
+          // source change.
+          if (!expectedPreviousPlayback) {
+            if (content && previousContentKey === null) previousContentKey = content.key;
+            else if (content && content.key !== previousContentKey) throw fail('SOURCE_CHANGED');
+            if (!content) selectedWithoutMetadata = true;
+          }
+        } else if (!expectedPreviousPlayback && (!previousSource || playback.sourceUrl !== previousSource)) throw fail('SOURCE_CHANGED');
         inactiveSince = null;
+        const completedPrevious = attempt?.owner !== ctx && safeOpening(attempt);
+        if (completedPrevious && sent < 2 && now() - lastMutationAt >= 1000) {
+          sent--;
+          sent++;
+          attempt = sendOpen(ctx, cache, active, false);
+        }
       }
       if (attempt?.owner === ctx && attempt.unsent) {
         await attempt.completion;
@@ -490,8 +623,8 @@ export function createHandoffCoordinator({
           || attempt.error.retryable !== true)) throw attempt.error;
       if (playback?.active === false && !playback.sourceUrl) {
         inactiveSince ??= now();
-        const completedPrevious = attempt?.owner !== ctx && attempt?.nativeSettled && attempt.playbackObserved;
-        const retryAcknowledged = attempt?.settled && (attempt.unsent || (attempt.acknowledged
+        const completedPrevious = attempt?.owner !== ctx && safeOpening(attempt);
+        const retryAcknowledged = attempt?.owner === ctx && attempt.settled && (attempt.unsent || (attempt.acknowledged
           && now() - attempt.acceptedAt >= settings.openRetry && now() - inactiveSince >= settings.poll * 2));
         if (sent < 2 && now() - lastMutationAt >= 1000 && (completedPrevious || retryAcknowledged)) {
           // A later explicit cast can resume when the old invocation finishes;
@@ -504,7 +637,11 @@ export function createHandoffCoordinator({
       } else if (!playback?.active) inactiveSince = null;
       // Reconcile a slow/failed Open against actual playback before reporting
       // an error. Unknown outcomes remain observation-only and cannot replay.
-      await pause(ctx, active);
+      try { await pause(ctx, active); }
+      catch (error) {
+        if (selectedWithoutMetadata && error.code === 'VIDEO_TIMEOUT') throw fail('METADATA_UNAVAILABLE');
+        throw error;
+      }
     }
   }
 
@@ -525,8 +662,13 @@ export function createHandoffCoordinator({
     }
     const initial = await read(ctx, options => kodi.status(options), startup);
     const cache = cacheFor(ctx.media);
-    if (initial?.active && initial.sourceUrl === ctx.media.url) cache.opening?.observed();
-    if (!initial?.active || initial.sourceUrl !== ctx.media.url) {
+    const initialContent = observedContent(initial?.content);
+    const conflictingOpening = activeOpening && attemptIdentity(activeOpening) !== mediaIdentity(ctx.media)
+      && !safeOpening(activeOpening);
+    const alreadySelected = initial?.active && initial.sourceUrl === ctx.media.url
+      && (!ctx.media.content || initialContent?.key === ctx.media.content.key) && !conflictingOpening;
+    if (alreadySelected) cache.opening?.observed();
+    if (!alreadySelected) {
       cache.bindings.clear(); cache.prepared.clear(); cache.retiredTickets.clear(); cache.retiredIndices.clear(); cache.pending = null;
       status(ctx, 'opening', 'Starting the selected video…');
       await openVideo(ctx, cache, initial);
@@ -572,9 +714,10 @@ export function createHandoffCoordinator({
         }
       }
     } catch (error) { return Promise.reject(error instanceof HandoffError ? error : fail('INVALID_MEDIA')); }
-    if (preparedSource !== media.url) {
+    const identity = mediaIdentity(media);
+    if (preparedSource !== identity) {
       for (const cache of sources.values()) { cache.prepared.clear(); cache.bindings.clear(); }
-      preparedSource = media.url;
+      preparedSource = identity;
     }
     current?.controller.abort();
     const ctx = { media, controller: new AbortController(), isCurrentSource, phase, trackUrl, knownCatalog: known, deadline: now() + Math.min(settings.overall, phase === 'remote' ? 60000 : settings.overall) };
@@ -585,7 +728,7 @@ export function createHandoffCoordinator({
     return (phase === 'remote' ? runSubtitle(ctx) : run(ctx)).catch(error => {
       const fixed = error instanceof HandoffError ? error : fail('ADAPTER_FAILED');
       if (fixed.code === 'SOURCE_CHANGED' || fixed.adapterCode === 'SOURCE_CHANGED' || fixed.code === 'SUBTITLE_BINDING') {
-        const cache = sources.get(ctx.media.url);
+        const cache = sources.get(mediaIdentity(ctx.media));
         if (cache) { cache.prepared.clear(); cache.bindings.clear(); }
       }
       status(ctx, fixed.code === 'CANCELLED' ? 'cancelled' : 'error', fixed.message);

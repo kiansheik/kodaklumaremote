@@ -17,9 +17,12 @@ if (!/^dev\.framextv\.lumaremote(?:\.receiverfixture)?$/u.test(appPackage)) thro
 if (!/^emulator-\d+$/u.test(serial)) throw new Error('Select an Android emulator test target.');
 const FIRST = 'https://media.example/first.m3u8';
 const OTHER = 'https://media.example/other.m3u8';
+const NEXT = 'https://media.example/next.m3u8';
 const commands = [], mutations = [], sockets = new Set();
-let connections = 0, currentSource = '', playing = true, stops = 0, authRejections = 0, holdProperties = false, volume = 6;
+let connections = 0, currentSource = '', playing = true, position = 20, stops = 0, addonOpens = 0, authRejections = 0, holdProperties = false, volume = 6;
 let failStatus = false, failStatusOnce = 0, failAfterPause = 0, failedStatusReads = 0;
+let lumaMetadata = false, lumaEpisode = 3;
+let switchOnAddonProbe = 0, expectedNextSource = NEXT, failNextSeek = false, seekFailures = 0;
 let holdAfterVolumeSet = false, heldVolumeReads = [], volumeSets = 0, volumeGets = 0;
 let holdVolumeSetThreshold = Infinity;
 let holdNextVolumeRead = false;
@@ -53,6 +56,12 @@ const kodi = http.createServer(async (request, response) => {
     if (request.method === 'GET' && address.pathname === '/fixture') {
       if (address.searchParams.get('source') === 'other') { currentSource = OTHER; playing = true; }
       if (address.searchParams.get('source') === 'first') { currentSource = FIRST; playing = true; }
+      if (address.searchParams.has('position')) position = Number(address.searchParams.get('position'));
+      if (address.searchParams.has('lumaMetadata')) lumaMetadata = address.searchParams.get('lumaMetadata') === '1';
+      if (address.searchParams.has('episode')) lumaEpisode = Number(address.searchParams.get('episode'));
+      if (address.searchParams.has('switchOnAddonProbe')) switchOnAddonProbe = Number(address.searchParams.get('switchOnAddonProbe'));
+      if (address.searchParams.has('nextSource')) expectedNextSource = address.searchParams.get('nextSource') === 'other' ? OTHER : NEXT;
+      if (address.searchParams.get('failNextSeek') === '1') failNextSeek = true;
       if (address.searchParams.has('failStatus')) failStatus = address.searchParams.get('failStatus') === '1';
       if (address.searchParams.has('failStatusOnce')) failStatusOnce = Number(address.searchParams.get('failStatusOnce'));
       if (address.searchParams.has('failAfterPause')) failAfterPause = Number(address.searchParams.get('failAfterPause'));
@@ -73,7 +82,7 @@ const kodi = http.createServer(async (request, response) => {
         }
       }
       response.writeHead(200, { 'Content-Type': 'application/json' });
-      response.end(JSON.stringify({ source: currentSource, playing, stops, volume, mutations: mutations.length, connections, held: heldResponses.size, failedStatusReads,
+      response.end(JSON.stringify({ source: currentSource, playing, position, lumaMetadata, lumaEpisode, switchOnAddonProbe, expectedNextSource, failNextSeek, seekFailures, stops, addonOpens, volume, mutations: mutations.length, connections, held: heldResponses.size, failedStatusReads,
         volumeSets, volumeGets, volumeReadHeld: heldVolumeReads.length,
         volumeKeys: commands.filter(command => /^KEYEVENT\r\n(?:24|25)\r\n\r\n$/u.test(command)).length,
         powerCommands: commands.filter(command => command === 'KEYEVENT\r\n26\r\n\r\n').length })); return;
@@ -82,6 +91,11 @@ const kodi = http.createServer(async (request, response) => {
     if (request.headers.authorization !== `Basic ${Buffer.from('fixture:fixture').toString('base64')}`) { authRejections++; response.writeHead(401); response.end(); return; }
     const chunks = []; for await (const bytes of request) chunks.push(bytes);
     const { method, params, id } = JSON.parse(Buffer.concat(chunks).toString()); let result;
+    if (method === 'Player.Seek' && failNextSeek) {
+      failNextSeek = false; seekFailures++;
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify({ jsonrpc: '2.0', id, error: { code: -32100, message: 'Fixture seek failure' } })); return;
+    }
     if (method === 'Player.GetActivePlayers' && (failStatus || failStatusOnce > 0)) {
       if (failStatusOnce > 0) failStatusOnce--;
       failedStatusReads++; response.writeHead(503); response.end(); return;
@@ -89,14 +103,31 @@ const kodi = http.createServer(async (request, response) => {
     if (method === 'JSONRPC.Ping') result = 'pong';
     else if (method === 'Application.GetProperties') result = { name: 'Kodi', version: { major: 21, minor: 2 } };
     else if (method === 'Player.GetActivePlayers') result = currentSource ? [{ playerid: 1, type: 'video' }] : [];
-    else if (method === 'Player.GetItem') result = { item: { file: currentSource } };
+    else if (method === 'Player.GetItem') result = { item: lumaMetadata ? {
+      file: currentSource, type: 'episode', title: `Fixture episode ${lumaEpisode}`, showtitle: 'Shared series', season: 1, episode: lumaEpisode,
+      uniqueid: { luma: `v1:framextv:tv:42:1:${lumaEpisode}` },
+    } : { file: currentSource } };
     else if (method === 'Player.GetProperties') result = params.properties.includes('subtitles')
       ? { subtitles: [], currentsubtitle: { index: -1 }, subtitleenabled: false }
-      : { speed: playing ? 1 : 0, time: { hours: 0, minutes: 0, seconds: 20 }, totaltime: { hours: 0, minutes: 22, seconds: 35 }, canseek: true };
+      : { speed: playing ? 1 : 0, time: { hours: Math.floor(position / 3600), minutes: Math.floor(position / 60) % 60, seconds: position % 60 }, totaltime: { hours: 0, minutes: 22, seconds: 35 }, canseek: true };
+    else if (method === 'Addons.GetAddonDetails') {
+      if (switchOnAddonProbe > 0) { lumaMetadata = true; lumaEpisode = switchOnAddonProbe; position = 91; switchOnAddonProbe = 0; }
+      result = { addon: { addonid: 'script.lumaremote.metadata', enabled: true } };
+    }
+    else if (method === 'Addons.ExecuteAddon') {
+      assert.equal(params.addonid, 'script.lumaremote.metadata'); assert.equal(params.wait, true);
+      assert.ok(Array.isArray(params.params) && params.params.length === 1);
+      const payload = JSON.parse(Buffer.from(params.params[0], 'base64url').toString('utf8'));
+      assert.equal(payload.version, 1); assert.equal(payload.source, expectedNextSource);
+      assert.equal(payload.content?.key, 'framextv:tv:42:1:6'); assert.equal(payload.content?.episode, 6);
+      mutations.push({ method, params }); addonOpens++; result = 'OK'; currentSource = payload.source;
+      lumaMetadata = true; lumaEpisode = payload.content.episode; playing = true; position = 20;
+    }
     else {
       mutations.push({ method, params }); result = 'OK';
-      if (method === 'Player.Open') { currentSource = params.item.file; playing = true; }
+      if (method === 'Player.Open') { currentSource = params.item.file; playing = true; position = 20; }
       if (method === 'Player.PlayPause') { playing = params.play; if (failAfterPause > 0) { failStatusOnce = failAfterPause; failAfterPause = 0; } }
+      if (method === 'Player.Seek') { const time = params.value.time; position = time.hours * 3600 + time.minutes * 60 + time.seconds; }
       if (method === 'Player.Stop') { currentSource = ''; stops++; }
     }
     const message = { jsonrpc: '2.0', id, result };
@@ -119,22 +150,30 @@ try {
   if (Number(sdk.trim()) >= 33) await run(adb, ['-s', serial, 'shell', 'pm', 'grant', appPackage, 'android.permission.POST_NOTIFICATIONS'], { timeout: 10000 });
   const { stdout, stderr } = await run(adb, ['-s', serial, 'shell', 'am', 'instrument', '-w', '-e', 'mode', 'service', '-e', 'targetHost', '10.0.2.2', '-e', 'kodiPort', String(kodi.address().port), `${appPackage}.test/dev.framextv.lumaremote.BackendInstrumentation`], { timeout: 150000, maxBuffer: 128 * 1024 });
   process.stdout.write(stdout); if (stderr) process.stderr.write(stderr);
-  assert.match(stdout, /INSTRUMENTATION_RESULT: failures=0/u); assert.match(stdout, /INSTRUMENTATION_RESULT: passed=14/u); assert.match(stdout, /INSTRUMENTATION_CODE: -1/u);
+  assert.match(stdout, /INSTRUMENTATION_RESULT: failures=0/u); assert.match(stdout, /INSTRUMENTATION_RESULT: passed=17/u); assert.match(stdout, /INSTRUMENTATION_CODE: -1/u);
   assert.equal(connections, 3);
   assert.ok(authRejections >= 2);
   assert.deepEqual(commands.filter(command => command.includes('setVolume')), [14, 14, 12, 14, 12, 14, 16, 18, 20, 16]
     .map(level => `MediaControl\r\nsetVolume ${level}\r\n\r\n`));
   assert.equal(volume, 8);
   assert.equal(stops, 1);
+  assert.equal(addonOpens, 2); assert.equal(seekFailures, 1);
   assert.equal(currentSource, FIRST); assert.equal(playing, true);
-  assert.deepEqual(mutations.map(message => message.method), ['Player.Open', 'Player.PlayPause', 'Player.PlayPause', 'Player.PlayPause', 'Player.PlayPause', 'Player.Stop', 'Player.Open', 'Player.PlayPause', 'Player.PlayPause']);
+  const seekMutations = mutations.filter(message => message.method === 'Player.Seek');
+  const resumedNext = seekMutations.length === 3;
+  assert.ok(seekMutations.length === 2 || resumedNext);
+  assert.deepEqual(mutations.map(message => message.method), ['Player.Open', 'Addons.ExecuteAddon', ...(resumedNext ? ['Player.Seek'] : []), 'Addons.ExecuteAddon', 'Player.Seek', 'Player.Seek', 'Player.PlayPause', 'Player.PlayPause', 'Player.PlayPause', 'Player.PlayPause', 'Player.Stop', 'Player.Open', 'Player.PlayPause', 'Player.PlayPause']);
+  assert.deepEqual(seekMutations.slice(-2).map(message => message.params.value.time), [
+    { hours: 0, minutes: 0, seconds: 45, milliseconds: 0 },
+    { hours: 0, minutes: 0, seconds: 0, milliseconds: 0 },
+  ]);
   assert.deepEqual(mutations.filter(message => message.method === 'Player.PlayPause').map(message => message.params.play), [false, true, false, true, false, true]);
-  assert.equal(mutations[6].params.item.file, FIRST);
+  assert.deepEqual(mutations.filter(message => message.method === 'Player.Open').map(message => message.params.item.file), [FIRST, FIRST]);
   assert.deepEqual(commands.filter(command => command.startsWith('KEYEVENT\r\n')), [
     'KEYEVENT\r\n26\r\n\r\n',
   ]);
   assert.ok(commands.every(command => !/^(?:auth|CHECKPASSWORD|STARTAPPEVNET)/u.test(command)));
-  console.log('Android connection service: 14 lifecycle, locked-screen, coalesced-volume, transient-error, pending-catalog, independent-transport, disconnect, power and Matter checks passed against emulator-only fixtures.');
+  console.log('Android connection service: 17 lifecycle, canonical-transition, locked-screen, rewind, coalesced-volume, transient-error, pending-catalog, independent-transport, disconnect, power and Matter checks passed against emulator-only fixtures.');
 } catch (error) {
   console.error(JSON.stringify({ fixture: { connections, stops, playing, mutations: mutations.map(({ method, params }) => ({ method, ...(typeof params.play === 'boolean' ? { play: params.play } : {}) })) } }));
   throw error;

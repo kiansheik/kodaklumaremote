@@ -5,6 +5,8 @@ import { createHandoffCoordinator, HandoffError } from '../src/handoff/coordinat
 const url = 'https://media.example.org/episode.m3u8?token=private-fixture';
 const track = (language, suffix = language, label = language) => ({ url: `https://captions.example.org/${suffix}.vtt`, contentType: 'text/vtt', language, label });
 const media = tracks => ({ url, contentType: 'application/vnd.apple.mpegurl', title: 'Example', tracks });
+const canonical = (episode = 1) => ({ key:`framextv:tv:42:1:${episode}`,kind:'tv',contentId:'42',season:1,episode,
+  watchUrl:`https://framextv.cc/watch/42/1/${episode}`,title:`Example · S1 E${episode}` });
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
 
 function fixture(options = {}) {
@@ -112,6 +114,68 @@ test('video becomes ready without PT-BR or subtitle readiness and leaves existin
   assert.equal(f.state.ready.length, 1);
 });
 
+test('canonical handoff requires Kodi to preserve the exact add-on identity', async () => {
+  const content = canonical(1);
+  const verified = fixture({ open: state => { state.playback.content = content; } });
+  await verified.coordinator.start({ ...media([]), content });
+  assert.equal(verified.state.ready.length, 1);
+
+  const delayed = fixture({
+    open: state => { delete state.playback.content; },
+    wait: state => { if (state.time >= 350) state.playback.content = content; },
+    coordinator: { limits: { activeMs: 1400 } },
+  });
+  await delayed.coordinator.start({ ...media([]), content });
+  assert.equal(delayed.state.ready.length, 1);
+
+  const missing = fixture({ coordinator: { limits: { activeMs: 700 } } });
+  await assert.rejects(missing.coordinator.start({ ...media([]), content }), { code: 'METADATA_UNAVAILABLE' });
+  assert.equal(missing.state.opened, 1);
+  assert.equal(missing.state.ready.length, 0);
+
+  const mismatched = fixture({ playback: { active: true, sourceUrl: url, content: canonical(2) },
+    open: state => { state.playback.content = canonical(3); } });
+  await assert.rejects(mismatched.coordinator.start({ ...media([]), content }), { code: 'SOURCE_CHANGED' });
+  assert.equal(mismatched.state.opened, 1);
+  assert.equal(mismatched.state.ready.length, 0);
+});
+
+test('same-source canonical episode change opens once and waits through old and missing identity windows', async () => {
+  const previous = canonical(1), selected = canonical(2);
+  const f = fixture({
+    playback: { active: true, sourceUrl: url, content: previous },
+    open: state => { state.playback = { active: true, sourceUrl: url, content: previous }; },
+    wait: state => {
+      if (!state.opened) return;
+      const elapsed = state.time - state.openedAt;
+      if (elapsed >= 700) state.playback.content = selected;
+      else if (elapsed >= 350) delete state.playback.content;
+    },
+    coordinator: { limits: { activeMs: 2000 } },
+  });
+  await f.coordinator.start({ ...media([]), content: selected });
+  assert.equal(f.state.opened, 1);
+  assert.equal(f.state.ready.length, 1);
+});
+
+test('contentless initial status may reveal one old canonical key before the selected episode', async () => {
+  const previous = canonical(1), selected = canonical(2);
+  const f = fixture({
+    playback: { active: true, sourceUrl: url },
+    open: state => { state.playback = { active: true, sourceUrl: url, content: previous }; },
+    wait: state => {
+      if (!state.opened) return;
+      const elapsed = state.time - state.openedAt;
+      if (elapsed >= 700) state.playback.content = selected;
+      else if (elapsed >= 350) delete state.playback.content;
+    },
+    coordinator: { limits: { activeMs: 2000 } },
+  });
+  await f.coordinator.start({ ...media([]), content: selected });
+  assert.equal(f.state.opened, 1);
+  assert.equal(f.state.ready.length, 1);
+});
+
 test('explicit subtitle selection recognizes a Brazil label and English regional language metadata', async () => {
   const f = fixture();
   const request = media([track('en_US'), track('pt', 'brazil', 'Português (Brasil)')]);
@@ -127,6 +191,18 @@ test('handoff reuses a still-active source and confirmed bindings on retry witho
   assert.equal(f.state.opened, 1);
   assert.equal(f.state.adds.length, 1);
   assert.equal(f.state.ready.length, 2);
+});
+
+test('same stream URL on a different canonical episode never reuses subtitle bindings', async () => {
+  const f = fixture({ playback: { active: true, sourceUrl: url, content: canonical(1) } });
+  const subtitle = track('pt-BR');
+  const first = { ...media([subtitle]), content: canonical(1) };
+  const second = { ...media([subtitle]), content: canonical(2) };
+
+  assert.equal((await f.coordinator.selectSubtitle(first, subtitle.url)).selectedIndex, 0);
+  f.state.playback.content = canonical(2);
+  assert.equal((await f.coordinator.selectSubtitle(second, subtitle.url)).selectedIndex, 1);
+  assert.deepEqual(f.state.adds, [subtitle.url, subtitle.url]);
 });
 
 test('manual selection adopts an explicitly identified track without guessing unknown external tracks', async () => {
@@ -232,6 +308,226 @@ test('an unresolved replacement Open is not overlapped while the previous source
   retrying = true;
   await f.coordinator.start(media([]));
   assert.equal(f.state.opened, 1);
+  assert.equal(f.state.ready.length, 1);
+});
+
+test('an unresolved Open cannot overlap a same-URL cast for a different canonical episode', async () => {
+  const started = deferred(), firstOpen = deferred();
+  let firstOptions;
+  let retrying = false;
+  let settled = false;
+  let retryStartedAt = 0;
+  const f = fixture({
+    neverActive: true,
+    open: async (state, options) => {
+      if (state.opened === 1) { firstOptions = options; started.resolve(); await firstOpen.promise; }
+      else state.playback = { active: true, sourceUrl: url, content: canonical(2) };
+    },
+    wait: state => {
+      if (!retrying) return;
+      const elapsed = state.time - retryStartedAt;
+      assert.equal(state.ready.length, 0, 'exact B playback reported ready while unresolved A could still land');
+      if (elapsed >= 350) state.playback = { active: true, sourceUrl: url, content: canonical(1) };
+      if (elapsed >= 700 && !settled) {
+        assert.equal(state.opened, 1, 'second canonical Open overlapped an unresolved first Open');
+        settled = true; firstOptions.onSettled(); firstOpen.resolve();
+      }
+    },
+    coordinator: { limits: { activeMs: 2400 } },
+  });
+  const first = f.coordinator.start({ ...media([]), content: canonical(1) });
+  const cancelled = assert.rejects(first, { code: 'CANCELLED' });
+  await started.promise; f.coordinator.cancel(); await cancelled;
+  retrying = true;
+  retryStartedAt = f.state.time;
+  f.state.playback = { active: true, sourceUrl: url, content: canonical(2) };
+  await f.coordinator.start({ ...media([]), content: canonical(2) });
+  assert.equal(f.state.opened, 2);
+  assert.equal(f.state.ready.length, 1);
+});
+
+test('an accepted Open stays exclusive until its canonical playback is observed', async () => {
+  const accepted = deferred();
+  let firstOptions;
+  let retrying = false;
+  let retryStatusReads = 0;
+  const f = fixture({
+    neverActive: true,
+    open: async (state, options) => {
+      if (state.opened === 1) {
+        firstOptions = options;
+        options.onSettled();
+        accepted.resolve();
+      } else {
+        state.playback = { active: true, sourceUrl: url, content: canonical(2) };
+      }
+    },
+    status: state => {
+      if (!retrying) return;
+      retryStatusReads++;
+      if (retryStatusReads === 2) {
+        assert.equal(state.opened, 1, 'accepted A overlapped B before A playback was observed');
+        state.playback = { active: true, sourceUrl: url, content: canonical(1) };
+      }
+    },
+    coordinator: { limits: { activeMs: 2400 } },
+  });
+  const first = f.coordinator.start({ ...media([]), content: canonical(1) });
+  const cancelled = assert.rejects(first, { code: 'CANCELLED' });
+  await accepted.promise;
+  f.coordinator.cancel();
+  await cancelled;
+  retrying = true;
+  f.state.playback = { active: true, sourceUrl: url, content: canonical(2) };
+  await f.coordinator.start({ ...media([]), content: canonical(2) });
+  assert.equal(typeof firstOptions.onSettled, 'function');
+  assert.equal(f.state.opened, 2);
+  assert.equal(f.state.ready.length, 1);
+});
+
+test('a foreign accepted Open cannot use the cold retry path before its playback is observed', async () => {
+  const accepted = deferred();
+  const f = fixture({
+    neverActive: true,
+    open: (state, options) => {
+      if (state.opened === 1) { options.onSettled(); accepted.resolve(); }
+      else state.playback = { active: true, sourceUrl: url, content: canonical(2) };
+    },
+    coordinator: { limits: { activeMs: 1400, openRetryMs: 500 } },
+  });
+  const first = f.coordinator.start({ ...media([]), content: canonical(1) });
+  const cancelled = assert.rejects(first, { code: 'CANCELLED' });
+  await accepted.promise;
+  f.coordinator.cancel();
+  await cancelled;
+  await assert.rejects(f.coordinator.start({ ...media([]), content: canonical(2) }), { code: 'VIDEO_TIMEOUT' });
+  assert.equal(f.state.opened, 1);
+  assert.equal(f.state.ready.length, 0);
+});
+
+test('a foreign Open proven unsent can be replaced while the prior source stays active', async () => {
+  const started = deferred();
+  let notSent;
+  let retrying = false;
+  let retryReads = 0;
+  const previous = 'https://media.example.org/previous.m3u8';
+  const f = fixture({
+    playback: { active: true, sourceUrl: previous },
+    open: (state, options) => {
+      if (state.opened === 1) { notSent = options.onNotSent; started.resolve(); return new Promise(() => {}); }
+      state.playback = { active: true, sourceUrl: url, content: canonical(2) };
+    },
+    status: () => {
+      if (retrying && ++retryReads === 2) notSent();
+    },
+    coordinator: { limits: { activeMs: 2400 } },
+  });
+  const first = f.coordinator.start({ ...media([]), content: canonical(1) });
+  const cancelled = assert.rejects(first, { code: 'CANCELLED' });
+  await started.promise;
+  f.coordinator.cancel();
+  await cancelled;
+  retrying = true;
+  await f.coordinator.start({ ...media([]), content: canonical(2) });
+  assert.equal(f.state.opened, 2);
+  assert.equal(f.state.ready.length, 1);
+});
+
+test('canonical playback does not falsely observe a foreign legacy same-URL Open', async () => {
+  const accepted = deferred();
+  let retrying = false;
+  let retryReads = 0;
+  const f = fixture({
+    neverActive: true,
+    open: (state, options) => {
+      if (state.opened === 1) { options.onSettled(); accepted.resolve(); }
+      else state.playback = { active: true, sourceUrl: url, content: canonical(2) };
+    },
+    status: state => {
+      if (!retrying) return;
+      retryReads++;
+      if (retryReads === 2) {
+        assert.equal(state.ready.length, 0, 'canonical B falsely proved legacy A was observed');
+        state.playback = { active: true, sourceUrl: url };
+      }
+    },
+    coordinator: { limits: { activeMs: 2400 } },
+  });
+  const first = f.coordinator.start(media([]));
+  const cancelled = assert.rejects(first, { code: 'CANCELLED' });
+  await accepted.promise;
+  f.coordinator.cancel();
+  await cancelled;
+  retrying = true;
+  f.state.playback = { active: true, sourceUrl: url, content: canonical(2) };
+  await f.coordinator.start({ ...media([]), content: canonical(2) });
+  assert.equal(f.state.opened, 2);
+  assert.equal(f.state.ready.length, 1);
+});
+
+test('an unresolved foreign Open cannot adopt independently selected legacy playback on another URL', async () => {
+  const started = deferred();
+  let notSent;
+  let retrying = false;
+  let retryReads = 0;
+  const replacementUrl = 'https://media.example.org/replacement.m3u8';
+  const f = fixture({
+    neverActive: true,
+    open: (state, options) => {
+      if (state.opened === 1) { notSent = options.onNotSent; started.resolve(); return new Promise(() => {}); }
+    },
+    status: state => {
+      if (retrying) {
+        retryReads++;
+        if (retryReads === 2) assert.equal(state.ready.length, 0, 'foreign Open was ignored before explicit not-sent proof');
+        if (retryReads === 3) notSent();
+      }
+    },
+    coordinator: { limits: { activeMs: 1400 } },
+  });
+  const first = f.coordinator.start(media([]));
+  const cancelled = assert.rejects(first, { code: 'CANCELLED' });
+  await started.promise;
+  f.coordinator.cancel();
+  await cancelled;
+  retrying = true;
+  f.state.expectedSourceUrl = replacementUrl;
+  f.state.playback = { active: true, sourceUrl: replacementUrl };
+  await f.coordinator.start({ ...media([]), url: replacementUrl });
+  assert.equal(f.state.opened, 1);
+  assert.equal(f.state.ready.length, 1);
+});
+
+test('a replacement Open tolerates one delayed poll of the observed foreign canonical item', async () => {
+  const accepted = deferred();
+  let retrying = false;
+  let retryReads = 0;
+  let secondSent = false;
+  let afterSecondReads = 0;
+  const f = fixture({
+    neverActive: true,
+    open: (state, options) => {
+      if (state.opened === 1) { options.onSettled(); accepted.resolve(); }
+      else secondSent = true;
+    },
+    status: state => {
+      if (!retrying) return;
+      retryReads++;
+      if (retryReads === 2) state.playback = { active: true, sourceUrl: url, content: canonical(1) };
+      if (secondSent && ++afterSecondReads === 2) state.playback = { active: true, sourceUrl: url, content: canonical(2) };
+    },
+    coordinator: { limits: { activeMs: 2800 } },
+  });
+  const first = f.coordinator.start({ ...media([]), content: canonical(1) });
+  const cancelled = assert.rejects(first, { code: 'CANCELLED' });
+  await accepted.promise;
+  f.coordinator.cancel();
+  await cancelled;
+  retrying = true;
+  f.state.playback = { active: true, sourceUrl: url, content: canonical(2) };
+  await f.coordinator.start({ ...media([]), content: canonical(2) });
+  assert.equal(f.state.opened, 2);
+  assert.equal(afterSecondReads, 2);
   assert.equal(f.state.ready.length, 1);
 });
 
@@ -664,6 +960,53 @@ test('a cancelled manual Add can be retried only after explicit unsent proof', a
     assert.equal(f.state.adds.length, proof ? 2 : 1);
     assert.equal(f.state.opened, 1);
   }
+});
+
+test('an unresolved Add globally blocks a different canonical item until explicit unsent proof', async () => {
+  const invoked = deferred(), released = deferred();
+  let notSent;
+  const firstTrack = track('pt-BR', 'episode-a'), secondTrack = track('pt-BR', 'episode-b');
+  const first = { ...media([firstTrack]), content: canonical(1) };
+  const second = { ...media([secondTrack]), content: canonical(2) };
+  const f = fixture({
+    playback: { active: true, sourceUrl: url, content: canonical(1) },
+    add: async (state, value, options) => {
+      if (state.adds.length === 1) { notSent = options.onNotSent; invoked.resolve(); await released.promise; }
+      else state.tracks.push({ index: 0 });
+    },
+    coordinator: { limits: { subtitleMs: 1500 } },
+  });
+  await f.coordinator.start(first);
+  const selection = f.coordinator.selectSubtitle(first, firstTrack.url);
+  const cancelled = assert.rejects(selection, { code: 'CANCELLED' });
+  await invoked.promise;
+  f.coordinator.cancel();
+  await cancelled;
+  f.state.playback = { active: true, sourceUrl: url, content: canonical(2) };
+  await assert.rejects(f.coordinator.selectSubtitle(second, secondTrack.url), { code: 'SUBTITLE_TIMEOUT' });
+  assert.equal(f.state.adds.length, 1);
+  assert.equal(f.state.calls.filter(name => name === 'setSubtitle').length, 0);
+  notSent(); released.resolve();
+  const result = await f.coordinator.selectSubtitle(second, secondTrack.url);
+  assert.equal(result.selectedIndex, 0);
+  assert.deepEqual(f.state.adds, [firstTrack.url, secondTrack.url]);
+});
+
+test('a settled Add without registration still blocks another canonical item', async () => {
+  const firstTrack = track('pt-BR', 'accepted-a'), secondTrack = track('pt-BR', 'accepted-b');
+  const first = { ...media([firstTrack]), content: canonical(1) };
+  const second = { ...media([secondTrack]), content: canonical(2) };
+  const f = fixture({
+    playback: { active: true, sourceUrl: url, content: canonical(1) },
+    add: (state, value, options) => { options.onSettled(); },
+    coordinator: { limits: { subtitleMs: 700 } },
+  });
+  await f.coordinator.start(first);
+  await assert.rejects(f.coordinator.selectSubtitle(first, firstTrack.url), { code: 'SUBTITLE_TIMEOUT' });
+  f.state.playback = { active: true, sourceUrl: url, content: canonical(2) };
+  await assert.rejects(f.coordinator.selectSubtitle(second, secondTrack.url), { code: 'SUBTITLE_TIMEOUT' });
+  assert.deepEqual(f.state.adds, [firstTrack.url]);
+  assert.equal(f.state.calls.filter(name => name === 'setSubtitle').length, 0);
 });
 
 test('ambiguous or absent manual registrations fail without guessed bindings or duplicate Add', async () => {

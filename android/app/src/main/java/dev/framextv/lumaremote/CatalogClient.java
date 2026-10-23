@@ -53,6 +53,7 @@ public final class CatalogClient {
             case "details": return details(params);
             case "episodes": return episodes(params);
             case "resolve": return resolve(params);
+            case "hydrate": return hydrate(params);
             default: throw fail("CATALOG_INVALID_INPUT");
         }
     }
@@ -122,6 +123,29 @@ public final class CatalogClient {
             if (content == null) throw fail("CATALOG_RESPONSE");
             return object("url", selected, "title", title, "contentType", contentType, "tracks", tracks, "currentTime", 0,
                 "autoSubtitles", false, "content", content, "subtitleCatalogComplete", complete);
+        } catch (CatalogException error) { throw error; } catch (Exception error) { throw fail("CATALOG_RESPONSE"); }
+    }
+    /** Refreshes public metadata for an already-playing item without selecting or
+     * exposing another media source. The caller remains responsible for binding
+     * the result to the exact source it observed on the receiver. */
+    public JSONObject hydrate(JSONObject params) throws CatalogException {
+        fields(params, "kind", "id", "season", "episode"); String kind = kind(params, false), id = id(params);
+        int season = 0, episode = 0;
+        if ("tv".equals(kind)) { season = integer(params, "season", 0, 1000, -1); episode = integer(params, "episode", 1, 10000, -1); }
+        else if (params.has("season") || params.has("episode")) throw fail("CATALOG_INVALID_INPUT");
+        long deadline = deadline(); String suffix = "?type=" + kind + "&id=" + id + ("tv".equals(kind) ? "&season=" + season + "&episode=" + episode : "");
+        try {
+            JSONObject meta = detail(read("/api/details?id=" + id + "&type=" + kind, deadline), kind, id);
+            JSONArray tracks = new JSONArray(); Set<String> seen = new HashSet<>(); boolean complete = true;
+            try {
+                Fetched subtitles = readWithBase("/api/subtitles" + suffix, deadline);
+                if (subtitles.data.optBoolean("success", false)) addTracks(tracks, seen, subtitles.data.optJSONArray("subtitles"), subtitles.base);
+                else complete = false;
+            } catch (CatalogException error) { complete = false; }
+            String title = meta.getString("title"); if ("tv".equals(kind)) title = text(title + " · S" + season + " E" + episode, 200, "Video");
+            JSONObject content = WatchHistory.contentFromCatalog(kind, id, "tv".equals(kind) ? season : null, "tv".equals(kind) ? episode : null, title);
+            if (content == null) throw fail("CATALOG_RESPONSE");
+            return object("title", title, "tracks", tracks, "content", content, "subtitleCatalogComplete", complete);
         } catch (CatalogException error) { throw error; } catch (Exception error) { throw fail("CATALOG_RESPONSE"); }
     }
     private static JSONObject listing(JSONObject raw, String kind, int page) throws Exception {
