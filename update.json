@@ -1,12 +1,12 @@
 {
   "schemaVersion": 1,
   "packageName": "dev.framextv.lumaremote",
-  "versionName": "0.4.7",
-  "versionCode": 17,
+  "versionName": "0.4.8",
+  "versionCode": 18,
   "minSdk": 24,
-  "apkUrl": "https://github.com/kiansheik/kodaklumaremote/releases/download/v0.4.7/luma-remote-0.4.7.apk",
-  "sha256": "231de2e8f7a8d21a72b55c8eebe96694316a2ed72baa52302d62e0148846935f",
-  "sizeBytes": 9757978,
-  "releasedAt": "2026-10-22T22:12:20.014Z",
-  "notes": "LUMA Remote 0.4.7\n\nAdds Back 30 seconds and a playback scrubber directly to the main remote for both LUMA/Kodi and Philips TV playback.\n\nAdds a catalog-verified Next episode control to the main remote, Android notification and lock-screen media controls. The control appears only when the phone has cached metadata proving the exact successor; it resolves that episode again instead of reusing an old stream URL.\n\nImproves SRT and WebVTT compatibility with subtitle files containing a very small number of malformed cues. The phone still downloads, normalizes and temporarily hosts the selected subtitle for the receiver, while rejecting empty or materially malformed tracks.\n\nCurrent provider sampling covered five homepage titles and 12 English/Portuguese subtitle bodies. One title exposed no tracks; the reproduced failing track contained 273 valid cues followed by one reversed timestamp. All 12 sampled bodies normalize with this release. Visible subtitle rendering and the new system controls still need acceptance testing on the physical phone and receivers.\n"
+  "apkUrl": "https://github.com/kiansheik/kodaklumaremote/releases/download/v0.4.8/luma-remote-0.4.8.apk",
+  "sha256": "09b72de640663539af191a4e4f32305ced99f90d65a148b8eb3bd1d9897d3202",
+  "sizeBytes": 9793842,
+  "releasedAt": "2026-10-23T00:12:51.043Z",
+  "notes": "LUMA Remote 0.4.8\n\nAdds Back 30 seconds to the main remote, notification and Android lock-screen media controls. Scrubbing remains source-guarded and now shows best-effort, low-quality phone previews for supported direct HTTPS, unencrypted VOD HLS media playlists on Android 8.1 or newer. Preview frames are generated on demand and cached only in memory for the current media item.\n\nAdds catalog-verified Next episode controls to the main remote, notification and lock screen. Locked-screen Next resolves and opens the exact successor in the background without opening or unlocking the app, and rechecks the current Kodi identity immediately before opening so observed changes from another phone are rejected.\n\nAdds a source-only Kodi metadata companion ZIP beside the APK. Once installed in Kodi, it preserves canonical movie/episode identity so another configured phone can join playback already in progress, recover the title, subtitle catalog and next episode, and update that phone's Resume and Library position from Kodi's roughly four-second polls while connected. Older viewing history is not copied between phones.\n\nImproves SRT and WebVTT compatibility with a small bounded number of malformed cues. Selected subtitles are downloaded through DNS-pinned, redirect-checked public connections, normalized on the phone and temporarily hosted only for the selected receiver.\n\nCurrent sampling covered five homepage titles and 12 English/Portuguese subtitle bodies; all 12 normalize with this release. Preview support is intentionally best-effort because the sampled providers exposed no storyboard track. Physical two-phone Kodi, visible subtitle, preview-performance and OEM lock-screen acceptance still need testing.\n"
 }
