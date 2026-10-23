@@ -1,12 +1,12 @@
 {
   "schemaVersion": 1,
   "packageName": "dev.framextv.lumareceiver",
-  "versionName": "0.2.3",
-  "versionCode": 10,
+  "versionName": "0.3.2",
+  "versionCode": 16,
   "minSdk": 23,
-  "apkUrl": "https://github.com/kiansheik/kodaklumaremote/releases/download/v0.4.11/luma-receiver-0.2.3.apk",
-  "sha256": "fadc21c1efd7367388ec06d1efbee138b35c333005374275eecc11d3520827e0",
-  "sizeBytes": 1185598,
-  "releasedAt": "2026-10-23T09:08:49.386Z",
-  "notes": "LUMA Remote 0.4.11\n\nCasting no longer waits for the projector's native navigation service during startup. The phone connects directly to LUMA Receiver as soon as its boot-time service and saved private address are available, so a video can start while the rest of the projector is still coming online.\n\nProjector navigation, apps, volume and power reconnect separately when the native protocol becomes available. If that connection drops later, receiver playback, casting and media controls remain available while hardware-only controls are hidden.\n"
+  "apkUrl": "https://github.com/kiansheik/kodaklumaremote/releases/download/v0.4.12/luma-receiver-0.3.2.apk",
+  "sha256": "b45d3e642c988d8eac256e8813fa1613308e50fd0f7577c4929cde7869ac2fdb",
+  "sizeBytes": 1134598,
+  "releasedAt": "2026-10-23T13:25:22.990Z",
+  "notes": "LUMA Remote 0.4.12\n\nScrubbing is rebuilt. Touch the bar and a large preview appears at once; fast drags move 1:1 and holding slowly gives finer control. Thumbnails are made in the background from the moment you cast, shared with other phones through the projector, and shown on the TV or projector too. Fixes the crash when holding the scrub bar.\n\nUndo and Redo arrows beside the bar jump between the places you scrubbed from and survive restarting the app.\n\nResume is faster and restores your saved position, and each movie or series turns its last subtitle language back on. Library episodes no longer fail when they list many subtitle languages.\n\nNext episode works even after an episode has finished, and an optional Auto-play next episode switch continues the series in your subtitle language. After three episodes without anyone touching a remote it stops and shows which episode you last watched.\n\nMore has Brightness, Move to the other screen, and Play on both screens (kept in step automatically). Brightness now keeps LUMA video on the projector's compatible playback surface instead of blanking the picture, adjusts gradually in 2% steps from −30% to +30%, and remembers one setting for each movie or complete series. Philips TV now matches LUMA: the same subtitle style and size, a scrub preview on the TV, Next after an episode ends, and Auto-play.\n\nThe Remote tab has a cleaner layout, is ready sooner after opening, and shows the connect screen until a projector is connected and paired.\n"
 }
