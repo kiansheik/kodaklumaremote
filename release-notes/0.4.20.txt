@@ -1,0 +1,5 @@
+LUMA Remote 0.4.20
+
+Turns a stale Philips browser identity into an explicit Allow TV request instead of a JSON rejection. The incoming private peer may load the receiver shell, but the phone preserves the old approval until you allow the newly observed TV browser identity; approval then saves the real TV address and receiver identity together.
+
+Receiver logs now identify candidate, reapproval, approval, and completed migration stages with their private peer addresses.

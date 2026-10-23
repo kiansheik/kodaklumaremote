@@ -1107,3 +1107,8 @@
   peer is temporary, and only the exact saved browser client ID may persist it.
   Added address-bearing candidate/migration logs. Android sources compile;
   physical instrumentation was not run because it resets saved pairing.
+- 2026-10-23 first 0.4.19 trace: candidate bootstrap succeeds from the actual
+  TV `192.168.68.52`; stale approval names the phone `192.168.68.54`. The next
+  request proved a browser-client identity mismatch. The 0.4.20 candidate holds
+  that replacement for explicit **Allow TV** instead of returning JSON403, then
+  saves peer and client together. Android and AndroidTest sources compile.

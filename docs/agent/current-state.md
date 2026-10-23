@@ -15,6 +15,12 @@
   Instrumentation covers candidate redirect, no pre-proof mutation and
   identity-gated migration, but it was not run on the physical phone because it
   resets receiver pairing state.
+- The first 0.4.19 physical trace made the mismatch concrete: incoming Philips
+  `192.168.68.52`, saved peer `192.168.68.54` (the phone). Candidate bootstrap
+  succeeded, then the browser presented a different client identity and was
+  rejected. The 0.4.20 candidate converts that exact condition into an explicit
+  **Allow TV** request. The old approval remains until the person approves the
+  observed private peer/client pair; approval then replaces both atomically.
 
 ## Philips IP-only launcher and receiver-peer rebind candidate
 

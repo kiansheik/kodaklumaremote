@@ -62,6 +62,10 @@ phone's correct `192.168.68…` address.
   approved peer.
 - Only `hello` carrying the exact saved TV browser client ID commits migration.
 - Logs include incoming, saved and migrated private addresses for live evidence.
+- The first live trace identified actual TV `.52`, incorrectly saved phone `.54`,
+  successful candidate bootstrap and a different browser client identity.
+  0.4.20 surfaces that replacement as **Allow TV** while retaining the old
+  approval until the explicit confirmation saves the new peer/client pair.
 
 ## Remaining questions
 

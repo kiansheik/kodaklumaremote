@@ -650,6 +650,13 @@ public final class MsxInstrumentation {
             String candidateBase = home.substring(0, home.length() - "home.json".length());
             JSONObject migrated = request(candidateBase + "hello?client=" + CLIENT, null, 200);
             require(migrated.getBoolean("approved") && originalPeer.equals(server.status().getString("host")) && server.hasSavedReceiver(), "Saved browser identity did not migrate the actual connection peer");
+            migratedPeer.set(server, movedPeer);
+            require(rawStatus(origin, "GET /tv/connect.html HTTP/1.1\r\nHost: " + new URL(origin).getAuthority() + "\r\nConnection: close\r\n\r\n") == 302, "Replacement browser candidate did not redirect");
+            String replacementClient = "replacement_receiver_1234567890";
+            JSONObject replacement = request(candidateBase + "hello?client=" + replacementClient, null, 200);
+            require(!replacement.getBoolean("approved") && server.status().getBoolean("awaitingApproval") && originalPeer.equals(server.status().getString("pendingHost")), "New browser identity was not held for explicit approval");
+            server.confirmPairing(originalPeer);
+            require(server.status().getBoolean("configured") && originalPeer.equals(server.status().getString("host")), "Explicit replacement approval did not persist the actual peer");
             server.reset(); server.start(); request(home, null, 404);
             mediaRequest(diagnosticSampleUrl, "GET", "bytes=0-0", null, 404);
             require(!server.hasSavedReceiver(), "Reset retained approved receiver");

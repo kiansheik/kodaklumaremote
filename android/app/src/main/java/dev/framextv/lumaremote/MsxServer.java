@@ -233,10 +233,11 @@ public final class MsxServer implements AutoCloseable {
 
     public JSONObject confirmPairing(String requestedHost) throws MsxException {
         synchronized (lock) {
-            if (!approvedClient.isEmpty() || !pairingOpen() || pendingClient == null || !pendingHost.equals(requestedHost) || sessionId == null) throw new MsxException("MSX_PAIRING");
+            if (!authorizationOpen() || pendingClient == null || !pendingHost.equals(requestedHost) || sessionId == null) throw new MsxException("MSX_PAIRING");
             approvedHost = pendingHost; approvedClient = pendingClient; approved = true;
             preferences.edit().putString("peer", approvedHost).putString("client", approvedClient).commit();
-            pairingUntil = 0; lastSeen = SystemClock.elapsedRealtime();
+            pairingUntil = 0; rebindCandidateHost = ""; rebindCandidateUntil = 0; lastSeen = SystemClock.elapsedRealtime();
+            Log.i("MsxReceiver", "PEER_APPROVED peer=" + approvedHost);
             return snapshot();
         }
     }
@@ -349,9 +350,9 @@ public final class MsxServer implements AutoCloseable {
         JSONObject result = object("running", running, "connected", running && approved && sessionId != null && lastState > 0 && now - lastState <= FRESH_MS,
                 "configured", !approvedClient.isEmpty(), "name", "Philips TV", "host", approvedHost,
                 "startupUrl", running ? origin() : "", "port", port,
-                "awaitingApproval", pendingClient != null && !approved && pairingOpen(),
-                "pendingHost", pendingClient != null && !approved && pairingOpen() ? pendingHost : "",
-                "pairingOpen", running && pairingOpen(), "playback", copy(playback), "lastCommand", copy(lastCommand),
+                "awaitingApproval", pendingClient != null && !approved && authorizationOpen(),
+                "pendingHost", pendingClient != null && !approved && authorizationOpen() ? pendingHost : "",
+                "pairingOpen", running && authorizationOpen(), "playback", copy(playback), "lastCommand", copy(lastCommand),
                 "diagnostics", object("connections", connections, "tlsRequests", tlsRequests, "bootstrapRequests", bootstrapRequests,
                         "bootstrapAccepted", bootstrapAccepted, "lastStatus", lastStatus, "lastReason", lastReason,
                         "lastOrigin", lastOrigin, "lastRequestMsAgo", age(now, lastRequestAt),
@@ -365,6 +366,7 @@ public final class MsxServer implements AutoCloseable {
     }
     private static long age(long now, long timestamp) { return timestamp == 0 ? -1 : Math.max(0, now - timestamp); }
     private boolean pairingOpen() { return approvedClient.isEmpty() && SystemClock.elapsedRealtime() < pairingUntil; }
+    private boolean authorizationOpen() { return pairingOpen() || !approvedClient.isEmpty() && pendingClient != null && pendingHost != null && rebindCandidate(pendingHost); }
     private String origin() { return "http://" + host + ":" + port; }
     private String ownedSampleUrl() { return diagnosticSample != null && listener != null && !listener.isClosed() ? origin() + "/" + token + "/diagnostic-sintel.mp4" : null; }
     private String secret() { byte[] bytes = new byte[24]; random.nextBytes(bytes); return Base64.encodeToString(bytes, Base64.URL_SAFE | Base64.NO_WRAP | Base64.NO_PADDING); }
@@ -729,8 +731,11 @@ public final class MsxServer implements AutoCloseable {
     private JSONObject hello(String peer, Map<String, String> query) throws HttpFailure {
         String client = query.get("client"); if (!clientId(client)) throw new HttpFailure(400);
         if (!approvedClient.isEmpty()) {
-            if (!approvedClient.equals(client)) throw new HttpFailure(403);
-            if (!approvedHost.equals(peer)) {
+            if (!approvedClient.equals(client)) {
+                if (!rebindCandidate(peer)) throw new HttpFailure(403);
+                pendingHost = peer; pendingClient = client;
+                Log.i("MsxReceiver", "PEER_REAPPROVAL_REQUIRED incoming=" + peer + " saved=" + approvedHost);
+            } else if (!approvedHost.equals(peer)) {
                 if (!rebindCandidate(peer)) throw new HttpFailure(403);
                 String previous = approvedHost; approvedHost = peer; rebindCandidateHost = ""; rebindCandidateUntil = 0;
                 preferences.edit().putString("peer", approvedHost).commit();
@@ -764,7 +769,7 @@ public final class MsxServer implements AutoCloseable {
         return object("approved", approved, "commands", outgoing);
     }
     private void requireSession(String peer, String client, String session, boolean approval) throws HttpFailure {
-        if (sessionId == null || !sessionId.equals(session) || !(approved ? approvedClient : pendingClient).equals(client) || !(approved ? approvedHost : pendingHost).equals(peer) || (!approved && !pairingOpen()) || (approval && !approved)) throw new HttpFailure(403);
+        if (sessionId == null || !sessionId.equals(session) || !(approved ? approvedClient : pendingClient).equals(client) || !(approved ? approvedHost : pendingHost).equals(peer) || (!approved && !authorizationOpen()) || (approval && !approved)) throw new HttpFailure(403);
     }
 
     static JSONObject validateCommand(String method, JSONObject params) throws MsxException {
