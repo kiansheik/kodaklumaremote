@@ -1,12 +1,12 @@
 {
   "schemaVersion": 1,
   "packageName": "dev.framextv.lumaremote",
-  "versionName": "0.4.19",
-  "versionCode": 29,
+  "versionName": "0.4.20",
+  "versionCode": 30,
   "minSdk": 24,
-  "apkUrl": "https://github.com/kiansheik/kodaklumaremote/releases/download/v0.4.19/luma-remote-0.4.19.apk",
-  "sha256": "fa67be802e4027799bc1c58e32d24fc810343b6437cc55287a246ba82e7c1e76",
+  "apkUrl": "https://github.com/kiansheik/kodaklumaremote/releases/download/v0.4.20/luma-remote-0.4.20.apk",
+  "sha256": "bcd28edc587bfe2a00932a9c1ba9801b5c7644ecfedbb5f118e04eee29a6b57f",
   "sizeBytes": 9821602,
-  "releasedAt": "2026-10-23T17:48:21.905Z",
-  "notes": "LUMA Remote 0.4.19\n\nFixes Philips REQUEST_REJECTED using the browser's actual authenticated connection instead of guessing its address from Matter. A new private peer may load the receiver shell, but the saved TV browser must present the exact previously approved receiver identity before the phone persists the new address. Receiver logs now show the candidate and completed migration addresses for direct diagnosis.\n\nIncludes the Philips Speed dial button and no-pointer directional navigation from 0.4.18.\n"
+  "releasedAt": "2026-10-23T17:54:59.569Z",
+  "notes": "LUMA Remote 0.4.20\n\nTurns a stale Philips browser identity into an explicit Allow TV request instead of a JSON rejection. The incoming private peer may load the receiver shell, but the phone preserves the old approval until you allow the newly observed TV browser identity; approval then saves the real TV address and receiver identity together.\n\nReceiver logs now identify candidate, reapproval, approval, and completed migration stages with their private peer addresses.\n"
 }

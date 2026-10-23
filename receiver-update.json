@@ -4,9 +4,9 @@
   "versionName": "0.3.2",
   "versionCode": 16,
   "minSdk": 23,
-  "apkUrl": "https://github.com/kiansheik/kodaklumaremote/releases/download/v0.4.19/luma-receiver-0.3.2.apk",
+  "apkUrl": "https://github.com/kiansheik/kodaklumaremote/releases/download/v0.4.20/luma-receiver-0.3.2.apk",
   "sha256": "b45d3e642c988d8eac256e8813fa1613308e50fd0f7577c4929cde7869ac2fdb",
   "sizeBytes": 1134598,
-  "releasedAt": "2026-10-23T17:48:27.116Z",
-  "notes": "LUMA Remote 0.4.19\n\nFixes Philips REQUEST_REJECTED using the browser's actual authenticated connection instead of guessing its address from Matter. A new private peer may load the receiver shell, but the saved TV browser must present the exact previously approved receiver identity before the phone persists the new address. Receiver logs now show the candidate and completed migration addresses for direct diagnosis.\n\nIncludes the Philips Speed dial button and no-pointer directional navigation from 0.4.18.\n"
+  "releasedAt": "2026-10-23T17:55:04.515Z",
+  "notes": "LUMA Remote 0.4.20\n\nTurns a stale Philips browser identity into an explicit Allow TV request instead of a JSON rejection. The incoming private peer may load the receiver shell, but the phone preserves the old approval until you allow the newly observed TV browser identity; approval then saves the real TV address and receiver identity together.\n\nReceiver logs now identify candidate, reapproval, approval, and completed migration stages with their private peer addresses.\n"
 }
