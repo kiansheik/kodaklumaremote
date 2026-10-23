@@ -740,6 +740,31 @@ test('Philips scrubbing and subtitle size go to the TV and never mirror to or co
   await expect.poll(() => page.evaluate(() => window.__calls.filter(call => call.method === 'receiver.scrub').map(call => call.params))).toEqual([{ active: true, positionSeconds: 60, durationSeconds: 600 }]);
 });
 
+test('a slow Philips seek keeps the remote stable and coalesces another scrub', async ({ page }) => {
+  await openApp(page, { selectedTarget: 'philips' });
+  await page.evaluate(() => { window.__holdMethod = 'msx.seek'; });
+  const range = page.getByLabel('Playback position');
+  const commit = position => range.evaluate((element, value) => {
+    element.value = String(value);
+    element.dispatchEvent(new Event('input', { bubbles: true }));
+    element.dispatchEvent(new Event('change', { bubbles: true }));
+  }, position);
+
+  await commit(120);
+  await expect.poll(() => page.evaluate(() => window.__calls.filter(call => call.method === 'msx.seek').map(call => call.params.seconds))).toEqual([120]);
+  await expect(page.locator('#play-toggle')).toBeEnabled();
+  await expect(page.locator('#target-luma')).toBeEnabled();
+  await expect(page.locator('#seek-time')).toHaveText('2:00');
+
+  await commit(180);
+  await expect(page.locator('#seek-time')).toHaveText('3:00');
+  expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'msx.seek').map(call => call.params.seconds))).toEqual([120]);
+  await page.evaluate(() => window.__release());
+  await expect.poll(() => page.evaluate(() => window.__calls.filter(call => call.method === 'msx.seek').map(call => call.params.seconds))).toEqual([120, 180]);
+  await expect(page.locator('#play-toggle')).toBeEnabled();
+  await expect(page.locator('#seek-time')).toHaveText('3:00');
+});
+
 test('Philips brightness uses the same 2% series preference with a guarded display command', async ({ page }) => {
   const episode1 = {key:'framextv:tv:84:1:1',kind:'tv',contentId:'84',season:1,episode:1,watchUrl:'https://framextv.cc/watch/84/1/1',title:'TV series · S1 E1'};
   const episode2 = {...episode1,key:'framextv:tv:84:1:2',episode:2,watchUrl:'https://framextv.cc/watch/84/1/2',title:'TV series · S1 E2'};

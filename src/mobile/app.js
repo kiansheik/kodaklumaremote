@@ -125,6 +125,7 @@ let pendingVolume = null;
 let volumeTimer = null;
 let volumeFlight = false;
 let scrubPosition = null;
+let seekFlight = null, seekQueued = null;
 let scrubPreviewTimer = null;
 let scrubPreviewInFlight = false, scrubPreviewWanted = null, scrubPreviewShown = null;
 // Frames already received for the current item, so fast sweeps render locally at once.
@@ -2333,18 +2334,64 @@ $('#play-toggle').addEventListener('click', () => {
   mirrorToPartner(action === 'resume' ? 'play' : 'pause');
   void command(`receiver.${action}`, remoteParams(), action === 'pause' ? 'Pause requested.' : 'Resume requested.', async () => playback(await rpc('receiver.status', remoteParams())));
 });
-async function seekTo(position) {
-  const remote = receiver(), duration = remote.playback?.durationSeconds;
+function seekRequest(position) {
+  const target = state.target, remote = receiver(target), duration = remote.playback?.durationSeconds;
   if (!Number.isFinite(position) || !Number.isFinite(duration) || duration <= 0) return false;
   const seconds = Math.max(0, Math.min(Math.floor(duration), Math.floor(position)));
+  const source = remote.activeMedia?.url || remote.playback?.sourceUrl;
+  const content = contentDescriptor(remote.activeMedia?.content);
+  return { target, seconds, source, content };
+}
+function sameSeek(left, right) {
+  return !!left && !!right && left.target === right.target && left.seconds === right.seconds && left.source === right.source;
+}
+async function pumpSeekQueue() {
+  while (seekQueued) {
+    const request = seekQueued;
+    seekQueued = null;
+    seekFlight = request;
+    let accepted = false;
+    try {
+      const params = request.target === 'philips'
+        ? { seconds: request.seconds, ...(request.source ? { expectedSourceUrl: request.source } : {}) }
+        : { position: request.seconds, ...(request.source ? { expectedSourceUrl: request.source } : {}), ...(request.content ? { expectedContentKey: request.content.key } : {}) };
+      if (request.target === 'philips') msxState(await rpc('msx.seek', params));
+      else {
+        await rpc('receiver.seek', params);
+        playback(await rpc('receiver.status', {
+          ...(request.source ? { expectedSourceUrl: request.source } : {}),
+          ...(request.content ? { expectedContentKey: request.content.key } : {}),
+        }), request.target);
+      }
+      accepted = true;
+      if (!seekQueued && state.target === request.target) message(`Seek requested. Check playback on the ${request.target === 'philips' ? 'TV' : 'projector'}.`);
+    } catch (error) {
+      if (!seekQueued) {
+        if (request.target === 'philips' && ['MSX_NOT_CONNECTED', 'NOT_CONNECTED', 'CONNECTION_FAILED'].includes(error.code)) state.philips.connected = false;
+        message(errors[error.adapterCode] || errors[error.code] || error.message || 'Seeking failed. Try again.', true);
+      }
+    } finally {
+      request.resolve(accepted);
+    }
+  }
+  const finished = seekFlight;
+  seekFlight = null;
+  if (!fineScrub.active && scrubPosition === finished?.seconds) scrubPosition = null;
+  renderControls();
+}
+function seekTo(position) {
+  const request = seekRequest(position);
+  if (!request) return Promise.resolve(false);
+  if (sameSeek(request, seekFlight)) return seekFlight.promise;
+  if (sameSeek(request, seekQueued)) return seekQueued.promise;
+  if (seekQueued) seekQueued.resolve(false);
+  request.promise = new Promise(resolve => { request.resolve = resolve; });
+  seekQueued = request;
+  const seconds = request.seconds;
   scrubPosition = seconds; renderRemote();
   mirrorToPartner('seek', seconds);
-  const accepted = state.target === 'philips'
-    ? await command('msx.seek', msxParams({ seconds }), 'Seek requested. Check playback on the TV.', msxState)
-    : await command('receiver.seek', remoteParams({ position: seconds }), 'Seek requested. Check playback on the projector.', async () => playback(await rpc('receiver.status', remoteParams())));
-  scrubPosition = null;
-  renderControls();
-  return accepted;
+  if (!seekFlight) void pumpSeekQueue();
+  return request.promise;
 }
 $('#back-30').addEventListener('click', () => void seekTo(Math.max(0, (receiver().playback?.positionSeconds || 0) - 30)));
 $('#next-episode').addEventListener('click', () => {

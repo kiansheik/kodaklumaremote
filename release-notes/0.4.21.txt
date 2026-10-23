@@ -1,0 +1,3 @@
+LUMA Remote 0.4.21
+
+Keeps the phone remote steady while a Philips timeline seek is waiting for the TV. Playback controls no longer flash between enabled and disabled, the dragged position stays visible until the TV answers, and another scrub replaces an unsent seek instead of building a backlog.
