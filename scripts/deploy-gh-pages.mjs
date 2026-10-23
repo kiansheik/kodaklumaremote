@@ -9,7 +9,7 @@ import { MAX_MANIFEST_BYTES, RELEASE_REPOSITORY } from '../site/update-manifest.
 
 const execFile = promisify(execFileCallback);
 const root = fileURLToPath(new URL('../', import.meta.url));
-const files = ['.nojekyll', 'index.html', 'styles.css', 'app.js', 'update-manifest.js', 'projector.svg', 'update.json', 'receiver-update.json'];
+const files = ['.nojekyll', 'index.html', 'styles.css', 'app.js', 'update-manifest.js', 'projector.svg', 'tv.html', 'update.json', 'receiver-update.json'];
 class DeploymentError extends Error {}
 
 export function repositoryOrigin(value) {

@@ -274,6 +274,8 @@
   repeated releases do not require signing-variable exports. The release target
   auto-stages bounded allowlisted new text files, ignores unrelated untracked
   files and rejects sensitive-looking/unsupported additions.
+  `site/tv.html` is the fixed TV speed-dial launcher; both the Pages builder and
+  deployment reviewed-file allowlist must include it.
   `scripts/{generate-update,build-pages,build-android-release,
   publish-android-release}.mjs` prepare/verify local signed releases and publish.
   `android/release-certificate.sha256` is a public fingerprint, never a key.

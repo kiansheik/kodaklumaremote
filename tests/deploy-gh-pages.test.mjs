@@ -15,7 +15,7 @@ test('deployment origin is limited to this repository over HTTPS or GitHub SSH',
   for (const remote of ['https://github.com/other/repo.git', 'http://github.com/kiansheik/kodaklumaremote.git', `${githubOrigin}?token=x`, 'https://token@github.com/kiansheik/kodaklumaremote.git', '/tmp/local.git']) assert.throws(() => repositoryOrigin(remote));
 });
 
-test('deployment creates and fast-forwards only the seven Pages files, preserves the source checkout and refuses unknown branch files', async () => {
+test('deployment creates and fast-forwards only the reviewed Pages files, preserves the source checkout and refuses unknown branch files', async () => {
   const folder = await mkdtemp(path.join(os.tmpdir(), 'luma-deploy-test-'));
   const git = async (directory, ...args) => (await execFile('git', ['-C', directory, ...args], { encoding: 'utf8' })).stdout.trim();
   try {
@@ -48,7 +48,7 @@ test('deployment creates and fast-forwards only the seven Pages files, preserves
     const initial = await deployGhPages({ sourceDirectory: source, run });
     assert.equal(initial.changed, true);
     const first = await git(bare, 'rev-parse', 'refs/heads/gh-pages');
-    assert.deepEqual((await git(bare, 'ls-tree', '-r', '--name-only', first)).split('\n').sort(), ['.nojekyll', 'app.js', 'index.html', 'projector.svg', 'styles.css', 'update-manifest.js', 'update.json'].sort());
+    assert.deepEqual((await git(bare, 'ls-tree', '-r', '--name-only', first)).split('\n').sort(), ['.nojekyll', 'app.js', 'index.html', 'projector.svg', 'styles.css', 'tv.html', 'update-manifest.js', 'update.json'].sort());
     manifest.notes = 'Updated fixture release notes.';
     const next = await deployGhPages({ sourceDirectory: source, tag: 'v0.2.4', run });
     assert.equal(next.changed, true);

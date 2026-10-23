@@ -1,5 +1,16 @@
 # Work log
 
+- 2026-10-23 release 0.4.12 and TV launcher: explicitly reviewed/staged the new
+  pure `src/handoff/sync.mjs`, changed brightness from 5% to 2% steps, and ran
+  the guarded release. All 247 Node and 163 browser tests passed; signed phone
+  0.4.12/code 22 and receiver 0.3.2/code 16 were published from `bd9223f`.
+  The first successful Pages build omitted `tv.html` because the deployment
+  copy allowlist lagged behind the build allowlist. Added `tv.html` to that
+  reviewed deployment list and its isolated regression (11 focused tests pass),
+  redeployed the same release, and verified the live launcher plus both update
+  manifests from the custom domain. Physical TV validation remains.
+  [Handoff](session-handoffs/2026-10-23-release-0.4.12-tv-launcher.md).
+
 - 2026-10-23 per-title brightness: after the user physically confirmed the
   SurfaceView overlay is "perfect", brightness was bounded to −30…+30% and
   changed to 2% steps. Native `app.picturePreferences` keeps one value per movie

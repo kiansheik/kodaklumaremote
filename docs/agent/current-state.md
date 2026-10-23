@@ -1,6 +1,14 @@
 # Current state
 
-## Unreleased 0.4.12 / receiver 0.3.2: Philips parity, two-screen move/sync, brightness
+## Released 0.4.12 / receiver 0.3.2: Philips parity, two-screen move/sync, brightness
+
+- Published from source commit `bd9223f` as GitHub release `v0.4.12`; live
+  manifests expose phone 0.4.12/code 22 and receiver 0.3.2/code 16. The stable TV
+  launcher is live at `https://kiansheik.io/kodaklumaremote/tv.html`. The first
+  Pages deployment omitted `tv.html` because `deploy-gh-pages.mjs` had not added
+  the already-built file to its reviewed copy allowlist; that allowlist and its
+  isolated deployment regression were corrected, then the same release was
+  redeployed as Pages commit `5decdde`.
 
 - Philips TV page (`src/msx/`) now matches LUMA Receiver: LUMA caption style
   (centre 50 %, translucent rounded panel) with phone A−/A+ size (`display`
@@ -35,8 +43,9 @@
   the new per-title restore/bounds on devices. The underlying SurfaceView
   brightness rendering is now user-confirmed on the Android 9/Amlogic projector.
   API 36 emulator evidence before the final bound showed monotonic nonblack
-  composition through the full range. GitHub Pages hosting of the TV page is
-  blocked by mixed content (HTTPS page → HTTP LAN phone); only a launcher is viable.
+  composition through the full range. The live HTTPS TV page is deliberately a
+  launcher: it remembers phone addresses, then navigates the TV to the selected
+  phone's HTTP receiver rather than attempting a blocked mixed-content request.
 
 ## Unreleased 0.4.12 / receiver 0.3.1: remote layout, fast Resume, caption language on auto-next
 
