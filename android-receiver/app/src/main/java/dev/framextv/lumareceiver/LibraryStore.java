@@ -99,7 +99,7 @@ final class LibraryStore extends SQLiteOpenHelper {
     }
 
     /** Mirrors the phone's WatchHistory progress entry so both sides read the same shape. */
-    void recordProgress(JSONObject content, double position, double duration, long lastStartedAt) {
+    void recordProgress(JSONObject content, double position, double duration, long lastStartedAt, boolean autoplayed) {
         try {
             long now = System.currentTimeMillis();
             if (duration > 0) position = Math.min(position, duration);
@@ -108,6 +108,7 @@ final class LibraryStore extends SQLiteOpenHelper {
                 .put("positionSeconds", position).put("durationSeconds", duration)
                 .put("resumeSeconds", completed ? 0 : position).put("completed", completed)
                 .put("updatedAt", now).put("lastStartedAt", lastStartedAt).put("lastReceiver", "luma");
+            if (autoplayed) data.put("autoplayed", true);
             merge(java.util.Collections.singletonList(new SyncRecord(content.getString("key"), "progress", now, origin, false, data.toString())));
         } catch (Exception ignored) {
             android.util.Log.w("LumaLibrary", "PROGRESS_WRITE_FAILED");

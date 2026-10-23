@@ -744,7 +744,7 @@ test('Continue Watching resolves typed native content, resumes Philips once and 
   await page.locator('#history-list button').click();
   await page.locator('#history-resume').click();
   await expect(page.locator('#message')).toHaveText('Ready on Philips TV. You can use the remote.');
-  await expect(page.locator('#playback-status')).toContainText('2:05');
+  await expect(page.locator('#seek-time')).toHaveText('2:05');
   const calls=await page.evaluate(()=>window.__calls);
   expect(calls.find(call=>call.method==='app.chooseCatalog').params).toEqual({kind:'tv',id:'84',season:0,episode:1,resume:true});
   expect(calls.find(call=>call.method==='app.chooseCatalog').timeoutMs).toBeUndefined();
@@ -914,7 +914,7 @@ test('Philips scrubbing and subtitles never mirror to or configure LUMA Receiver
   await expect(range).toBeEnabled();
   await range.evaluate(element => { element.value = '120'; element.dispatchEvent(new Event('input', { bubbles: true })); });
   await expect(page.locator('#scrub-preview')).toBeVisible();
-  await expect(page.locator('#scrub-preview-time')).toHaveText('2:00');
+  await expect(page.locator('#scrub-preview-time')).toHaveText(/^2:00 \/ /);
   await range.evaluate(element => element.dispatchEvent(new Event('pointerup', { bubbles: true })));
   await expect(page.locator('#scrub-preview')).toBeHidden();
   await page.locator('#show-subtitles').click();

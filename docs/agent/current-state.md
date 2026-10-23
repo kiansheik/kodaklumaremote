@@ -1,5 +1,25 @@
 # Current state
 
+## Unreleased 0.4.12 / receiver 0.3.1: remote layout, fast Resume, caption language on auto-next
+
+- Remote tab order: player card (title/status + power, seek bar with undo/redo
+  icons and elapsed/duration below, −30s / Play-Pause / Next), volume row (level
+  beside slider; refresh hidden on LUMA), D-pad, bottom row Subtitles /
+  Auto-play switch / More. Status line no longer repeats the time; Choose video
+  shows only when nothing is loaded. Compact mode under 660 px height.
+- Phone `ResolvedSources` (cacheDir `resolved-sources.json`, 30 entries, 6 h)
+  is used by `ConnectionService.resolveCatalogMedia`; a cached source is reused
+  only after a 1-byte Range probe answers 200/206, otherwise a fresh catalog
+  lookup runs. Physical Resume timing not yet measured.
+- Receiver remembers `captionLanguage` (cleared by Subtitles off) and on
+  auto-next/`player.next` queues up to three same-language files (exact code,
+  then base language); the earliest that loads is shown
+  (`PlaybackController.captionCandidates`, unit-tested).
+- Verified: Node 242, browser 159, receiver unit tests; phone release installed
+  via ADB; receiver 0.3.1 deployed to the projector (saved position kept).
+  Not yet physically checked: new layout on the phone, Resume speed, auto-next
+  captions. Projector scrub start delay noted by the user but deferred.
+
 ## Unreleased after 0.4.10: receiver-first cold-boot casting
 
 The receiver APK already requests `BOOT_COMPLETED`, starts a `START_STICKY`
@@ -18,10 +38,13 @@ Validation: Android debug/AndroidTest builds pass; backend 15/15 and service
 18/18 emulator checks pass; the focused handoff suite passes 80/80; and the full
 browser suite passes 158/158, including direct-only cold-boot casting. The full
 Node aggregate was interrupted after it stopped producing output, so no fresh
-aggregate Node count is claimed. No APK was installed on the physical projector
-or phone. A real projector power-cycle still must prove that this firmware sends
-the boot broadcast promptly, keeps the service alive, and exposes port 4191
-before EShare port 8121.
+aggregate Node count is claimed. The current receiver APK was locally rebuilt
+and reinstalled on the physical projector as the same 0.2.3/code 10 version
+(1,185,598 bytes, SHA-256 prefix `fadc21c1efd7`); it returned with a new install
+timestamp and healthy idle status. The phone APK was not installed. A real
+projector power-cycle still must prove that this firmware sends the boot
+broadcast promptly, keeps the service alive, and exposes port 4191 before
+EShare port 8121.
 
 ## Unreleased 0.4.10 / receiver 0.2.3: self-rendered captions and crash fixes
 

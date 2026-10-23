@@ -60,6 +60,9 @@ npm test
 - Browser: 158/158, including casting from a direct-only boot snapshot without
   `luma.launchReceiver`, then enabling Home after native readiness.
 - Debug and fixture Android app/test APKs compile successfully.
+- Requested local projector deploy rebuilt and installed receiver 0.2.3/code 10
+  (1,185,598 bytes, SHA-256 prefix `fadc21c1efd7`). The receiver returned with a
+  new install timestamp and a healthy idle `player.status` response.
 
 ## What failed
 
@@ -77,9 +80,10 @@ npm test
 - Physical projector behavior is not verified. Power-cycle it and measure first
   visible UI, first port-4191 response, first accepted cast and first port-8121
   response. Confirm the foreground service survives the vendor's boot policy.
-- No phone or projector APK was installed, no release was built/published, and
-  no live media was changed. Release 0.4.11 notes are prepared so the guarded
-  release command will not stop at its notes gate.
+- The phone APK was not installed, no public release was published, and no live
+  media was changed. The projector receiver was reinstalled at the same version;
+  release 0.4.11 notes are prepared so the guarded release command will not stop
+  at its notes gate.
 - If the aggregate Node silence recurs, isolate the ten unfinished test files;
   it is not evidence of a product failure, but the aggregate check is incomplete.
 

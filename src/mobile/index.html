@@ -46,31 +46,58 @@
     #message[data-error="true"] { color: #ffc1b3; min-height: 32px; max-height: 32px; }
     main { min-height: 0; overflow: hidden; padding: 4px 16px 12px; }
     .page { height: 100%; min-height: 0; overflow: hidden; }
-    .remote-page { display: grid; grid-template-rows: auto auto auto auto minmax(0, 1fr) auto; gap: 10px; }
-    .now-playing { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px; min-width: 0; min-height: 47px; }
+    /* Priority order: what is playing and where (player card), volume, navigation, then secondary options. */
+    .remote-page { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; gap: 10px; }
+    .player-card { display: grid; gap: 6px; padding: 10px 12px 12px; border: 1px solid #2f4952; border-radius: 18px; background: #152931; }
+    .now-playing { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px; min-width: 0; min-height: 44px; }
     .now-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
-    #show-power { color: #f3b8aa; border-color: #71524e; background: #322a2d; }
+    #choose-video { min-height: 38px; padding: 6px 12px; }
+    #show-power { width: 40px; min-width: 40px; min-height: 40px; padding: 8px; color: #f3b8aa; border-color: #5d4645; background: #2a2629; border-radius: 50%; }
+    #show-power svg { width: 22px; height: 22px; }
     .media-copy { min-width: 0; overflow: hidden; }
-    #media-title { font-size: 1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    #playback-status { color: #a6bec6; font-size: .76rem; margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .playback-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
-    .playback-row button { min-width: 0; padding-left: 8px; padding-right: 8px; }
+    #media-title { font-size: 1.05rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #playback-status { color: #a6bec6; font-size: .76rem; margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .playback-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr) minmax(0, 1fr); gap: 8px; }
+    .playback-row button { display: flex; align-items: center; justify-content: center; gap: 6px; min-width: 0; min-height: 48px; padding: 6px 8px; border-radius: 24px; white-space: nowrap; }
+    .playback-row svg { width: 20px; height: 20px; flex-shrink: 0; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
     #play-toggle { font-size: 1rem; }
-    .seek-row { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto 44px; gap: 8px; align-items: center; }
-    #seek-range { height: 36px; padding: 0; border: 0; accent-color: #b2e9d5; background: transparent; }
-    #seek-time { min-width: 76px; color: #c7e4df; font-size: .72rem; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-    #refresh-playback { padding: 6px; font-size: 1rem; }
-    .scrub-preview { position: absolute; z-index: 3; left: clamp(68px, var(--preview-progress, 0%), calc(100% - 68px)); bottom: calc(100% + 4px); width: 136px; margin: 0; padding: 4px; border: 1px solid #668089; border-radius: 10px; transform: translateX(-50%); background: #09171de8; box-shadow: 0 4px 14px #0009; pointer-events: none; overflow: hidden; }
-    .scrub-preview img { display: block; width: 126px; height: 71px; border-radius: 6px; object-fit: cover; background: #0c1c22; }
-    .scrub-preview figcaption { display: block; padding: 3px 3px 1px; color: #e2f5ef; font-size: .72rem; line-height: 1.1; text-align: center; font-variant-numeric: tabular-nums; }
-    .scrub-preview[data-image="false"] { width: auto; min-width: 58px; padding: 3px 7px; }
+    #play-toggle svg { fill: currentColor; stroke-width: 2.6; }
+    #play-toggle .icon-play, #play-toggle[data-state="paused"] .icon-pause { display: none; }
+    #play-toggle[data-state="paused"] .icon-play { display: inline; stroke-width: 1.2; }
+    #play-toggle .icon-pause { fill: none; }
+    .remote-actions .auto-next { display: flex; align-items: center; justify-content: center; gap: 7px; min-height: 44px; margin: 0; padding: 0 11px 0 9px; border: 1px solid #3b555e; border-radius: 12px; color: #edf5f5; font-size: .8rem; font-weight: 650; cursor: pointer; white-space: nowrap; }
+    input.switch { appearance: none; -webkit-appearance: none; position: relative; flex-shrink: 0; width: 34px; min-width: 34px; height: 20px; margin: 0; padding: 0; border: 0; border-radius: 10px; background: #3b555e; cursor: pointer; transition: background .15s; }
+    input.switch::before { content: ""; position: absolute; top: 3px; left: 3px; width: 14px; height: 14px; border-radius: 50%; background: #c9d8dc; transition: transform .15s; }
+    input.switch:checked { background: #6fc7aa; }
+    input.switch:checked::before { transform: translateX(14px); background: #f2fffa; }
+    input.switch:disabled { opacity: .4; }
+    .seek-row { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 36px 36px; gap: 4px; align-items: start; }
+    .seek-main { min-width: 0; }
+    #seek-range { height: 32px; padding: 0; border: 0; accent-color: #b2e9d5; background: transparent; }
+    .seek-meta { display: flex; justify-content: space-between; margin-top: -4px; padding: 0 2px; color: #a9c6c4; font-size: .72rem; font-variant-numeric: tabular-nums; }
+    #seek-time { color: #d6efe9; }
+    .seek-step { width: 36px; min-width: 36px; min-height: 36px; padding: 6px; color: #c7e4df; }
+    .seek-step svg { width: 20px; height: 20px; }
+    .seek-step:disabled { opacity: .3; }
+    /* While scrubbing, the preview covers the controls below (unusable mid-scrub) at full width. */
+    .scrub-preview { position: absolute; z-index: 5; left: 0; right: 0; top: calc(100% + 8px); margin: 0; padding: 6px; border: 1px solid #668089; border-radius: 12px; background: #09171df2; box-shadow: 0 8px 24px #000b; pointer-events: none; overflow: hidden; }
+    .scrub-preview img { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; border-radius: 8px; object-fit: cover; background: #0c1c22; }
+    .scrub-preview figcaption { display: block; padding: 6px 4px 2px; color: #e2f5ef; font-size: 1.05rem; line-height: 1.2; text-align: center; font-variant-numeric: tabular-nums; }
+    .scrub-preview figcaption::after { content: ""; display: block; height: 3px; margin-top: 6px; border-radius: 2px; background: linear-gradient(90deg, #b2e9d5 var(--preview-progress, 0%), #2b4249 var(--preview-progress, 0%)); }
     .scrub-preview[data-image="false"] img { display: none; }
-    .scrub-preview[data-image="false"] figcaption { padding: 1px; }
-    .volume-row { display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px 50px; gap: 7px; align-items: center; }
+    .seek-track { position: relative; touch-action: none; }
+
+    .seek-track #seek-range { width: 100%; pointer-events: none; }
+    .volume-row { display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px auto; gap: 8px; align-items: center; padding: 0 2px; }
+    .volume-row button { border-radius: 50%; padding: 0; font-size: 1.2rem; }
+    .volume-row:has(#refresh-volume[hidden]) { grid-template-columns: 44px minmax(0, 1fr) 44px; }
     .volume-control { min-width: 0; }
-    .volume-control label { display: flex; justify-content: space-between; margin-bottom: 0; font-size: .72rem; color: #b9d0d2; }
-    #volume-range { height: 38px; padding: 0; border: 0; accent-color: #b2e9d5; background: transparent; }
-    #refresh-volume { font-size: .78rem; text-align: left; padding: 6px 10px; font-weight: 500; }
+    /* The level sits beside the slider; the word stays as the accessible label only. */
+    .volume-control { display: flex; flex-direction: row-reverse; align-items: center; gap: 8px; }
+    .volume-control label { flex-shrink: 0; min-width: 36px; margin-bottom: 0; font-size: 0; text-align: right; }
+    #volume-level { color: #b9d0d2; font-size: .74rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+    #volume-range { flex: 1; height: 36px; padding: 0; border: 0; accent-color: #b2e9d5; background: transparent; }
+    #refresh-volume { font-size: .9rem; border-radius: 12px; }
     #refresh-volume strong { display: block; color: #b0dfd4; font-weight: 600; font-variant-numeric: tabular-nums; }
     .navigation-area { min-height: 0; display: flex; justify-content: center; align-items: center; }
     .tv-remote { max-width: 330px; text-align: center; color: #b8ced1; font-size: .85rem; line-height: 1.5; }
@@ -107,11 +134,12 @@
     #matter-status { color: #bfd9d2; font-size: .86rem; line-height: 1.5; }
     #matter-qr { width: min(190px, 48vw); height: auto; margin: 0 auto; background: white; }
     #matter-share-code { font-size: 1.1rem; letter-spacing: .08em; text-align: center; user-select: all; }
-    .dpad { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: repeat(3, minmax(44px, 1fr)); gap: 8px; width: 100%; max-width: 320px; height: min(100%, 240px); min-height: 148px; }
+    .dpad { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: repeat(3, minmax(40px, 1fr)); gap: 8px; width: 100%; max-width: 320px; height: min(100%, 264px); min-height: 136px; }
     .dpad button { font-size: 1.35rem; padding: 5px; }
     .dpad .icon-button { display: grid; place-items: center; }
-    .remote-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-    .remote-actions button { font-size: .8rem; }
+    .remote-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 8px; }
+    .remote-actions:has(#auto-next-row[hidden]) { grid-template-columns: 1fr 1fr; }
+    .remote-actions button { font-size: .8rem; padding-left: 8px; padding-right: 8px; }
     .dpad .select { background: #365e5b; border-color: #69958b; font-size: .95rem; }
     .bottom-tabs { display: grid; grid-template-columns: repeat(4, 1fr); padding: 7px 12px max(7px, env(safe-area-inset-bottom)); gap: 8px; border-top: 1px solid #2c444d; background: #12232a; }
     .bottom-tabs button { border-color: transparent; background: transparent; color: #aac0c7; font-size: .8rem; border-radius: 11px; }
@@ -182,6 +210,7 @@
     body.keyboard-small #message { margin: 0; min-height: 32px; max-height: 32px; }
     body.keyboard-small main { padding: 8px; }
     body.keyboard-small .form-card h2 { display: none; }
+    @media (max-height: 660px) { .remote-page { gap: 7px; } .player-card { gap: 3px; padding: 7px 10px 9px; } .now-playing { min-height: 40px; } .playback-row button { min-height: 44px; } .dpad { gap: 5px; } }
     @media (max-height: 570px) { .app-header { padding-top: 6px; } .topline { min-height: 24px; } #message { min-height: 16px; max-height: 16px; } .remote-page { gap: 6px; } main { padding: 2px 12px 7px; } .dpad { gap: 5px; max-width: 290px; } .now-playing { min-height: 35px; } .bottom-tabs { padding-top: 4px; padding-bottom: 4px; } .form-card { padding: 12px; } .form-card h2 { margin-bottom: 9px; } .device-steps { margin-bottom: 8px; } .hint.optional { display: none; } .form-card .field + .field { margin-top: 8px; } }
     @media (max-height: 450px) { .sheet { gap: 8px; padding: 12px; } .sheet-panel { gap: 8px; } .choices { gap: 5px; } .choices button { min-height: 44px; padding: 7px 10px; } .menu-grid { gap: 8px; } .menu-grid button { min-height: 52px; } .app-header h1 { font-size: 1rem; } .device-steps button { min-height: 36px; } .form-card h2 { font-size: .95rem; margin-bottom: 7px; } .form-card .hint { display: none; } }
   </style>
@@ -192,12 +221,14 @@
     <main>
       <section id="page-browse" class="page" role="tabpanel" aria-labelledby="tab-browse" hidden><div class="form-card browser-card"><h2>Choose something to watch</h2><button id="show-history" class="quiet" type="button">Library</button><form id="browser-form"><label for="browser-url">Website address</label><div class="browser-address"><input id="browser-url" type="url" autocomplete="off" spellcheck="false" autocapitalize="off"><button class="primary" type="submit">Open</button></div></form><p id="browse-hint" class="hint">Find a video, then tap Cast in the browser toolbar. Your projector plays it.</p><button id="msx-sample" class="quiet" type="button" hidden>Play sample on Philips TV</button><button id="capture-video" class="quiet" type="button">Cast current video</button><button id="cast-selected" class="primary" type="button" hidden>Cast selected video</button></div></section>
       <section id="page-remote" class="page remote-page" role="tabpanel" aria-labelledby="tab-remote" hidden>
-        <div class="now-playing"><div class="media-copy"><h2 id="media-title">Ready to cast</h2><p id="playback-status">Choose a video in Browse.</p></div><div class="now-actions"><button id="choose-video" class="quiet small" type="button">Choose video</button><button id="show-power" class="icon-button" type="button" aria-label="Power off projector" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v9M7 5.7a8 8 0 1 0 10 0"/></svg></button></div></div>
-        <div class="playback-row"><button id="back-30" class="quiet" type="button" disabled aria-label="Back 30 seconds">↶ 30s</button><button id="play-toggle" class="primary" type="button" disabled>Pause</button><button id="next-episode" class="quiet" type="button" disabled>Next episode</button></div>
-        <div class="seek-row"><figure id="scrub-preview" class="scrub-preview" data-image="false" aria-hidden="true" hidden><img id="scrub-preview-image" alt=""><figcaption id="scrub-preview-time">0:00</figcaption></figure><input id="seek-range" type="range" min="0" max="1" value="0" step="1" aria-label="Playback position" disabled><output id="seek-time" for="seek-range">0:00 / 0:00</output><button id="refresh-playback" class="quiet" type="button" aria-label="Refresh playback" disabled>↻</button></div>
+        <div class="player-card">
+          <div class="now-playing"><div class="media-copy"><h2 id="media-title">Ready to cast</h2><p id="playback-status">Choose a video in Browse.</p></div><div class="now-actions"><button id="choose-video" class="quiet small" type="button">Choose video</button><button id="show-power" class="icon-button" type="button" aria-label="Power off projector" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v9M7 5.7a8 8 0 1 0 10 0"/></svg></button></div></div>
+          <div class="seek-row"><figure id="scrub-preview" class="scrub-preview" data-image="false" aria-hidden="true" hidden><img id="scrub-preview-image" alt=""><figcaption id="scrub-preview-time">0:00</figcaption></figure><div class="seek-main"><div id="seek-track" class="seek-track"><input id="seek-range" type="range" min="0" max="1" value="0" step="1" aria-label="Playback position" disabled></div><div class="seek-meta"><output id="seek-time" for="seek-range">0:00</output><span id="seek-duration">0:00</span></div></div><button id="seek-undo" class="quiet seek-step icon-button" type="button" aria-label="Undo seek" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14 4 9l5-5M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg></button><button id="seek-redo" class="quiet seek-step icon-button" type="button" aria-label="Redo seek" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 14 5-5-5-5M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/></svg></button></div>
+          <div class="playback-row"><button id="back-30" class="quiet" type="button" disabled aria-label="Back 30 seconds"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1M3 3.5v4h4"/></svg><span>30s</span></button><button id="play-toggle" class="primary" type="button" data-state="playing" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path class="icon-pause" d="M8 5v14M16 5v14"/><path class="icon-play" d="M7 4.5v15l12.5-7.5z"/></svg><span id="play-label">Pause</span></button><button id="next-episode" class="quiet" type="button" aria-label="Next episode" disabled><span>Next</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5l9 7-9 7zM18.5 5v14"/></svg></button></div>
+        </div>
         <div class="volume-row" role="group" aria-label="Projector volume"><button id="volume-down" type="button" aria-label="Volume down" disabled>−</button><div class="volume-control"><label for="volume-range">Volume <span id="volume-level">—</span></label><input id="volume-range" type="range" min="0" max="1" value="0" step="1" aria-label="Projector volume level" disabled></div><button id="volume-up" type="button" aria-label="Volume up" disabled>+</button><button id="refresh-volume" class="quiet" type="button" aria-label="Refresh volume" disabled>↻</button></div>
         <div class="navigation-area"><div class="dpad" role="group" aria-label="Projector navigation"><button class="icon-button" type="button" data-key="home" aria-label="Home" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 11 9-8 9 8M5.5 9v12h5v-7h3v7h5V9"/></svg></button><button type="button" data-key="up" aria-label="Up" disabled>↑</button><button class="icon-button" type="button" data-key="back" aria-label="Back" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 5-7 7 7 7M3 12h18"/></svg></button><button type="button" data-key="left" aria-label="Left" disabled>←</button><button class="select" type="button" data-key="enter" aria-label="Select" disabled>OK</button><button type="button" data-key="right" aria-label="Right" disabled>→</button><span aria-hidden="true"></span><button type="button" data-key="down" aria-label="Down" disabled>↓</button><span aria-hidden="true"></span></div><div id="tv-remote" class="tv-remote" hidden><svg viewBox="0 0 48 48" aria-hidden="true"><rect x="4" y="8" width="40" height="29" rx="3"/><path d="M15 43h18M24 37v6M19 17l12 6-12 6z"/></svg><p id="tv-remote-hint">Open Media Station X on the TV to connect.</p><button id="show-tv-setup" class="quiet small" type="button">TV connection</button></div></div>
-        <div class="remote-actions"><button id="show-subtitles" class="quiet" type="button" disabled>Subtitles</button><button id="show-more" class="quiet" type="button" disabled>More</button></div>
+        <div class="remote-actions"><button id="show-subtitles" class="quiet" type="button" disabled>Subtitles</button><label id="auto-next-row" class="auto-next" hidden><input id="auto-next" class="switch" type="checkbox" role="switch"><span>Auto-play</span></label><button id="show-more" class="quiet" type="button" disabled>More</button></div>
       </section>
       <section id="page-devices" class="page" role="tabpanel" aria-labelledby="tab-devices">
         <div id="tv-setup-tabs" class="tv-setup-tabs" role="tablist" aria-label="TV setup" hidden><button id="tv-setup-remote" type="button" role="tab" aria-selected="true">TV remote</button><button id="tv-setup-video" type="button" role="tab" aria-selected="false">Video receiver</button></div>

@@ -97,8 +97,13 @@ final class ControlServer {
         return call(method, params, client);
     }
 
+    private static final java.util.Set<String> INTERACTIONS = new java.util.HashSet<>(java.util.Arrays.asList(
+        "player.open", "player.pause", "player.resume", "player.stop", "player.seek", "player.addSubtitle",
+        "player.setSubtitle", "player.setAudioTrack", "player.next"));
+
     private Object call(String method, JSONObject params, String client) throws Exception {
         PlaybackController playback = app.playback;
+        if (INTERACTIONS.contains(method) && !"player.open".equals(method)) ReceiverApp.onMain(() -> { playback.noteInteraction(); return null; });
         switch (method) {
             case "player.open": {
                 MediaRequest media = MediaRequest.parse(params.optJSONObject("media"));
@@ -107,7 +112,18 @@ final class ControlServer {
                 if (hasUrl != hasKey || hasUrl && params.optBoolean("onlyIfInactive")) throw new ApiException("INVALID_INPUT");
                 String currentUrl = hasUrl ? MediaRequest.httpUrl(params.opt("expectedCurrentSourceUrl")) : null;
                 String currentKey = hasKey ? MediaRequest.label(params.opt("expectedCurrentContentKey"), 200) : null;
-                return ReceiverApp.onMain(() -> playback.open(media, params.optBoolean("onlyIfInactive"), currentUrl, currentKey));
+                return ReceiverApp.onMain(() -> { JSONObject opened = playback.open(media, params.optBoolean("onlyIfInactive"), currentUrl, currentKey); playback.noteInteraction(); return opened; });
+            }
+            case "player.next": {
+                if (params.has("expectedContentKey")) ReceiverApp.onMain(() -> { playback.expectContent(params.opt("expectedContentKey")); return null; });
+                ReceiverApp.onMain(() -> { playback.startNext(false); return null; });
+                return accepted();
+            }
+            case "settings.get": return new JSONObject().put("autoNext", playback.autoNext());
+            case "settings.set": {
+                if (!(params.opt("autoNext") instanceof Boolean)) throw new ApiException("INVALID_INPUT");
+                ReceiverApp.onMain(() -> { playback.setAutoNext(params.getBoolean("autoNext")); return null; });
+                return new JSONObject().put("autoNext", params.getBoolean("autoNext"));
             }
             case "player.status": {
                 if (params.has("afterRevision")) {
@@ -215,8 +231,17 @@ final class ControlServer {
                     if (bounds.outWidth <= 0 || bounds.outWidth > 1280 || bounds.outHeight <= 0 || bounds.outHeight > 720) throw new ApiException("INVALID_INPUT");
                     frame = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
                 }
+                if (active && frame == null) {
+                    // Normal path: phones share frames ahead of time, so only positions arrive here.
+                    String key = playback.contentKey();
+                    byte[] stored = key == null ? null : app.thumbnails.nearest(key, (long) position);
+                    if (stored != null) frame = android.graphics.BitmapFactory.decodeByteArray(stored, 0, stored.length);
+                }
                 return new JSONObject().put("shown", app.scrub(active, position, duration, frame));
             }
+            case "thumbs.list": return app.thumbnails.list(thumbKey(params));
+            case "thumbs.get": return app.thumbnails.get(thumbKey(params), params.optJSONArray("positions"));
+            case "thumbs.put": return app.thumbnails.put(thumbKey(params), params.optJSONArray("frames"));
             case "app.diagnostics":
                 return new JSONObject().put("current", app.diagnostics.tail(false, 40)).put("previous", app.diagnostics.tail(true, 40));
             case "app.snapshot": {
@@ -243,6 +268,12 @@ final class ControlServer {
         }
     }
 
+    private static String thumbKey(JSONObject params) throws ApiException {
+        String key = params.optString("contentKey");
+        if (!SyncRecord.KEY.matcher(key).matches()) throw new ApiException("INVALID_INPUT");
+        return key;
+    }
+
     private JSONObject info() throws Exception {
         PackageInfo pkg = app.getPackageManager().getPackageInfo(app.getPackageName(), 0);
         return new JSONObject().put("app", "lumareceiver").put("protocol", PROTOCOL)
@@ -254,7 +285,7 @@ final class ControlServer {
                 .put("abis", new JSONArray(java.util.Arrays.asList(Build.SUPPORTED_ABIS))))
             .put("pairingOpen", app.pairing.activeCode() != null)
             .put("capabilities", new JSONArray(java.util.Arrays.asList("hls", "dash", "progressive", "subtitles.sideload",
-                "tracks.audio", "tracks.text", "status.longpoll", "library.sync", "update.release", "update.dev", "volume", "display.picture", "display.subtitles", "scrub.mirror", "open.atomic")));
+                "tracks.audio", "tracks.text", "status.longpoll", "library.sync", "update.release", "update.dev", "volume", "display.picture", "display.subtitles", "scrub.mirror", "open.atomic", "thumbs.share", "player.next", "autoNext")));
     }
 
     private JSONObject volume() throws Exception {

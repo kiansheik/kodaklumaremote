@@ -484,6 +484,8 @@ public final class MainActivity extends Activity {
             if (method.equals("app.ready")) {
                 JSONObject result = connectionService == null ? new JSONObject() : connectionService.snapshot();
                 result.put("browserUrl", browser.getUrl());
+                try { result.put("seekHistory", new JSONObject(getSharedPreferences("seek-history", MODE_PRIVATE).getString("value", "{}"))); }
+                catch (Exception corrupt) { /* start without checkpoints */ }
                 if (capturedMedia != null) result.put("source", capturedMedia);
                 reply(id, result, null, null);
                 main.post(this::deliverPendingNext);
@@ -492,6 +494,20 @@ public final class MainActivity extends Activity {
                 pendingMatterScan = id;
                 try { startActivityForResult(new Intent(this, ScanMatterActivity.class), SCAN_MATTER); }
                 catch (RuntimeException unavailable) { pendingMatterScan = null; reply(id, null, "CAMERA_DENIED", "Enter the setup code instead."); }
+            } else if (method.equals("app.seekHistory")) {
+                // Seek checkpoints for the remote page, whose WebView has DOM storage off.
+                // Bounded JSON only; nothing here is a credential or media URL.
+                android.content.SharedPreferences store = getSharedPreferences("seek-history", MODE_PRIVATE);
+                if (params.has("value")) {
+                    Object value = params.opt("value");
+                    if (!(value instanceof JSONObject) || value.toString().length() > 32 * 1024) { reply(id, null, "INVALID_REQUEST", "Seek history is too large."); return; }
+                    store.edit().putString("value", value.toString()).apply();
+                    reply(id, new JSONObject().put("saved", true), null, null);
+                } else {
+                    JSONObject saved;
+                    try { saved = new JSONObject(store.getString("value", "{}")); } catch (Exception corrupt) { saved = new JSONObject(); }
+                    reply(id, new JSONObject().put("value", saved), null, null);
+                }
             } else if (method.equals("app.checkUpdates")) {
                 if (updateManager == null) { reply(id, null, "BUSY", "Update checking is unavailable in this test session."); return; }
                 updateManager.checkNow();

@@ -21,6 +21,6 @@ for (const [apk, expected] of [['android/app/build/outputs/apk/debug/app-debug.a
 const { stdout } = await run(adb, ['-s', serial, 'shell', 'am', 'instrument', '-w', '-e', 'mode', 'scrub-preview', `${appPackage}.test/dev.framextv.lumaremote.BackendInstrumentation`], { timeout: 60000, maxBuffer: 32768 });
 process.stdout.write(stdout);
 assert.match(stdout, /INSTRUMENTATION_RESULT: failures=0/u);
-assert.match(stdout, /INSTRUMENTATION_RESULT: passed=7/u);
+assert.match(stdout, /INSTRUMENTATION_RESULT: passed=9/u);
 assert.match(stdout, /INSTRUMENTATION_CODE: -1/u);
-console.log('Scrub previews: 7 ownership, pinned-network policy, cache, timeout, cleanup and latest-wins checks passed.');
+console.log('Scrub previews: 9 ownership, pinned-network policy, cache, timeout, cleanup, latest-wins and background thumbnail strip checks passed.');

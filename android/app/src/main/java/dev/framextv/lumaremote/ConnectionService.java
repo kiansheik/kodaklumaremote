@@ -76,8 +76,8 @@ public final class ConnectionService extends Service {
     private LibraryStore libraryStore;
     private CatalogClient catalogClient;
     private WebContentResolver catalogWebResolver;
-    private ScrubPreviewManager scrubPreviews;
-    private long scrubPreviewBinding;
+    private ResolvedSources resolvedSources;
+    private ThumbnailStrip scrubPreviews;
     private String scrubPreviewSource = "", scrubPreviewContentKey = "";
     private double scrubPreviewDuration;
     private String hydrationSource = "", hydrationContentKey = "", hydrationRevision = "";
@@ -99,11 +99,14 @@ public final class ConnectionService extends Service {
     private volatile long televisionGeneration;
     private String televisionSource = "";
     private SettingsStore settings;
-    private volatile long lastLibrarySync;
+    private volatile long lastLibrarySync, lastThumbnailSync;
+    private volatile String sharedThumbnailKey = "";
+    private final java.util.Set<Long> sharedThumbnails = java.util.Collections.synchronizedSet(new java.util.HashSet<>());
     /** Receiver calls that neither change nor describe playback: no extra poll, no stale marking.
      * receiver.status describes playback, so its failures are observed; it is only exempt from the re-poll. */
     private static final java.util.Set<String> SIDE_CHANNEL = new java.util.HashSet<>(java.util.Arrays.asList(
-        "receiver.configure", "receiver.pairBegin", "receiver.pairComplete", "receiver.scrub", "receiver.display", "receiver.libraryPull", "receiver.libraryPush"));
+        "receiver.configure", "receiver.pairBegin", "receiver.pairComplete", "receiver.scrub", "receiver.display", "receiver.libraryPull", "receiver.libraryPush",
+        "receiver.thumbsList", "receiver.thumbsGet", "receiver.thumbsPut", "receiver.settings"));
     private static final long LIBRARY_SYNC_MS = 60_000;
     private volatile long generation;
     private volatile boolean destroyed;
@@ -165,7 +168,8 @@ public final class ConnectionService extends Service {
         watchHistory.setProgressListener(libraryStore::record);
         catalogClient = new CatalogClient();
         catalogWebResolver = new WebContentResolver(getApplicationContext());
-        scrubPreviews = new ScrubPreviewManager();
+        resolvedSources = new ResolvedSources(getCacheDir());
+        scrubPreviews = new ThumbnailStrip(getCacheDir());
         subtitleDelivery = new SubtitleDelivery(NativeBackend::publicUrl);
         backend = newBackend();
         settings = new SettingsStore(getApplicationContext());
@@ -449,32 +453,68 @@ public final class ConnectionService extends Service {
                     || !expected.equals(media.optString("url")) || !contentKey.equals(content.optString("key"))
                     || !Double.isFinite(position)) throw NativeBackend.fail("SOURCE_CHANGED");
             syncScrubPreviews(all);
-            final long binding = scrubPreviewBinding;
-            if (binding <= 0 || !expected.equals(scrubPreviewSource) || !contentKey.equals(scrubPreviewContentKey)) {
-                throw NativeBackend.fail("SOURCE_CHANGED");
-            }
-            scrubPreviews.request(binding, expected, position, new ScrubPreviewManager.Callback() {
-                @Override public void success(ScrubPreviewManager.Result result) {
-                    main.post(() -> {
-                        if (destroyed || binding != scrubPreviewBinding || !expected.equals(scrubPreviewSource)
-                                || !contentKey.equals(scrubPreviewContentKey)) {
-                            reject(callback, "SOURCE_CHANGED", "The selected video changed."); return;
-                        }
-                        if (callback != null) callback.success(object("available", true, "dataUri", result.dataUri,
-                                "positionSeconds", result.positionSeconds, "intervalSeconds", result.intervalSeconds));
-                    });
+            if (!expected.equals(scrubPreviewSource) || !contentKey.equals(scrubPreviewContentKey)) throw NativeBackend.fail("SOURCE_CHANGED");
+            // Local lookup only: frames are generated in the background since the cast,
+            // and the area being scrubbed is moved to the front of that queue.
+            scrubPreviews.prioritize(position);
+            ThumbnailStrip.Frame frame = scrubPreviews.nearest(expected, position);
+            if (callback == null) return;
+            if (frame == null) callback.success(object("available", false, "pending", !scrubPreviews.unsupported()));
+            else callback.success(object("available", true, "dataUri", "data:image/jpeg;base64," + android.util.Base64.encodeToString(frame.jpeg, android.util.Base64.NO_WRAP),
+                "positionSeconds", frame.positionSeconds, "intervalSeconds", frame.intervalSeconds, "generated", frame.done, "total", frame.total));
+        } catch (NativeBackend.BackendException error) { reject(callback, error.code, error.getMessage()); }
+    }
+    private final java.util.concurrent.ExecutorService previewIo = java.util.concurrent.Executors.newSingleThreadExecutor();
+    private final java.util.concurrent.ExecutorService scrubIo = java.util.concurrent.Executors.newSingleThreadExecutor();
+    private final java.util.concurrent.atomic.AtomicReference<JSONObject> pendingScrub = new java.util.concurrent.atomic.AtomicReference<>();
+    /**
+     * Scrub mirroring bypasses the serialized network queue (where a thumbnail upload
+     * could delay it) and coalesces to the newest position.
+     */
+    private void mirrorScrub(JSONObject args, Callback callback) {
+        try {
+            JSONObject command = NativeBackend.scrubCommand(args);
+            NativeBackend transport = backend;
+            NativeBackend.Endpoint endpoint = transport == null ? null : transport.receiverEndpoint();
+            if (endpoint == null) throw NativeBackend.fail("RECEIVER_CONFIG");
+            if (pendingScrub.getAndSet(command) == null) scrubIo.execute(() -> {
+                JSONObject next;
+                while ((next = pendingScrub.getAndSet(null)) != null) NativeBackend.quickPost(endpoint, "player.scrub", next);
+            });
+            if (callback != null) callback.success(object("accepted", true));
+        } catch (Exception failure) {
+            String code = failure instanceof NativeBackend.BackendException ? ((NativeBackend.BackendException) failure).code : "INVALID_INPUT";
+            reject(callback, code, "Scrub preview unavailable.");
+        }
+    }
+    /** Bulk frames for the page's local cache so sweeps render instantly; disk reads happen off the main thread. */
+    private void requestScrubBatch(JSONObject args, Callback callback) {
+        try {
+            if (!(args.opt("expectedSourceUrl") instanceof String) || !(args.opt("contentKey") instanceof String)
+                    || !(args.opt("around") instanceof Number) || !(args.opt("have") instanceof JSONArray)) throw NativeBackend.fail("INVALID_INPUT");
+            JSONObject all = presentationSnapshot();
+            syncScrubPreviews(all);
+            String expected = NativeBackend.publicUrl(args.opt("expectedSourceUrl")), key = args.optString("contentKey");
+            if (!expected.equals(scrubPreviewSource) || !key.equals(scrubPreviewContentKey)) throw NativeBackend.fail("SOURCE_CHANGED");
+            JSONArray have = args.optJSONArray("have");
+            if (have.length() > 2400) throw NativeBackend.fail("INVALID_INPUT");
+            java.util.Set<Long> known = new java.util.HashSet<>();
+            for (int i = 0; i < have.length(); i++) known.add(have.optLong(i, -1));
+            double around = ((Number) args.opt("around")).doubleValue();
+            int limit = Math.max(1, Math.min(48, args.optInt("limit", 48)));
+            ThumbnailStrip strip = scrubPreviews;
+            previewIo.execute(() -> {
+                JSONArray frames = new JSONArray();
+                java.util.List<Long> positions = strip.positionsNear(expected, around, known, limit);
+                for (long position : positions) {
+                    byte[] jpeg = strip.frameBytes(key, position);
+                    if (jpeg != null) frames.put(object("position", position, "dataUri", "data:image/jpeg;base64," + android.util.Base64.encodeToString(jpeg, android.util.Base64.NO_WRAP)));
                 }
-                @Override public void failure(String code) {
-                    main.post(() -> {
-                        if ("PREVIEW_UNSUPPORTED".equals(code)) {
-                            if (callback != null) callback.success(object("available", false));
-                        } else if ("PREVIEW_SUPERSEDED".equals(code)) {
-                            reject(callback, code, "A newer preview was requested.");
-                        } else reject(callback, "SOURCE_CHANGED", "The selected video changed.");
-                    });
-                }
+                boolean more = strip.positionsNear(expected, around, known, limit + 1).size() > positions.size();
+                main.post(() -> { if (callback != null) callback.success(object("frames", frames, "more", more)); });
             });
         } catch (NativeBackend.BackendException error) { reject(callback, error.code, error.getMessage()); }
+        catch (RejectedExecutionException busy) { reject(callback, "BUSY", "Previews are busy."); }
     }
     private void syncScrubPreviews(JSONObject all) {
         JSONObject remote = all == null ? null : all.optJSONObject("remote"), playback = all == null ? null : all.optJSONObject("playback");
@@ -485,14 +525,12 @@ public final class ConnectionService extends Service {
         }
         String source = media.optString("url"), key = content.optString("key");
         if (source.equals(scrubPreviewSource) && key.equals(scrubPreviewContentKey) && duration == scrubPreviewDuration) return;
-        try {
-            scrubPreviewBinding = scrubPreviews.bind(source, content, duration);
-            scrubPreviewSource = source; scrubPreviewContentKey = key; scrubPreviewDuration = duration;
-        } catch (ScrubPreviewManager.PreviewException unavailable) { clearScrubPreviews(); }
+        scrubPreviews.bind(source, media.optString("contentType"), key, duration);
+        scrubPreviewSource = source; scrubPreviewContentKey = key; scrubPreviewDuration = duration;
     }
     private void clearScrubPreviews() {
-        if (scrubPreviewSource.isEmpty() && scrubPreviewContentKey.isEmpty() && scrubPreviewBinding == 0) return;
-        scrubPreviewBinding = 0; scrubPreviewSource = scrubPreviewContentKey = ""; scrubPreviewDuration = 0;
+        if (scrubPreviewSource.isEmpty() && scrubPreviewContentKey.isEmpty()) return;
+        scrubPreviewSource = scrubPreviewContentKey = ""; scrubPreviewDuration = 0;
         if (scrubPreviews != null) scrubPreviews.clear();
     }
     private void requestCatalog(String method, JSONObject params, java.util.function.BooleanSupplier current, Callback callback) {
@@ -529,6 +567,20 @@ public final class ConnectionService extends Service {
         if (params.has("resume") && !(params.opt("resume") instanceof Boolean)) throw new MsxServer.LibraryException("CATALOG_INVALID_INPUT");
         boolean resume = params.optBoolean("resume", true); params.remove("resume");
         if (!catalogCurrent(current)) throw new MsxServer.LibraryException("CANCELLED");
+        // A title played recently resolves from the on-phone cache when its source still answers.
+        String cacheKey = ResolvedSources.key(params);
+        JSONObject media = resolvedSources.get(cacheKey, System.currentTimeMillis());
+        if (media != null && !ResolvedSources.reachable(media.optString("url"))) { resolvedSources.forget(cacheKey); media = null; }
+        if (media == null) media = resolveFresh(params, current);
+        else Log.i("LumaCatalog", "SOURCE_CACHED");
+        if (!catalogCurrent(current)) throw new MsxServer.LibraryException("CANCELLED");
+        JSONObject content = media.optJSONObject("content");
+        if (content == null) throw new MsxServer.LibraryException("SOURCE_UNSUPPORTED");
+        media = attachWatchMetadata(media, content.optString("watchUrl"));
+        if (!resume) put(media, "resumeSeconds", 0);
+        return media;
+    }
+    private JSONObject resolveFresh(JSONObject params, java.util.function.BooleanSupplier current) throws MsxServer.LibraryException {
         JSONObject media;
         try { media = catalogClient.handle("resolve", params); }
         catch (CatalogClient.CatalogException error) {
@@ -537,11 +589,8 @@ public final class ConnectionService extends Service {
             try { media = catalogWebResolver.resolve(params, () -> catalogCurrent(current)); }
             catch (WebContentResolver.ResolveException failure) { throw new MsxServer.LibraryException(failure.code); }
         }
-        if (!catalogCurrent(current)) throw new MsxServer.LibraryException("CANCELLED");
         JSONObject content = media.optJSONObject("content");
-        if (content == null) throw new MsxServer.LibraryException("SOURCE_UNSUPPORTED");
-        media = attachWatchMetadata(media, content.optString("watchUrl"));
-        if (!resume) put(media, "resumeSeconds", 0);
+        if (content != null) resolvedSources.put(content.optString("key", null), media, System.currentTimeMillis());
         return media;
     }
     public void restoreReceivers() {
@@ -630,6 +679,8 @@ public final class ConnectionService extends Service {
             if ("watch.library".equals(method) || "watch.libraryDetails".equals(method) || "watch.nextEpisode".equals(method)) { requestLibrary(method, args, callback); return; }
             if (method != null && method.startsWith("catalog.")) { requestCatalog(method, args, callback); return; }
             if ("preview.frame".equals(method)) { requestScrubPreview(args, callback); return; }
+            if ("preview.batch".equals(method)) { requestScrubBatch(args, callback); return; }
+            if ("receiver.scrub".equals(method)) { mirrorScrub(args, callback); return; }
             if ("device.disconnect".equals(method)) { disconnect(callback); return; }
             if ("receiver.prepareSubtitle".equals(method) || "receiver.subtitleDelivery".equals(method)) {
                 requestSubtitle(method, args, callback); return;
@@ -1965,7 +2016,8 @@ public final class ConnectionService extends Service {
                         JSONObject current = work.transport.handle("receiver.status", new JSONObject());
                         synchronized (stateLock) { if (!work.current()) return; put(state, "playback", current); }
                         adoptObservedPlayback(current);
-                        if (lastLibrarySync == 0 || SystemClock.elapsedRealtime() - lastLibrarySync >= LIBRARY_SYNC_MS) syncLibrary(work);
+                        // Show fresh playback (and enable controls) before any background syncing.
+                        work.post(this::publish);
                     } catch (NativeBackend.BackendException failure) {
                         synchronized (stateLock) { if (!work.current()) return; observeReceiverFailure(failure); }
                     }
@@ -1980,6 +2032,13 @@ public final class ConnectionService extends Service {
                     work.post(() -> lastHeartbeat = now);
                 }
                 synchronized (stateLock) { if (!work.current()) return; put(state, "connection", work.transport.connectionSnapshot()); }
+                work.post(this::publish);
+                if (configured() && work.current()) {
+                    try {
+                        if (lastLibrarySync == 0 || SystemClock.elapsedRealtime() - lastLibrarySync >= LIBRARY_SYNC_MS) syncLibrary(work);
+                        syncThumbnails(work);
+                    } catch (RuntimeException ignored) { /* background sync never blocks controls */ }
+                }
             } finally {
                 work.post(() -> { pollQueued = false; if (!needsReceiverPolling()) demote(); publish(); schedulePoll(POLL_MS); });
             }
@@ -2035,6 +2094,57 @@ public final class ConnectionService extends Service {
             }
         } catch (NativeBackend.BackendException | RuntimeException failure) {
             android.util.Log.i("LumaLibrarySync", failure instanceof NativeBackend.BackendException ? ((NativeBackend.BackendException) failure).code : "SYNC_FAILED");
+        }
+    }
+    /**
+     * Shares scrub thumbnails through the projector: frames another phone already
+     * generated for this episode are downloaded (so this phone skips decoding them),
+     * and frames this phone generated are uploaded for the others.
+     */
+    private void syncThumbnails(Work work) {
+        String key = scrubPreviewContentKey;
+        if (key == null || key.isEmpty() || scrubPreviews == null) return;
+        if (!key.equals(sharedThumbnailKey)) { sharedThumbnailKey = key; sharedThumbnails.clear(); lastThumbnailSync = 0; }
+        long now = SystemClock.elapsedRealtime();
+        if (lastThumbnailSync != 0 && now - lastThumbnailSync < 5_000) return;
+        lastThumbnailSync = now;
+        try {
+            JSONArray remote = work.transport.handle("receiver.thumbsList", object("contentKey", key)).optJSONArray("positions");
+            java.util.Set<Long> local = new java.util.HashSet<>(scrubPreviews.positions(key));
+            JSONArray wanted = new JSONArray();
+            for (int i = 0; remote != null && i < remote.length(); i++) {
+                long position = remote.optLong(i, -1);
+                if (position < 0) continue;
+                sharedThumbnails.add(position);
+                if (!local.contains(position) && wanted.length() < 40) wanted.put(position);
+            }
+            for (int start = 0; start < wanted.length() && work.current(); start += 40) {
+                JSONArray batch = new JSONArray();
+                for (int i = start; i < Math.min(wanted.length(), start + 40); i++) batch.put(wanted.get(i));
+                JSONArray frames = work.transport.handle("receiver.thumbsGet", object("contentKey", key, "positions", batch)).optJSONArray("frames");
+                for (int i = 0; frames != null && i < frames.length(); i++) {
+                    JSONObject frame = frames.optJSONObject(i);
+                    if (frame == null) continue;
+                    try { scrubPreviews.accept(key, frame.optLong("position", -1), android.util.Base64.decode(frame.optString("image"), android.util.Base64.DEFAULT)); }
+                    catch (IllegalArgumentException invalid) { /* skip one bad frame */ }
+                }
+            }
+            JSONArray upload = new JSONArray();
+            for (long position : scrubPreviews.positions(key)) {
+                if (upload.length() >= 40) break;
+                if (sharedThumbnails.contains(position)) continue;
+                byte[] jpeg = scrubPreviews.frameBytes(key, position);
+                if (jpeg == null) continue;
+                upload.put(object("position", position, "image", android.util.Base64.encodeToString(jpeg, android.util.Base64.NO_WRAP)));
+            }
+            for (int start = 0; start < upload.length() && work.current(); start += 20) {
+                JSONArray batch = new JSONArray();
+                for (int i = start; i < Math.min(upload.length(), start + 20); i++) batch.put(upload.get(i));
+                work.transport.handle("receiver.thumbsPut", object("contentKey", key, "frames", batch));
+                for (int i = 0; i < batch.length(); i++) sharedThumbnails.add(batch.getJSONObject(i).getLong("position"));
+            }
+        } catch (NativeBackend.BackendException | org.json.JSONException failure) {
+            android.util.Log.i("LumaThumbnails", "SHARE_FAILED");
         }
     }
     private void applyPulled(JSONObject pulled) {
@@ -2240,6 +2350,8 @@ public final class ConnectionService extends Service {
         cancelSystemNext();
         clearScrubPreviews();
         if (scrubPreviews != null) scrubPreviews.close();
+        previewIo.shutdownNow();
+        scrubIo.shutdownNow();
         if (watchHistory != null) watchHistory.close();
         if (libraryStore != null) libraryStore.close();
         libraryReads.shutdownNow();

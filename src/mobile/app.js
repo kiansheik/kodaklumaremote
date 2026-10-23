@@ -125,6 +125,56 @@ let volumeTimer = null;
 let volumeFlight = false;
 let scrubPosition = null;
 let scrubPreviewTimer = null;
+let scrubPreviewInFlight = false, scrubPreviewWanted = null, scrubPreviewShown = null;
+// Frames already received for the current item, so fast sweeps render locally at once.
+const scrubFrameCache = new Map();
+let scrubFrameCacheKey = null;
+function cacheScrubFrame(context, position, dataUri) {
+  const key = `${context.source}\n${context.contentKey}`;
+  if (key !== scrubFrameCacheKey) { scrubFrameCache.clear(); scrubFrameCacheKey = key; }
+  scrubFrameCache.delete(position);
+  scrubFrameCache.set(position, dataUri);
+  if (scrubFrameCache.size > 600) scrubFrameCache.delete(scrubFrameCache.keys().next().value);
+}
+// Pulls generated frames into the page in bulk (nearest to {@code around} first),
+// so a sweep can show every frame that exists without a round trip per position.
+let scrubBatchInFlight = false, scrubBatchTimer = null;
+function warmScrubFrames(around, again = true) {
+  const context = currentScrubPreviewContext();
+  if (!context || scrubBatchInFlight || !state.native) return;
+  const key = `${context.source}\n${context.contentKey}`;
+  if (key !== scrubFrameCacheKey) { scrubFrameCache.clear(); scrubFrameCacheKey = key; }
+  scrubBatchInFlight = true;
+  void rpc('preview.batch', { expectedSourceUrl: context.source, contentKey: context.contentKey, around: Math.max(0, Math.floor(around)), have: [...scrubFrameCache.keys()], limit: 48 }, { timeoutMs: 5000 })
+    .then(result => {
+      for (const frame of Array.isArray(result?.frames) ? result.frames : []) {
+        const dataUri = scrubPreviewDataUri(frame?.dataUri);
+        if (dataUri && Number.isFinite(frame.position)) cacheScrubFrame(context, frame.position, dataUri);
+      }
+      if (scrubPreviewVisible && Number.isFinite(scrubPosition)) {
+        const local = nearestCachedFrame(context, scrubPosition);
+        if (local) renderScrubPreview(scrubPosition, local.dataUri, local.position);
+      }
+      // Keep pulling while there is more and the viewer is scrubbing.
+      if (again && result?.more && scrubPreviewVisible) setTimeout(() => warmScrubFrames(scrubPosition ?? around), 0);
+    })
+    .catch(() => {})
+    .finally(() => { scrubBatchInFlight = false; });
+}
+function scheduleScrubWarmup() {
+  clearTimeout(scrubBatchTimer);
+  scrubBatchTimer = setTimeout(() => {
+    const playback = receiver().playback;
+    if (state.page === 'remote' || !$('#page-remote').hidden) warmScrubFrames(playback?.positionSeconds ?? 0, false);
+    scheduleScrubWarmup();
+  }, 3000);
+}
+function nearestCachedFrame(context, seconds) {
+  if (!context || `${context.source}\n${context.contentKey}` !== scrubFrameCacheKey) return null;
+  let best = null;
+  for (const [position, dataUri] of scrubFrameCache) if (!best || Math.abs(position - seconds) < Math.abs(best.position - seconds)) best = { position, dataUri };
+  return best;
+}
 let scrubPreviewSerial = 0;
 let scrubPreviewVisible = false;
 let scrubPreviewContext = null;
@@ -133,7 +183,10 @@ let historyController = null;
 let libraryItems = [], libraryDetail = null, librarySelected = null, libraryNext = null;
 let libraryLoading = false, libraryOffset = 0, libraryLimit = 50, libraryHasMore = false, libraryQuery = '';
 const VOLUME_COOLDOWN_MS = 2000;
-const SCRUB_PREVIEW_DELAY_MS = 140;
+// Frames are local lookups now; only coalesce bursts within one display frame.
+const SCRUB_PREVIEW_DELAY_MS = 16;
+const SEEK_HISTORY_LIMIT = 20;
+const fineScrub = { active: false, pointer: null, lastX: 0, lastTime: 0, lastFast: 0, value: 0, gain: 1, from: null };
 const MAX_SCRUB_PREVIEW_BYTES = 128 * 1024;
 
 function contentDescriptor(value) {
@@ -192,6 +245,8 @@ function mirrorScrub(update) {
 }
 function clearScrubPreview() {
   mirrorScrub({ active: false });
+  scrubPreviewWanted = null;
+  scrubPreviewShown = null;
   clearTimeout(scrubPreviewTimer);
   scrubPreviewTimer = null;
   scrubPreviewSerial++;
@@ -203,43 +258,68 @@ function clearScrubPreview() {
   preview.removeAttribute('data-position');
   $('#scrub-preview-image').removeAttribute('src');
 }
-function renderScrubPreview(position, dataUri = null, framePosition = null) {
+/** Updates the time/progress for {@code position}; a new frame replaces the image, otherwise the last one stays. */
+function renderScrubPreview(position, dataUri = undefined, framePosition = null) {
   const duration = receiver().playback?.durationSeconds;
   if (!scrubPreviewVisible || !Number.isFinite(position) || !(duration > 0)) return;
   const seconds = Math.max(0, Math.min(Math.floor(duration), Math.floor(position)));
   const preview = $('#scrub-preview');
   preview.hidden = false;
   preview.style.setProperty('--preview-progress', `${Math.max(0, Math.min(100, seconds / duration * 100))}%`);
-  $('#scrub-preview-time').textContent = clock(seconds);
-  const image = scrubPreviewDataUri(dataUri);
-  preview.dataset.image = String(Boolean(image));
-  if (Number.isFinite(framePosition)) preview.dataset.position = String(Math.max(0, Math.floor(framePosition)));
-  else preview.removeAttribute('data-position');
-  if (image) $('#scrub-preview-image').src = image;
-  else $('#scrub-preview-image').removeAttribute('src');
-  mirrorScrub({ active: true, positionSeconds: seconds, durationSeconds: duration, ...(image?.startsWith('data:image/jpeg;') ? { image } : {}) });
+  $('#scrub-preview-time').textContent = `${clock(seconds)} / ${clock(duration)}${fineScrub.active && fineScrub.gain < 1 ? ' · fine' : ''}`;
+  const image = dataUri === undefined ? undefined : scrubPreviewDataUri(dataUri);
+  let fresh = null;
+  if (image) {
+    if (image !== scrubPreviewShown) { $('#scrub-preview-image').src = image; scrubPreviewShown = image; fresh = image; }
+    preview.dataset.image = 'true';
+    if (Number.isFinite(framePosition)) preview.dataset.position = String(Math.max(0, Math.floor(framePosition)));
+  } else if (!scrubPreviewShown) {
+    preview.dataset.image = 'false';
+    preview.removeAttribute('data-position');
+  }
+  // Positions only: the projector draws frames phones have already shared with it.
+  void fresh;
+  mirrorScrub({ active: true, positionSeconds: seconds, durationSeconds: duration });
 }
 function requestScrubPreview(position) {
   const duration = receiver().playback?.durationSeconds;
   if (!Number.isFinite(position) || !(duration > 0)) { clearScrubPreview(); return; }
   const seconds = Math.max(0, Math.min(Math.floor(duration), Math.floor(position)));
   clearTimeout(scrubPreviewTimer);
-  const serial = ++scrubPreviewSerial;
   scrubPreviewVisible = true;
   scrubPreviewContext = currentScrubPreviewContext();
-  renderScrubPreview(seconds);
+  const cached = nearestCachedFrame(scrubPreviewContext, seconds);
+  if (cached) renderScrubPreview(seconds, cached.dataUri, cached.position); else renderScrubPreview(seconds);
   if (!scrubPreviewContext) return;
-  const expected = { ...scrubPreviewContext };
-  scrubPreviewTimer = setTimeout(() => {
-    scrubPreviewTimer = null;
-    void rpc('preview.frame', { expectedSourceUrl: expected.source, contentKey: expected.contentKey, position: seconds }, { timeoutMs: 8000 })
-      .then(result => {
-        if (serial !== scrubPreviewSerial || !scrubPreviewVisible || !sameScrubPreviewContext(expected)) return;
-        const dataUri = result?.available === false ? null : scrubPreviewDataUri(result?.dataUri);
-        renderScrubPreview(seconds, dataUri, Number.isFinite(result?.positionSeconds) ? result.positionSeconds : null);
-      })
-      .catch(() => { /* A missing preview never disables or reports failure for seeking. */ });
-  }, SCRUB_PREVIEW_DELAY_MS);
+  scrubPreviewWanted = seconds;
+  scrubPreviewTimer = setTimeout(pumpScrubPreview, SCRUB_PREVIEW_DELAY_MS);
+}
+/** At most one lookup in flight, always for the latest wanted position; every arriving frame is shown. */
+function pumpScrubPreview() {
+  if (scrubPreviewInFlight || scrubPreviewWanted == null || !scrubPreviewVisible || !scrubPreviewContext) return;
+  const seconds = scrubPreviewWanted, expected = { ...scrubPreviewContext }, serial = scrubPreviewSerial;
+  scrubPreviewWanted = null;
+  scrubPreviewInFlight = true;
+  void rpc('preview.frame', { expectedSourceUrl: expected.source, contentKey: expected.contentKey, position: seconds }, { timeoutMs: 4000 })
+    .then(result => {
+      if (serial !== scrubPreviewSerial || !scrubPreviewVisible || !sameScrubPreviewContext(expected)) return;
+      const dataUri = result?.available === false ? null : scrubPreviewDataUri(result?.dataUri);
+      if (dataUri && Number.isFinite(result?.positionSeconds)) cacheScrubFrame(expected, result.positionSeconds, dataUri);
+      const current = Number.isFinite(scrubPosition) ? scrubPosition : seconds;
+      const local = nearestCachedFrame(expected, current);
+      // Show whichever known frame is nearest to where the finger is now.
+      if (local && (!dataUri || Math.abs(local.position - current) < Math.abs(result.positionSeconds - current))) {
+        renderScrubPreview(current, local.dataUri, local.position);
+      } else renderScrubPreview(current, dataUri, Number.isFinite(result?.positionSeconds) ? result.positionSeconds : null);
+      // Frames keep generating in the background; while resting on an uncovered spot, look again.
+      const interval = Number.isFinite(result?.intervalSeconds) ? result.intervalSeconds : 10;
+      const far = !dataUri ? result?.pending === true : Math.abs(result.positionSeconds - seconds) > interval;
+      if (far && scrubPreviewWanted == null) scrubPreviewTimer = setTimeout(() => {
+        if (serial === scrubPreviewSerial && scrubPreviewVisible && scrubPreviewWanted == null) { scrubPreviewWanted = Math.floor(current); pumpScrubPreview(); }
+      }, 400);
+    })
+    .catch(() => { /* A missing preview never disables or reports failure for seeking. */ })
+    .finally(() => { scrubPreviewInFlight = false; pumpScrubPreview(); });
 }
 async function resumeMedia(media, target, signal) {
   const seconds = mediaMetadata(media).resumeSeconds || 0;
@@ -314,24 +394,30 @@ function matterState(value) {
 function msxParams(extra = {}) { return state.philips.activeMedia ? { ...extra, expectedSourceUrl: state.philips.activeMedia.url } : extra; }
 function renderRemote() {
   const remote = receiver();
-  $('#media-title').textContent = remote.activeMedia ? title(remote.activeMedia.title) : remote.playback?.active ? 'Now playing' : 'Ready to cast';
+  $('#media-title').textContent = remote.activeMedia ? title(remote.activeMedia.title) : remote.playback?.active ? 'Now playing' : remote.playback?.ended && remote.playback?.content?.title ? title(remote.playback.content.title) : 'Ready to cast';
   const snapshot = remote.playback;
   if (!snapshot?.active || snapshot.canSeek === false || !(snapshot.durationSeconds > 0)) clearScrubPreview();
   if (!snapshot) $('#playback-status').textContent = 'Choose a video in Browse.';
-  else if (!snapshot.active) $('#playback-status').textContent = 'No video playing.';
+  else if (!snapshot.active) $('#playback-status').textContent = snapshot.ended && snapshot.content ? (snapshot.upNext ? 'Finished · next episode starts in a moment' : snapshot.content.kind === 'tv' ? 'Finished · Next episode is ready' : 'Finished') : 'No video playing.';
   else {
     const label = typeof snapshot.playing === 'boolean' ? (snapshot.playing ? 'Playing' : 'Paused') : 'Video active';
-    const timing = Number.isFinite(snapshot.positionSeconds) && Number.isFinite(snapshot.durationSeconds)
-      ? ` · ${clock(snapshot.positionSeconds)} / ${clock(snapshot.durationSeconds)}` : '';
-    $('#playback-status').textContent = label + timing;
+    // The seek row shows the time; without a seekable duration the status line carries it.
+    const timing = Number.isFinite(snapshot.positionSeconds) && !(snapshot.durationSeconds > 0) ? ` · ${clock(snapshot.positionSeconds)}` : '';
+    // After auto-play, say where a person last actually was (they may have fallen asleep).
+    const last = snapshot.lastInteraction;
+    const asleep = snapshot.autoplayed && last?.content?.key && last.content.key !== snapshot.content?.key
+      ? ` · auto-played (you were on ${title(last.content.title).replace(/^.* · /, '')} at ${clock(last.positionSeconds || 0)})` : snapshot.autoplayed ? ' · auto-played' : '';
+    $('#playback-status').textContent = label + timing + asleep;
   }
-  $('#play-toggle').textContent = snapshot?.playing === false ? 'Resume' : 'Pause';
+  $('#play-label').textContent = snapshot?.playing === false ? 'Resume' : 'Pause';
+  $('#play-toggle').dataset.state = snapshot?.playing === false ? 'paused' : 'playing';
   const duration = Number.isFinite(snapshot?.durationSeconds) && snapshot.durationSeconds > 0 ? Math.floor(snapshot.durationSeconds) : 0;
   const observed = Number.isFinite(snapshot?.positionSeconds) ? Math.max(0, Math.min(duration || snapshot.positionSeconds, Math.floor(snapshot.positionSeconds))) : 0;
   const position = scrubPosition == null ? observed : Math.max(0, Math.min(duration || scrubPosition, scrubPosition));
   $('#seek-range').max = String(Math.max(1, duration));
   $('#seek-range').value = String(position);
-  $('#seek-time').textContent = `${clock(position)} / ${clock(duration)}`;
+  $('#seek-time').textContent = clock(position);
+  $('#seek-duration').textContent = clock(duration);
   const value = remoteVolume();
   $('#volume-level').textContent = value ? state.target === 'philips' ? `${Math.round(value.current / value.max * 100)}%` : `${value.current} / ${value.max}` : '—';
   $('#volume-range').max = String(value?.max || 1);
@@ -602,11 +688,24 @@ document.addEventListener('focusin', viewport);
 document.addEventListener('focusout', () => requestAnimationFrame(viewport));
 viewport();
 
+// Without a projector connection and receiver pairing the LUMA remote cannot work,
+// so the Remote tab shows the connect view in its place and swaps back once ready.
+let remoteRedirected = false;
+function lumaRemoteReady() { return state.connected && state.configured; }
 function page(name) {
+  let shown = name;
+  remoteRedirected = false;
+  if (name === 'remote' && state.target !== 'philips' && !lumaRemoteReady()) {
+    shown = 'devices'; remoteRedirected = true;
+    deviceStep(state.connected ? 'pair' : 'receiver');
+  }
   for (const item of ['browse', 'remote', 'devices']) {
-    $(`#page-${item}`).hidden = item !== name;
+    $(`#page-${item}`).hidden = item !== shown;
     $(`#tab-${item}`).setAttribute('aria-selected', String(item === name));
   }
+}
+function syncRemoteRedirect() {
+  if (remoteRedirected && (state.target === 'philips' || lumaRemoteReady()) && !state.handoff) page('remote');
 }
 function deviceStep(name) {
   $('#receiver-panel').hidden = name !== 'receiver';
@@ -650,6 +749,7 @@ function sheet(name) {
   renderControls();
 }
 function renderControls() {
+  syncRemoteRedirect();
   if (pendingVolume && pendingVolume.key !== volumeContext()?.key) clearPendingVolume();
   const free = state.native && !state.busy && !state.handoff;
   const tv = state.target === 'philips';
@@ -784,6 +884,8 @@ function renderControls() {
   $('#pair-show').disabled = !projector;
   for (const input of $('#pair-form').querySelectorAll('input')) input.disabled = !free;
   for (const button of document.querySelectorAll('[data-key]')) { button.disabled = !navigation; if (button.closest('.topline')) button.style.visibility = tv && !matter.capabilities.navigation ? 'hidden' : ''; }
+  // LUMA status polling keeps volume current; Philips may need a manual refresh.
+  $('#refresh-volume').hidden = !tv;
   $('#refresh-volume').disabled = !(tv ? player || tvRemote : luma);
   const displayedVolume = remoteVolume();
   for (const id of ['volume-range', 'volume-down', 'volume-up']) $(`#${id}`).disabled = !(tv ? hardwareVolume || player : luma) || !displayedVolume;
@@ -814,8 +916,12 @@ function renderControls() {
   $('#play-toggle').disabled = !active;
   const canSeek = active && !!remote.playback?.durationSeconds && remote.playback?.canSeek !== false;
   $('#back-30').disabled = !canSeek || (remote.playback?.positionSeconds || 0) <= 0;
-  $('#next-episode').disabled = !active || !remote.nextEpisode;
-  $('#refresh-playback').disabled = !player;
+  // On LUMA the receiver finds and opens the next episode itself, even after one has ended.
+  const lumaEpisode = !tv && state.configured && remote.playback?.content?.kind === 'tv';
+  $('#next-episode').disabled = tv ? !active || !remote.nextEpisode : !free || !lumaEpisode;
+  $('#auto-next-row').hidden = tv || !state.configured;
+  $('#auto-next').disabled = !free;
+  if (!tv && typeof remote.playback?.autoNext === 'boolean') $('#auto-next').checked = remote.playback.autoNext;
   $('#show-subtitles').disabled = !active;
   $('#show-more').disabled = !free || (tv ? !tvConnected() : !state.connected && !state.configured);
   $('#show-tv-inputs').hidden = !tv || !matter.capabilities.inputs;
@@ -828,6 +934,7 @@ function renderControls() {
   $('#turn-on-tv').disabled = !free;
   $('#stop-video').disabled = !active;
   $('#seek-range').disabled = !canSeek;
+  renderSeekHistory();
   $('#remote-text').disabled = !luma;
   $('#send-text').disabled = !luma || !$('#remote-text').value.trim();
   $('#clear-text').disabled = !free || !$('#remote-text').value;
@@ -843,6 +950,8 @@ function renderControls() {
   renderLibraryControls();
   $('#choose-video').textContent = tv && !remote.connected ? 'Open TV receiver' : 'Choose video';
   $('#choose-video').disabled = tv && !remote.connected ? !free : !state.native;
+  // Browse and Library are one tap away in the tab bar; only offer this when nothing is loaded.
+  $('#choose-video').hidden = !(tv && !remote.connected) && !!(remote.playback?.active || remote.playback?.ended && remote.playback?.content);
   $('#cast-selected').hidden = !state.pendingMedia;
   $('#cast-selected').disabled = !free || state.pendingTarget !== state.target || (tv && remote.openUncertain === true);
   $('#cancel-handoff').hidden = !state.handoff;
@@ -1148,7 +1257,7 @@ async function startCasting() {
 }
 async function startMsxCasting() {
   if (state.target !== 'philips') { message('Select Philips to continue casting this video.', true); return; }
-  if (state.philips.openUncertain) { message('Refresh playback while the TV finishes the previous request.'); return; }
+  if (state.philips.openUncertain) { message('Wait while the TV finishes the previous request.'); return; }
   if (!state.philips.connected) { page('devices'); message('Connect your TV receiver to start this video.'); return; }
   const selected = state.pendingMedia;
   const generation = state.sourceGeneration;
@@ -1208,7 +1317,7 @@ async function startMsxCasting() {
       // A delivered command may finish after the phone's timeout. Do not offer a
       // second Open while its result is unknown; refresh observes the first one.
       state.philips.openUncertain = uncertain && (!result || Boolean(result.pendingCommand));
-      const text = state.philips.openUncertain ? 'The TV is still checking this video. Refresh playback before trying again.' : error.message;
+      const text = state.philips.openUncertain ? 'The TV is still checking this video. Wait a moment before trying again.' : error.message;
       message(text, error.code !== 'CANCELLED');
       $('#handoff-label').textContent = text;
       if (state.philips.openUncertain) { closeSheet(); page('remote'); }
@@ -2066,17 +2175,29 @@ $('#play-toggle').addEventListener('click', () => {
 });
 async function seekTo(position) {
   const remote = receiver(), duration = remote.playback?.durationSeconds;
-  if (!Number.isFinite(position) || !Number.isFinite(duration) || duration <= 0) return;
+  if (!Number.isFinite(position) || !Number.isFinite(duration) || duration <= 0) return false;
   const seconds = Math.max(0, Math.min(Math.floor(duration), Math.floor(position)));
   scrubPosition = seconds; renderRemote();
-  if (state.target === 'philips') await command('msx.seek', msxParams({ seconds }), 'Seek requested. Check playback on the TV.', msxState);
-  else await command('receiver.seek', remoteParams({ position: seconds }), 'Seek requested. Check playback on the projector.', async () => playback(await rpc('receiver.status', remoteParams())));
+  const accepted = state.target === 'philips'
+    ? await command('msx.seek', msxParams({ seconds }), 'Seek requested. Check playback on the TV.', msxState)
+    : await command('receiver.seek', remoteParams({ position: seconds }), 'Seek requested. Check playback on the projector.', async () => playback(await rpc('receiver.status', remoteParams())));
   scrubPosition = null;
   renderControls();
+  return accepted;
 }
 $('#back-30').addEventListener('click', () => void seekTo(Math.max(0, (receiver().playback?.positionSeconds || 0) - 30)));
-$('#next-episode').addEventListener('click', () => void playNextEpisode());
-$('#refresh-playback').addEventListener('click', () => state.target === 'philips' ? command('msx.status', {}, 'Playback refreshed.', msxState) : command('receiver.status', remoteParams(), 'Playback refreshed.', playback));
+$('#next-episode').addEventListener('click', () => {
+  if (state.target === 'philips') { void playNextEpisode(); return; }
+  const key = state.playback?.content?.key;
+  void command('receiver.next', key ? { expectedContentKey: key } : {}, 'Loading the next episode on the projector…');
+});
+$('#auto-next').addEventListener('change', async () => {
+  const autoNext = $('#auto-next').checked;
+  // Optimistic, so re-rendering from the last status does not undo the tap.
+  if (state.playback) state.playback.autoNext = autoNext;
+  const saved = await command('receiver.settings', { autoNext }, autoNext ? 'Next episodes will play automatically.' : 'Auto-play is off.');
+  if (!saved && state.playback) { state.playback.autoNext = !autoNext; renderControls(); }
+});
 $('#refresh-volume').addEventListener('click', () => state.target === 'philips' ? state.matter.connected ? command('matter.status', {}, 'Volume refreshed.', matterState) : command('msx.status', {}, 'Volume refreshed.', msxState) : command('luma.status', {}, 'Volume refreshed.', volume));
 function setVolume(value) {
   const currentVolume = remoteVolume();
@@ -2192,6 +2313,125 @@ $('#text-form').addEventListener('submit', async event => {
   if (await command('luma.text', { text }, 'Text sent. Check the selected field on the projector.')) $('#remote-text').value = '';
   renderControls();
 });
+// Variable-speed scrubbing: fast movement is 1:1 with the bar so the whole film
+// is reachable at any time; slower movement progressively shrinks each step
+// (down to 1/20) for precise seeking around the current spot.
+// Seek checkpoints: each scrub records where the viewer was. Undo jumps back
+// and remembers where it jumped from, so Redo can return (and an accidental
+// Undo is recoverable). Kept per video across app restarts (native store).
+function seekHistoryKey() {
+  const media = receiver().activeMedia;
+  return media?.content?.key || media?.url || null;
+}
+// The remote WebView has no localStorage; checkpoints live here and are written
+// through to the app's native store; the saved copy arrives with app.ready.
+let seekHistoryStore = {};
+function loadSeekHistory(saved) {
+  if (saved && typeof saved === 'object' && !Array.isArray(saved)) { seekHistoryStore = { ...saved, ...seekHistoryStore }; renderSeekHistory(); }
+}
+function readSeekHistory() {
+  const key = seekHistoryKey();
+  const all = seekHistoryStore;
+  const entry = key && all[key];
+  const clean = list => Array.isArray(list) ? list.filter(Number.isFinite).slice(-SEEK_HISTORY_LIMIT) : [];
+  return { key, all, back: clean(entry?.back), forward: clean(entry?.forward) };
+}
+function writeSeekHistory(history) {
+  if (!history.key) return;
+  history.all[history.key] = { back: history.back.slice(-SEEK_HISTORY_LIMIT), forward: history.forward.slice(-SEEK_HISTORY_LIMIT), at: Date.now() };
+  // Keep only the 30 most recent videos.
+  const keys = Object.keys(history.all).sort((a, b) => (history.all[b].at || 0) - (history.all[a].at || 0));
+  for (const stale of keys.slice(30)) delete history.all[stale];
+  seekHistoryStore = history.all;
+  void rpc('app.seekHistory', { value: history.all }, { timeoutMs: 3000 }).catch(() => { /* history is a convenience */ });
+  renderSeekHistory(history);
+}
+function renderSeekHistory(history = readSeekHistory()) {
+  const usable = !$('#seek-range').disabled && !seekHistoryBusy;
+  $('#seek-undo').disabled = !usable || !history.back.length;
+  $('#seek-redo').disabled = !usable || !history.forward.length;
+}
+function recordSeekCheckpoint(from) {
+  const history = readSeekHistory();
+  history.back.push(Math.max(0, Math.floor(from)));
+  history.forward = [];
+  writeSeekHistory(history);
+}
+function currentPosition() {
+  const position = receiver().playback?.positionSeconds;
+  return Number.isFinite(position) ? position : Number($('#seek-range').value);
+}
+let seekHistoryBusy = false;
+async function stepSeekHistory(direction) {
+  const peek = readSeekHistory(), pending = direction < 0 ? peek.back : peek.forward;
+  if (!pending.length || seekHistoryBusy) return;
+  // One step at a time: the arrows grey out until this jump settles.
+  seekHistoryBusy = true;
+  renderSeekHistory(peek);
+  try { await stepSeekHistoryNow(direction, pending); } finally { seekHistoryBusy = false; renderSeekHistory(); }
+}
+async function stepSeekHistoryNow(direction, pending) {
+  const target = pending[pending.length - 1], here = Math.max(0, Math.floor(currentPosition()));
+  // The scrub's own seek may still be running; a dropped tap must not rewrite history.
+  for (let waited = 0; (state.busy || state.handoff) && waited < 4000; waited += 100) await new Promise(resolve => setTimeout(resolve, 100));
+  if (!await seekTo(target)) { message('Could not jump there. Try again.', true); return; }
+  const history = readSeekHistory();
+  const [from, to] = direction < 0 ? [history.back, history.forward] : [history.forward, history.back];
+  if (from.length && from[from.length - 1] === target) from.pop();
+  to.push(here);
+  writeSeekHistory(history);
+}
+$('#seek-undo').addEventListener('click', () => stepSeekHistory(-1));
+$('#seek-redo').addEventListener('click', () => stepSeekHistory(1));
+function scrubTo(value) {
+  const range = $('#seek-range'), max = Number(range.max) || 0;
+  fineScrub.value = Math.max(0, Math.min(max, value));
+  range.value = String(Math.round(fineScrub.value));
+  scrubPosition = fineScrub.value;
+  renderRemote();
+  requestScrubPreview(scrubPosition);
+}
+$('#seek-track').addEventListener('pointerdown', event => {
+  const range = $('#seek-range');
+  if (range.disabled || fineScrub.active) return;
+  event.preventDefault();
+  try { $('#seek-track').setPointerCapture(event.pointerId); } catch { /* capture is best-effort */ }
+  const rect = range.getBoundingClientRect(), max = Number(range.max) || 0, current = Number(range.value);
+  const touched = Math.max(0, Math.min(1, (event.clientX - rect.left) / Math.max(1, rect.width))) * max;
+  const thumbX = rect.left + (max > 0 ? current / max : 0) * rect.width;
+  const observed = receiver().playback;
+  Object.assign(fineScrub, { active: true, pointer: event.pointerId, lastX: event.clientX, lastTime: event.timeStamp, lastFast: event.timeStamp, gain: 1,
+    from: Number.isFinite(observed?.positionSeconds) ? observed.positionSeconds : current });
+  // Grabbing the thumb keeps its place; touching elsewhere jumps there.
+  scrubTo(Math.abs(event.clientX - thumbX) <= 28 ? current : touched);
+  warmScrubFrames(fineScrub.value);
+});
+$('#seek-track').addEventListener('pointermove', event => {
+  if (!fineScrub.active || event.pointerId !== fineScrub.pointer) return;
+  const range = $('#seek-range'), rect = range.getBoundingClientRect(), max = Number(range.max) || 0;
+  const dx = event.clientX - fineScrub.lastX, dt = Math.max(1, event.timeStamp - fineScrub.lastTime);
+  fineScrub.lastX = event.clientX; fineScrub.lastTime = event.timeStamp;
+  if (!dx) return;
+  // 1:1 by default. Only after the finger has been slow or still for a moment does
+  // precision increase (1/3, then 1/10); any quick movement returns to 1:1 at once.
+  const speed = Math.abs(dx) / dt; // px per ms
+  if (speed > 0.35) fineScrub.lastFast = event.timeStamp;
+  const held = event.timeStamp - fineScrub.lastFast;
+  fineScrub.gain = held > 1600 ? 0.1 : held > 700 ? 0.33 : 1;
+  scrubTo(fineScrub.value + dx * (max / Math.max(1, rect.width)) * fineScrub.gain);
+});
+function endFineScrub(event, commit) {
+  if (!fineScrub.active || event.pointerId !== fineScrub.pointer) return;
+  fineScrub.active = false; fineScrub.pointer = null;
+  const position = fineScrub.value;
+  scrubPosition = null;
+  clearScrubPreview();
+  if (!commit) { renderRemote(); return; }
+  if (Number.isFinite(fineScrub.from) && Math.abs(position - fineScrub.from) > 5) recordSeekCheckpoint(fineScrub.from);
+  void seekTo(position);
+}
+$('#seek-track').addEventListener('pointerup', event => endFineScrub(event, true));
+$('#seek-track').addEventListener('pointercancel', event => endFineScrub(event, false));
 $('#seek-range').addEventListener('input', () => {
   scrubPosition = Number($('#seek-range').value);
   renderRemote();
@@ -2262,6 +2502,8 @@ void (async () => {
     $('#browser-url').value = typeof result?.browserUrl === 'string' ? result.browserUrl : DEFAULT_SITE;
     message('Connect your projector to get started.');
     connectionState(result, { initial: true });
+    loadSeekHistory(result?.seekHistory);
+    scheduleScrubWarmup();
     if (result?.source && !result?.remote) window.LumaApp.onCapturedMedia(result.source);
   } catch (error) { message(error.message, true); }
 })();

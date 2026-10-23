@@ -79,8 +79,11 @@ socket and loss of native TCP during active receiver playback. Browser fixtures
 prove a direct-only snapshot can cast without `luma.launchReceiver` and enables
 Home only after native readiness. Physical cold-boot timing remains unverified:
 power-cycle the exact projector and measure first UI, first port-4191 response,
-first accepted cast and first port-8121 response. No live device was changed by
-this implementation session.
+first accepted cast and first port-8121 response. The unchanged receiver
+0.2.3/code 10 was subsequently rebuilt and locally reinstalled on the physical
+projector (1,185,598 bytes, SHA-256 prefix `fadc21c1efd7`); it returned healthy
+and idle. The 0.4.11 receiver-first behavior is phone-side and still requires a
+phone APK install.
 
 ## Release
 
@@ -114,3 +117,32 @@ stays 100%). Fixed after their report:
   0.2.2, cause unknown). Buffer capped at 30 s/24 MB; `Diagnostics` keeps a
   15 s rolling log across reboots (`app.diagnostics`). Post-fix 1080p check:
   ~356 MB free, 0 dropped frames.
+
+## 2026-10-23 scrub, auto-next and setup (unreleased 0.4.12 / receiver 0.3.0)
+
+- Scrub crash root cause (phone logcat): `NetworkOnMainThreadException` when
+  `ScrubPreviewManager.request()` cancelled an in-flight HTTPS fetch on the main
+  thread; the HLS-only loader also never produced frames for MP4 sources
+  (Midnight Mass S1E5 is a 176 MB range-capable MP4 with moov first).
+- `ThumbnailStrip` (phone): background generation from the cast, bisection order,
+  coarse ~200 then refinement to 3 s cells (paced), memory LRU + 48 h disk cache
+  keyed by content, MP4 via one range-reading `MediaMetadataRetriever`, HLS via the
+  old loader on the worker thread. Frames shared through the receiver
+  (`thumbs.list/get/put`, 48 h, 96 MB); receiver draws scrub frames from its own
+  store, phone mirrors positions only on a dedicated coalesced connection.
+  Page pulls frames in bulk (`preview.batch`) and renders nearest locally.
+- Variable-speed scrub (1:1 until ~0.7 s slow/still, then 1/3, 1/10), undo/redo
+  arrows with checkpoints persisted through native `app.seekHistory` (remote
+  WebView has DOM storage off, which broke the first undo).
+- Resume fixed: coordinator passes `resumeSeconds` to Open; receiver accepts seeks
+  before media is loaded.
+- Receiver `Catalog` port (season/details/stream/subtitles) enables `player.next`,
+  auto-next with 10 s countdown (Back cancels), stop after 3 unattended episodes,
+  `lastInteraction` + `autoplayed` in status and progress records, ended state
+  kept in status. Verified live: Midnight Mass S1E5→E6, E7→none; Breaking Bad
+  S1E7→S2E1.
+- Phone: status published before background syncs (cold-start controls ready
+  sooner); Remote tab shows the connect view until LUMA is connected+paired.
+- Checks: browser 107, Node suites, emulator backend 15/service 18/preview 9/
+  subtitles 9, receiver unit tests. Physical: user confirmed resume and smooth
+  phone scrubbing; auto-next/ended/connect-swap not yet physically tested.

@@ -101,8 +101,11 @@ function mediaSnapshot(input, maxTracks) {
   }
   if (tracks.length > maxTracks) throw fail('INVALID_MEDIA');
   const content = canonicalContent(input.content);
+  // Passed through to Open so the receiver starts at the saved position instead of
+  // starting at zero and relying on a seek that may arrive before the media is seekable.
+  const resume = Number.isFinite(input.resumeSeconds) && input.resumeSeconds >= 1 && input.resumeSeconds <= 17280000 ? input.resumeSeconds : 0;
   return { url: sourceUrl(input.url), contentType: input.contentType.toLowerCase(), title: safeText(input.title, 200), tracks,
-    ...(content ? { content } : {}) };
+    ...(content ? { content } : {}), ...(resume ? { resumeSeconds: resume } : {}) };
 }
 
 function language(track) {

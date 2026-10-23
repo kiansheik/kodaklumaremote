@@ -26,6 +26,7 @@ public final class ReceiverApp extends Application {
     Updater updater;
     ControlServer server;
     Diagnostics diagnostics;
+    ThumbnailStore thumbnails;
     private Pairing.Listener pairingUi;
     private volatile java.util.function.BiConsumer<String, Integer> noticeUi;
 
@@ -45,6 +46,7 @@ public final class ReceiverApp extends Application {
         updater = new Updater(this, preferences);
         updater.attach(null, playback);
         server = new ControlServer(this);
+        thumbnails = new ThumbnailStore(this);
         diagnostics = new Diagnostics(this);
         diagnostics.start(playback);
         startReceiverService(this);

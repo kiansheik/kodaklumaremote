@@ -112,6 +112,7 @@ public final class MainActivity extends Activity implements PlaybackController.U
     }
 
     @Override public void onPlaybackChanged() { render(); }
+    @Override public void onNotice(String text) { showNotice(text, 6000); }
 
     private void onScrub(boolean active, double position, double duration, android.graphics.Bitmap frame) {
         scrub.removeCallbacks(hideScrub);
@@ -131,7 +132,9 @@ public final class MainActivity extends Activity implements PlaybackController.U
 
     private void showSeek() {
         long position = app.playback.player().getCurrentPosition();
-        onScrub(true, position / 1000.0, 0, null);
+        String key = app.playback.contentKey();
+        byte[] jpeg = key == null ? null : app.thumbnails.nearest(key, position / 1000);
+        onScrub(true, position / 1000.0, 0, jpeg == null ? null : android.graphics.BitmapFactory.decodeByteArray(jpeg, 0, jpeg.length));
         scrub.removeCallbacks(hideScrub);
         scrub.postDelayed(hideScrub, 1500);
     }
@@ -198,6 +201,7 @@ public final class MainActivity extends Activity implements PlaybackController.U
     @Override public boolean dispatchKeyEvent(KeyEvent event) {
         if (event.getAction() != KeyEvent.ACTION_DOWN) return super.dispatchKeyEvent(event);
         int key = event.getKeyCode();
+        app.playback.noteInteraction(); // also cancels a pending "Up next"
         boolean media = app.playback.title() != null;
         if (!media) {
             boolean promptShown = updatePrompt.getVisibility() == View.VISIBLE && updatePrompt.getText().toString().startsWith("Update ");

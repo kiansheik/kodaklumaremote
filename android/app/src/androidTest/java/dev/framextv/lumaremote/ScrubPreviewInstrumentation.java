@@ -239,6 +239,50 @@ public final class ScrubPreviewInstrumentation {
                 require("PREVIEW_CLOSED".equals(reply.error.get()), "Close did not revoke the pending callback");
             } finally { releaseFactory.countDown(); manager.close(); }
         });
+        check("thumbnail strip fills middle-first, coarse before fine", () -> {
+            require(java.util.Arrays.equals(ThumbnailStrip.bisectionOrder(7), new int[] {3, 1, 5, 0, 2, 4, 6}), "Bisection order is not middle-first");
+            require(ThumbnailStrip.intervalSeconds(3000) == 3 && ThumbnailStrip.intervalSeconds(3 * 3600) == 5, "Grid spacing is not 3 s up to two hours");
+            int[] order = ThumbnailStrip.generationOrder(1000);
+            int stride = 5, coarse = 200;
+            for (int i = 0; i < coarse; i++) require(order[i] % stride == 0, "Coarse pass reached a fine cell early");
+            require(order[0] == 495, "Coarse pass does not start in the middle");
+        });
+        check("thumbnail strip generates in the background, prioritizes, shares and reloads its cache", () -> {
+            java.io.File cache = new java.io.File(instrumentation.getTargetContext().getCacheDir(), "strip-test-" + System.nanoTime());
+            AtomicInteger decoded = new AtomicInteger();
+            java.util.List<Long> seen = java.util.Collections.synchronizedList(new java.util.ArrayList<>());
+            ThumbnailStrip.SourceFactory factory = (url, type, key, duration) -> new ThumbnailStrip.FrameSource() {
+                @Override public byte[] jpegAt(long timeUs) {
+                    decoded.incrementAndGet(); seen.add(timeUs / 1_000_000);
+                    Bitmap frame = Bitmap.createBitmap(64, 36, Bitmap.Config.ARGB_8888); frame.eraseColor(0xff336699);
+                    try { return ThumbnailStrip.encode(frame); } finally { frame.recycle(); }
+                }
+                @Override public void close() { }
+            };
+            String key = "framextv:tv:42:1:2";
+            ThumbnailStrip strip = new ThumbnailStrip(cache, factory);
+            try {
+                require(strip.accept(key, 1, new byte[] {(byte) 0xFF, (byte) 0xD8, 1}) == false, "Accepted a frame before binding");
+                strip.bind("https://media.example/a.mp4", "video/mp4", key, 300);
+                require(strip.accept(key, 151, new byte[] {(byte) 0xFF, (byte) 0xD8, 1, 2}), "Shared frame for a grid cell was refused");
+                strip.prioritize(240);
+                waitFor(() -> seen.size() >= 3, "Background generation did not start");
+                require(seen.get(0) == 241 || seen.contains(241L), "Prioritized area was not generated early");
+                require(!seen.contains(151L), "A frame shared by another phone was decoded again");
+                waitFor(() -> strip.nearest("https://media.example/a.mp4", 100) != null, "No frame became available");
+                ThumbnailStrip.Frame near = strip.nearest("https://media.example/a.mp4", 152);
+                require(near != null && near.positionSeconds == 151, "Nearest frame is not the closest one");
+                require(strip.nearest("https://media.example/other.mp4", 152) == null, "Frames leaked to another source");
+            } finally { strip.close(); }
+            ThumbnailStrip again = new ThumbnailStrip(cache, factory);
+            try {
+                int before = decoded.get();
+                again.bind("https://media.example/renewed-url.mp4", "video/mp4", key, 300);
+                ThumbnailStrip.Frame reloaded = again.nearest("https://media.example/renewed-url.mp4", 241);
+                require(reloaded != null && reloaded.positionSeconds == 241, "Disk cache did not reload for the same episode under a new URL");
+                require(decoded.get() >= before, "Counter went backwards");
+            } finally { again.close(); }
+        });
         Bundle result = new Bundle();
         result.putInt("tests", tests); result.putInt("passed", passed); result.putInt("failures", failures); result.putString("failure", failure);
         instrumentation.finish(failures == 0 ? Activity.RESULT_OK : Activity.RESULT_CANCELED, result);

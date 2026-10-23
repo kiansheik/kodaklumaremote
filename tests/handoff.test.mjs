@@ -89,6 +89,19 @@ test('handoff uses an already answering receiver without launching it', async ()
   assert.ok(!f.state.statuses.some(item => item.step === 'launching'));
 });
 
+test('Open carries the saved resume position so playback starts there', async () => {
+  const opened = async resumeSeconds => {
+    const f = fixture();
+    let received;
+    const original = f.adapters.player.open;
+    f.adapters.player.open = async (value, opts) => { received = value; return original(value, opts); };
+    await createHandoffCoordinator(f.adapters).start({ ...media([track('en')]), resumeSeconds });
+    return received;
+  };
+  assert.equal((await opened(1234.5)).resumeSeconds, 1234.5);
+  assert.equal((await opened(0.4)).resumeSeconds, undefined);
+});
+
 test('an unreachable receiver is launched once while an authentication failure stops without launching', async () => {
   let failures = 1;
   const unreachable = fixture();

@@ -36,7 +36,7 @@ import java.util.concurrent.Executors;
  * long-polling {@link #revision}; position is interpolated client-side.
  */
 final class PlaybackController implements Player.Listener {
-    interface Ui { void onPlaybackChanged(); void bringToFront(); void onDisplayChanged(); }
+    interface Ui { void onPlaybackChanged(); void bringToFront(); void onDisplayChanged(); void onNotice(String text); }
 
     static final long PROGRESS_INTERVAL_MS = 10_000;
     private final Context context;
@@ -50,8 +50,18 @@ final class PlaybackController implements Player.Listener {
     private final List<ExternalCaptions> externals = new ArrayList<>();
     private final ExecutorService captionLoader = Executors.newFixedThreadPool(2);
     private int selectedExternal = -1;
+    /** Same-language files queued by auto-next; the earliest one that loads is shown. */
+    private final List<ExternalCaptions> fallbackCaptions = new ArrayList<>();
     private ExoPlayer player;
     private MediaRequest current;
+    // ---- auto-next and "who was really watching" ----
+    static final int MAX_UNATTENDED = 3;
+    static final long UP_NEXT_MS = 10_000;
+    private final Catalog catalog = new Catalog();
+    private final android.content.SharedPreferences settings;
+    private boolean currentAutoplayed, upNextPending;
+    private int unattended;
+    private final Runnable upNext = () -> { upNextPending = false; startNext(true); };
     private Ui ui;
     private long revision, lastStartedAt;
     private String error;
@@ -66,6 +76,88 @@ final class PlaybackController implements Player.Listener {
 
     PlaybackController(Context context, LibraryStore library, DisplaySettings display) {
         this.context = context.getApplicationContext(); this.library = library; this.display = display;
+        settings = this.context.getSharedPreferences("receiver", Context.MODE_PRIVATE);
+    }
+
+    boolean autoNext() { return settings.getBoolean("autoNext", false); }
+    void setAutoNext(boolean enabled) { settings.edit().putBoolean("autoNext", enabled).apply(); if (!enabled) cancelUpNext(); bump(); }
+
+    /**
+     * A command from a person (phone or projector remote). Clears the unattended
+     * counter and records where they last were, so after falling asleep during
+     * auto-play the real last episode is still known.
+     */
+    void noteInteraction() {
+        unattended = 0; currentAutoplayed = false;
+        cancelUpNext();
+        if (current == null || current.content == null || player == null) return;
+        try {
+            JSONObject last = new JSONObject().put("content", new JSONObject(current.content.toString()))
+                .put("positionSeconds", player.getCurrentPosition() / 1000.0).put("at", System.currentTimeMillis());
+            settings.edit().putString("lastInteraction", last.toString()).apply();
+        } catch (Exception ignored) { }
+    }
+
+    private JSONObject lastInteraction() {
+        try { return new JSONObject(settings.getString("lastInteraction", "{}")); } catch (Exception corrupt) { return new JSONObject(); }
+    }
+
+    void cancelUpNext() { if (upNextPending) { upNextPending = false; main.removeCallbacks(upNext); bump(); } }
+
+    /** Main thread. Resolves and opens the following episode on a worker; reports through status. */
+    void startNext(boolean automatic) {
+        if (current == null || current.content == null || !"tv".equals(current.content.optString("kind"))) return;
+        JSONObject content = current.content;
+        String language = externalSelected() ? externals.get(selectedExternal).language : settings.getString("captionLanguage", "");
+        captionLoader.execute(() -> {
+            try {
+                JSONObject media = resolveNext(content, language);
+                main.post(() -> {
+                    try {
+                        if (media == null) { if (ui != null) ui.onNotice("That was the last episode."); return; }
+                        MediaRequest request = MediaRequest.parse(media);
+                        open(request, false, null, null);
+                        fallbackCaptions.addAll(externals);
+                        currentAutoplayed = automatic;
+                        if (automatic) unattended++;
+                    } catch (Exception failure) { android.util.Log.w("LumaNext", "OPEN_FAILED"); }
+                });
+            } catch (Exception failure) {
+                android.util.Log.w("LumaNext", "RESOLVE_FAILED " + failure.getClass().getSimpleName());
+                main.post(() -> { if (ui != null) ui.onNotice("Couldn't load the next episode."); });
+            }
+        });
+    }
+
+    /** Worker thread: the next episode's media, resuming unfinished progress and keeping the caption language. */
+    JSONObject resolveNext(JSONObject content, String language) throws Exception {
+        Catalog.Episode next = catalog.next(content.getString("contentId"), content.getInt("season"), content.getInt("episode"));
+        if (next == null) return null;
+        JSONObject media = catalog.resolve(next);
+        JSONObject saved = library.get("framextv:tv:" + next.id + ":" + next.season + ":" + next.episode);
+        if (saved != null && !saved.optBoolean("completed") && saved.optDouble("resumeSeconds", 0) > 5) media.put("resumeSeconds", saved.optDouble("resumeSeconds"));
+        JSONArray subtitles = captionCandidates(media.optJSONArray("tracks"), language);
+        if (subtitles.length() > 0) media.put("subtitles", subtitles);
+        media.remove("tracks");
+        return media;
+    }
+
+    /** Up to three tracks in the language: exact code first, then the same base language ("pt-BR" → "pt"). */
+    static JSONArray captionCandidates(JSONArray tracks, String language) throws Exception {
+        JSONArray result = new JSONArray();
+        if (tracks == null || language == null || language.isEmpty()) return result;
+        String base = language.split("-", 2)[0];
+        for (int pass = 0; pass < 2; pass++) {
+            for (int i = 0; i < tracks.length() && result.length() < 3; i++) {
+                JSONObject track = tracks.optJSONObject(i);
+                String candidate = track == null ? "" : track.optString("language");
+                boolean match = pass == 0 ? language.equalsIgnoreCase(candidate)
+                    : !language.equalsIgnoreCase(candidate) && base.equalsIgnoreCase(candidate.split("-", 2)[0]);
+                if (match) result.put(new JSONObject().put("url", track.getString("url"))
+                    .put("language", candidate).put("label", track.optString("label")).put("select", true));
+            }
+        }
+        return result;
     }
 
     /** Main thread: push picture effects to the player and subtitle style to the UI. */
@@ -135,7 +227,7 @@ final class PlaybackController implements Player.Listener {
                 || current.content == null || !current.content.optString("key").equals(currentKey))) throw new ApiException("SOURCE_CHANGED", 409);
         recordProgress();
         current = request; error = null; seenPlaying = false;
-        externals.clear(); selectedExternal = -1;
+        externals.clear(); selectedExternal = -1; fallbackCaptions.clear();
         lastStartedAt = System.currentTimeMillis();
         ExoPlayer exo = player();
         exo.setTrackSelectionParameters(exo.getTrackSelectionParameters().buildUpon()
@@ -175,9 +267,16 @@ final class PlaybackController implements Player.Listener {
 
     void setPlaying(boolean playing) { player().setPlayWhenReady(playing); }
 
+    /** For player.next: the current item may be ended, so only the canonical key is checked. */
+    void expectContent(Object key) throws ApiException {
+        if (current == null || current.content == null || !current.content.optString("key").equals(key)) throw new ApiException("SOURCE_CHANGED", 409);
+    }
+
     void seek(double seconds) throws ApiException {
         ExoPlayer exo = player();
-        if (!exo.isCurrentMediaItemSeekable()) throw new ApiException("CANNOT_SEEK", 409);
+        // Seekability is unknown until the media is loaded; ExoPlayer applies an early
+        // seek once it is. Only a loaded, unseekable stream (live) is refused.
+        if (exo.getPlaybackState() == Player.STATE_READY && !exo.isCurrentMediaItemSeekable()) throw new ApiException("CANNOT_SEEK", 409);
         long target = (long) (seconds * 1000), duration = exo.getDuration();
         if (duration != C.TIME_UNSET) target = Math.min(target, Math.max(0, duration - 1000));
         exo.seekTo(Math.max(0, target));
@@ -193,7 +292,8 @@ final class PlaybackController implements Player.Listener {
     void stop() {
         recordProgress();
         main.removeCallbacks(progressTick);
-        current = null; error = null; externals.clear(); selectedExternal = -1;
+        current = null; error = null; externals.clear(); selectedExternal = -1; fallbackCaptions.clear();
+        cancelUpNext();
         if (player != null) { player.stop(); player.clearMediaItems(); }
         bump();
     }
@@ -211,7 +311,10 @@ final class PlaybackController implements Player.Listener {
             captions.load();
             main.post(() -> {
                 int ordinal = externals.indexOf(captions);
-                if (captions.selectOnLoad && captions.error == null && ordinal >= 0) selectExternal(ordinal);
+                // Among auto-next fallbacks keep the earliest file that loaded, whatever order they finish in.
+                boolean earlierFallbackShown = fallbackCaptions.contains(captions) && externalSelected()
+                    && selectedExternal < ordinal && fallbackCaptions.contains(externals.get(selectedExternal));
+                if (captions.selectOnLoad && captions.error == null && ordinal >= 0 && !earlierFallbackShown) selectExternal(ordinal);
                 bump();
             });
         });
@@ -233,6 +336,9 @@ final class PlaybackController implements Player.Listener {
 
     private void selectExternal(int ordinal) {
         selectedExternal = ordinal;
+        // Remembered so auto-play continues in the language last turned on.
+        String language = externals.get(ordinal).language;
+        if (!language.isEmpty()) settings.edit().putString("captionLanguage", language).apply();
         // Hide ExoPlayer's own text so only the selected file is drawn.
         if (player != null) player.setTrackSelectionParameters(player.getTrackSelectionParameters().buildUpon()
             .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true).build());
@@ -283,7 +389,8 @@ final class PlaybackController implements Player.Listener {
         TrackSelectionParameters.Builder params = exo.getTrackSelectionParameters().buildUpon();
         if ("off".equals(index)) {
             if (type != C.TRACK_TYPE_TEXT) throw new ApiException("INVALID_INPUT");
-            selectedExternal = -1;
+            selectedExternal = -1; fallbackCaptions.clear();
+            settings.edit().putString("captionLanguage", "").apply();
             exo.setTrackSelectionParameters(params.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true).build());
             bump();
             return;
@@ -312,7 +419,7 @@ final class PlaybackController implements Player.Listener {
     JSONObject status() throws Exception {
         JSONObject result = new JSONObject().put("revision", revision()).put("active", active());
         if (current == null || player == null) {
-            return result.put("playing", false).put("paused", false).put("state", "idle");
+            return withSettings(result.put("playing", false).put("paused", false).put("state", "idle"));
         }
         int state = player.getPlaybackState();
         long duration = player.getDuration();
@@ -327,10 +434,19 @@ final class PlaybackController implements Player.Listener {
             .put("sampledAt", System.currentTimeMillis());
         if (current.content != null) result.put("content", new JSONObject(current.content.toString()));
         if (error != null) result.put("error", error);
-        return result;
+        result.put("ended", state == Player.STATE_ENDED).put("autoplayed", currentAutoplayed).put("upNext", upNextPending);
+        return withSettings(result);
+    }
+
+    private JSONObject withSettings(JSONObject result) throws Exception {
+        JSONObject last = lastInteraction();
+        if (last.has("content")) result.put("lastInteraction", last);
+        return result.put("autoNext", autoNext());
     }
 
     String title() { return current == null ? null : current.title; }
+
+    String contentKey() { return current == null || current.content == null ? null : current.content.optString("key"); }
 
     private int droppedFrames;
 
@@ -353,8 +469,8 @@ final class PlaybackController implements Player.Listener {
         if (duration == C.TIME_UNSET || duration <= 0) return;
         JSONObject content = current.content;
         double position = player.getCurrentPosition() / 1000.0, total = duration / 1000.0;
-        long started = lastStartedAt;
-        io.execute(() -> library.recordProgress(content, position, total, started));
+        long started = lastStartedAt; boolean auto = currentAutoplayed;
+        io.execute(() -> library.recordProgress(content, position, total, started, auto));
     }
 
     @Override public void onIsPlayingChanged(boolean isPlaying) {
@@ -365,7 +481,15 @@ final class PlaybackController implements Player.Listener {
     }
 
     @Override public void onPlaybackStateChanged(int state) {
-        if (state == Player.STATE_ENDED) recordProgress();
+        if (state == Player.STATE_ENDED) {
+            recordProgress();
+            boolean series = current != null && current.content != null && "tv".equals(current.content.optString("kind"));
+            if (series && autoNext() && unattended < MAX_UNATTENDED && !upNextPending) {
+                upNextPending = true;
+                main.postDelayed(upNext, UP_NEXT_MS);
+                if (ui != null) ui.onNotice("Next episode in 10 seconds · press Back to cancel");
+            } else if (series && autoNext() && ui != null) ui.onNotice("Auto-play paused: no one has touched the remote for a while.");
+        }
         bump();
     }
 

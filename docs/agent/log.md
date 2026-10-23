@@ -9,8 +9,10 @@
   loss preserves receiver playback controls but removes projector volume/actions.
   Android build, backend 15, service 18, handoff 80 and browser 158 pass. The
   aggregate Node run was interrupted after silence; physical power-cycle timing
-  is still unverified. Release notes for 0.4.11 are prepared; no live device
-  install or release was performed.
+  is still unverified. Release notes for 0.4.11 are prepared. At the user's
+  request, the unchanged receiver 0.2.3/code 10 was locally rebuilt/reinstalled
+  on the physical projector and returned healthy/idle; the phone was not updated
+  and no public release was performed.
   [Handoff](session-handoffs/2026-10-23-receiver-first-cold-boot.md).
 
 - 2026-10-23 Android fixtures → LUMA Receiver: replaced every Kodi JSON-RPC
@@ -988,3 +990,14 @@
   captions (no rebuffer, VTT/SRT/ASS/TTML, encodings, RTL repair), catalog URL
   spaces, scrub-preview use-after-free crash, auto-reconnect, buffer cap and
   persistent diagnostics after a projector freeze. [Receiver](luma-receiver.md).
+- 2026-10-23 scrub crash (main-thread network in preview cancel) fixed; background
+  progressive thumbnails shared via receiver; variable-speed scrub, persistent
+  undo/redo; resume fixed; receiver-side Next/auto-next with catalog port; faster
+  cold start; connect view in Remote tab. Unreleased 0.4.12 / receiver 0.3.0
+  (installed on phone and projector). [Receiver](luma-receiver.md).
+- 2026-10-23 remote layout reprioritised (player card: title/seek/transport;
+  volume; D-pad; Subtitles/Auto-play switch/More), resolved-source cache on the
+  phone (6 h, 1-byte reachability probe, fresh lookup fallback) so Resume skips
+  the catalog, receiver 0.3.1 remembers the last caption language and tries up to
+  three same-language files on auto-next. Node 242, browser 159, receiver unit
+  tests pass; phone build installed, receiver 0.3.1 built (not yet on projector).

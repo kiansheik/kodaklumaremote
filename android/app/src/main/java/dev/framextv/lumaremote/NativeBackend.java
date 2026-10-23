@@ -398,6 +398,45 @@ public final class NativeBackend {
             return uri.toASCIIString();
         } catch (Exception ignored) { throw fail("INVALID_MEDIA"); }
     }
+    /** Host, port and token for side-channel calls that must not wait behind {@link #handle}. */
+    public static final class Endpoint {
+        final String host, token; final int port;
+        Endpoint(String host, int port, String token) { this.host = host; this.port = port; this.token = token; }
+    }
+    public synchronized Endpoint receiverEndpoint() { return host == null || token == null || closed ? null : new Endpoint(host, receiverPort, token); }
+
+    /** Validated `player.scrub` body (positions only). */
+    static JSONObject scrubCommand(JSONObject params) throws Exception {
+        if (!(params.opt("active") instanceof Boolean)) throw fail("INVALID_INPUT");
+        JSONObject command = object("active", params.getBoolean("active"));
+        if (params.getBoolean("active")) {
+            Object position = params.opt("positionSeconds");
+            if (!(position instanceof Number) || ((Number) position).doubleValue() < 0 || ((Number) position).doubleValue() > 86399) throw fail("INVALID_INPUT");
+            command.put("positionSeconds", ((Number) position).doubleValue());
+            if (params.opt("durationSeconds") instanceof Number) command.put("durationSeconds", Math.max(0, Math.min(86399, ((Number) params.opt("durationSeconds")).doubleValue())));
+        }
+        return command;
+    }
+
+    /** Short, independent POST for latency-sensitive side channels (scrub mirroring). Result ignored. */
+    static void quickPost(Endpoint endpoint, String method, JSONObject body) {
+        HttpURLConnection connection = null;
+        try {
+            byte[] bytes = body.toString().getBytes(StandardCharsets.UTF_8);
+            connection = (HttpURLConnection) new URL("http", endpoint.host, endpoint.port, "/api/v1/" + method).openConnection(Proxy.NO_PROXY);
+            connection.setConnectTimeout(1500); connection.setReadTimeout(1500); connection.setUseCaches(false);
+            connection.setRequestMethod("POST"); connection.setDoOutput(true);
+            connection.setRequestProperty("Content-Type", "application/json");
+            connection.setRequestProperty("Authorization", "Bearer " + endpoint.token);
+            connection.setFixedLengthStreamingMode(bytes.length);
+            try (OutputStream out = connection.getOutputStream()) { out.write(bytes); }
+            try (InputStream in = connection.getResponseCode() >= 400 ? connection.getErrorStream() : connection.getInputStream()) {
+                byte[] sink = new byte[1024]; while (in != null && in.read(sink) >= 0) { }
+            }
+        } catch (Exception ignored) { /* a dropped scrub frame is harmless */ }
+        finally { if (connection != null) connection.disconnect(); }
+    }
+
     // ---- LUMA Receiver (android-receiver/) LAN control API ----
     // One public operation may need two receiver calls; they share one budget so
     // a stalled projector cannot hold the service queue for longer than this.
@@ -508,7 +547,11 @@ public final class NativeBackend {
         if (!data.getBoolean("active")) {
             JSONObject idle = object("active", false, "playing", false);
             if (data.opt("error") instanceof String) idle.put("error", label(data.getString("error"), 64));
-            return idle;
+            // A finished episode stays known so a phone that connects later can offer Next.
+            JSONObject finished = data.optBoolean("ended") ? receiverContent(data.optJSONObject("content")) : null;
+            if (finished != null) idle.put("ended", true).put("content", finished)
+                .put("positionSeconds", Math.max(0, data.optDouble("positionSeconds", 0))).put("durationSeconds", Math.max(0, data.optDouble("durationSeconds", 0)));
+            return receiverExtras(data, idle);
         }
         Object position = data.opt("positionSeconds"), duration = data.opt("durationSeconds");
         if (!(position instanceof Number) || !(duration instanceof Number) || !(data.opt("canSeek") instanceof Boolean) || !(data.opt("sourceUrl") instanceof String)) throw fail("RECEIVER_RESPONSE");
@@ -518,6 +561,15 @@ public final class NativeBackend {
             "state", label(data.optString("state", ""), 16), "revision", data.optLong("revision"));
         JSONObject content = receiverContent(data.optJSONObject("content"));
         if (content != null) result.put("content", content);
+        return receiverExtras(data, result);
+    }
+    /** Auto-next setting/state and the last episode a person actually interacted with. */
+    private static JSONObject receiverExtras(JSONObject data, JSONObject result) throws Exception {
+        result.put("autoNext", data.optBoolean("autoNext")).put("autoplayed", data.optBoolean("autoplayed")).put("upNext", data.optBoolean("upNext"));
+        JSONObject last = data.optJSONObject("lastInteraction");
+        JSONObject lastContent = last == null ? null : receiverContent(last.optJSONObject("content"));
+        if (lastContent != null) result.put("lastInteraction", object("content", lastContent,
+            "positionSeconds", Math.max(0, last.optDouble("positionSeconds", 0)), "at", Math.max(0, last.optLong("at", 0))));
         return result;
     }
     private void requireCurrent(JSONObject params) throws Exception {
@@ -668,6 +720,23 @@ public final class NativeBackend {
             if ("box".equals(params.opt("subtitleStyle")) || "outline".equals(params.opt("subtitleStyle"))) changes.put("subtitleStyle", params.get("subtitleStyle"));
             if (Boolean.TRUE.equals(params.opt("reset"))) changes.put("reset", true);
             return changes.length() == 0 ? call("display.get", new JSONObject(), false) : call("display.set", changes, true);
+        }
+        if ("next".equals(action)) {
+            JSONObject command = new JSONObject();
+            if (params.has("expectedContentKey")) command.put("expectedContentKey", contentKey(params.opt("expectedContentKey")));
+            call("player.next", command, true);
+            return object("accepted", true);
+        }
+        if ("settings".equals(action)) {
+            if (params.opt("autoNext") instanceof Boolean) return call("settings.set", object("autoNext", params.getBoolean("autoNext")), true);
+            return call("settings.get", new JSONObject(), false);
+        }
+        if ("thumbsList".equals(action)) return call("thumbs.list", object("contentKey", contentKey(params.opt("contentKey"))), false);
+        if ("thumbsGet".equals(action) || "thumbsPut".equals(action)) {
+            boolean put = "thumbsPut".equals(action);
+            JSONArray batch = params.optJSONArray(put ? "frames" : "positions");
+            if (batch == null || batch.length() > 40) throw fail("INVALID_INPUT");
+            return call(put ? "thumbs.put" : "thumbs.get", object("contentKey", contentKey(params.opt("contentKey")), put ? "frames" : "positions", batch), put);
         }
         if ("libraryPull".equals(action)) {
             return call("library.pull", object("since", integer(params.opt("since"), 0, Integer.MAX_VALUE), "limit", 200), false);

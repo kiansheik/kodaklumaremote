@@ -59,6 +59,7 @@ async function openApp(page, initialSnapshot = null) {
       const { method, params } = request;
       switch (method) {
         case 'app.ready': return { browserUrl: 'https://framextv.xyz/watch/284833/1/1', ...initialSnapshot };
+        case 'app.seekHistory': if (params.value) { window.__seekHistory = params.value; return { saved: true }; } return { value: window.__seekHistory || {} };
         case 'app.browse': case 'app.handoffStatus': case 'app.checkUpdates': return { accepted: true };
         case 'app.handoffReady': case 'app.rememberRemote': receiver.rememberedRemote = params.remote; return { accepted: true };
         case 'app.settings.rescan': return receiver.rescanAutoConnect ? { connected: true, name: 'Other LUMA', devices: [{ host: '192.168.1.51', name: 'Other LUMA', port: 8121 }] } : { connection: { connected: false, configured: false }, devices: [{ host: '192.168.1.51', name: 'Other LUMA', port: 8121 }] };
@@ -269,7 +270,7 @@ test('native saved content resumes LUMA Receiver after playback proof and persis
   const content={key:'framextv:movie:42',kind:'movie',contentId:'42',season:null,episode:null,watchUrl:'https://framextv.cc/watch/42',title:'Household movie'};
   await page.evaluate(({media,content})=>window.LumaApp.onCapturedMedia({...media,content,resumeSeconds:125}),{media,content});
   await expect(page.locator('#message')).toHaveText('Video is playing. Choose a language in Subtitles.');
-  await expect(page.locator('#playback-status')).toContainText('2:05');
+  await expect(page.locator('#seek-time')).toHaveText('2:05');
   const calls=await page.evaluate(()=>window.__calls);
   expect(calls.filter(call=>call.method==='receiver.open')).toHaveLength(1);
   expect(calls.filter(call=>call.method==='receiver.seek').map(call=>call.params)).toEqual([{position:125,expectedSourceUrl:media.url,expectedContentKey:content.key}]);
@@ -324,7 +325,9 @@ test('captured video starts without subtitle commands and keeps every language f
   await page.evaluate(() => { window.__receiver.running = false; });
   await cast(page);
   await expect(page.locator('#media-title')).toHaveText('Household episode');
-  await expect(page.locator('#playback-status')).toHaveText('Playing · 0:12 / 10:00');
+  await expect(page.locator('#playback-status')).toHaveText('Playing');
+  await expect(page.locator('#seek-time')).toHaveText('0:12');
+  await expect(page.locator('#seek-duration')).toHaveText('10:00');
   const calls = await page.evaluate(() => window.__calls);
   const methods = calls.map(call => call.method);
   const castMethods = methods.slice(methods.indexOf('app.beginHandoff')).filter(method => ['receiver.connect', 'luma.launchReceiver', 'receiver.open'].includes(method));
@@ -364,7 +367,8 @@ test('manual playback stays bound to the active receiver source while browsing a
   await page.getByRole('button', { name: 'Pause', exact: true }).focus();
   await page.keyboard.press('Enter');
   await expect(page.getByRole('button', { name: 'Resume', exact: true })).toBeEnabled();
-  await page.getByRole('button', { name: 'Refresh volume', exact: true }).click();
+  // LUMA status polling keeps volume current, so there is no refresh button.
+  await expect(page.locator('#refresh-volume')).toBeHidden();
   await expect(page.locator('#volume-level')).toHaveText('6 / 30');
   await page.getByRole('button', { name: 'Subtitles', exact: true }).click();
   await page.getByRole('button', { name: 'English', exact: true }).click();
@@ -383,7 +387,7 @@ test('manual playback stays bound to the active receiver source while browsing a
   expect(calls.filter(call => call.method === 'receiver.setSubtitle').at(-1).params).toEqual({ expectedSourceUrl: media.url, index: 0 });
 });
 
-test('main remote exposes back 30, scrub and catalog-proven next episode controls', async ({ page }) => {
+test('main remote exposes back 30, scrub and a receiver-driven next episode control', async ({ page }) => {
   const content = {key:'framextv:tv:284833:1:1',kind:'tv',contentId:'284833',season:1,episode:1,watchUrl:'https://framextv.cc/watch/284833/1/1',title:'Household episode'};
   const nextMedia = {...media,url:'https://media.example.org/next.m3u8',sourceToken:'capture-next',content:{...content,key:'framextv:tv:284833:1:2',episode:2,watchUrl:'https://framextv.cc/watch/284833/1/2'}};
   await openApp(page, {
@@ -396,8 +400,27 @@ test('main remote exposes back 30, scrub and catalog-proven next episode control
   await expect(page.getByRole('button', {name:'Next episode',exact:true})).toBeEnabled();
   await page.getByRole('button', {name:'Back 30 seconds'}).click();
   await expect.poll(() => page.evaluate(() => window.__calls.find(call => call.method === 'receiver.seek')?.params.position)).toBe(45);
+  // LUMA Receiver finds and opens the next episode itself (also when phones are off).
   await page.getByRole('button', {name:'Next episode',exact:true}).click();
-  await expect.poll(() => page.evaluate(() => window.__calls.find(call => call.method === 'app.chooseCatalog')?.params)).toEqual({kind:'tv',id:'284833',season:1,episode:2,resume:true});
+  await expect.poll(() => page.evaluate(() => window.__calls.find(call => call.method === 'receiver.next')?.params)).toEqual({expectedContentKey:'framextv:tv:284833:1:1'});
+  expect(await page.evaluate(() => window.__calls.some(call => call.method === 'app.chooseCatalog'))).toBe(false);
+});
+
+test('a finished episode stays on the remote with Next, and auto-play is a receiver setting', async ({ page }) => {
+  const content = {key:'framextv:tv:284833:1:5',kind:'tv',contentId:'284833',season:1,episode:5,watchUrl:'https://framextv.cc/watch/284833/1/5',title:'Household · S1 E5'};
+  await openApp(page, {
+    connection:{connected:true,configured:true,host:'192.168.1.50',name:'Test LUMA'}, settings:{hasReceiver:true,hasPairing:true,autoConnect:true},
+    playback:{active:false,playing:false,ended:true,content,positionSeconds:2700,durationSeconds:2700,autoNext:false},
+  });
+  await page.getByRole('tab', { name: 'Remote', exact: true }).click();
+  await expect(page.locator('#media-title')).toHaveText('Household · S1 E5');
+  await expect(page.locator('#playback-status')).toHaveText('Finished · Next episode is ready');
+  await expect(page.getByRole('button', {name:'Next episode',exact:true})).toBeEnabled();
+  await expect(page.locator('#auto-next')).not.toBeChecked();
+  await page.locator('#auto-next').check();
+  await expect.poll(() => page.evaluate(() => window.__calls.find(call => call.method === 'receiver.settings')?.params)).toEqual({autoNext:true});
+  await page.getByRole('button', {name:'Next episode',exact:true}).click();
+  await expect.poll(() => page.evaluate(() => window.__calls.find(call => call.method === 'receiver.next')?.params)).toEqual({expectedContentKey:content.key});
 });
 
 test('same-URL canonical transition hides stale controls until exact metadata arrives', async ({ page }) => {
@@ -427,29 +450,6 @@ test('same-URL canonical transition hides stale controls until exact metadata ar
   await expect(page.getByRole('button', {name:'Next episode',exact:true})).toBeEnabled();
 });
 
-test('late next-episode catalog result cannot replace a newer same-URL canonical item', async ({ page }) => {
-  const first = {key:'framextv:tv:284833:1:1',kind:'tv',contentId:'284833',season:1,episode:1,watchUrl:'https://framextv.cc/watch/284833/1/1',title:'Episode one'};
-  const second = {...first,key:'framextv:tv:284833:1:2',episode:2,watchUrl:'https://framextv.cc/watch/284833/1/2',title:'Episode two'};
-  const connection = {connected:true,configured:true,host:'192.168.1.50',name:'Test LUMA'};
-  const nextMedia = {...media,url:'https://media.example.org/next.m3u8',sourceToken:'capture-next',content:second};
-  await openApp(page, {
-    connection, settings:{hasReceiver:true,hasPairing:true,autoConnect:true},
-    playback:{active:true,playing:true,sourceUrl:media.url,content:first,positionSeconds:75,durationSeconds:600,canSeek:true},
-    remote:{media:{...media,content:first},tracks:[],catalog:[],selectedIndex:null,subtitlesEnabled:false,nextEpisode:{kind:'tv',id:'284833',season:1,episode:2}},
-  });
-  await page.evaluate(value => { window.__catalogMedia = value; window.__receiver.holdMethod = 'app.chooseCatalog'; }, nextMedia);
-  await page.getByRole('button', {name:'Next episode',exact:true}).click();
-  await expect.poll(() => page.evaluate(() => window.__receiver.held.length)).toBe(1);
-  await page.evaluate(({connection,media,second}) => window.LumaApp.onConnectionState({
-    connection, playback:{active:true,playing:true,sourceUrl:media.url,content:second,positionSeconds:5,durationSeconds:600,canSeek:true},
-    remote:{media:{...media,title:'Episode two',content:second},tracks:[],catalog:[],selectedIndex:null,subtitlesEnabled:false,nextEpisode:{kind:'tv',id:'284833',season:1,episode:3}},
-  }), {connection,media,second});
-  await page.evaluate(() => window.__release());
-  await expect(page.locator('#message')).toContainText('selected video changed');
-  expect(await page.evaluate(() => window.__calls.some(call => call.method === 'receiver.open' || call.method === 'app.beginHandoff'))).toBe(false);
-  await expect(page.locator('#media-title')).toHaveText('Episode two');
-});
-
 test('scrub preview is debounced and latest-wins without seeking until change', async ({ page }) => {
   const content = {key:'framextv:tv:284833:1:1',kind:'tv',contentId:'284833',season:1,episode:1,watchUrl:'https://framextv.cc/watch/284833/1/1',title:'Household episode'};
   await openApp(page, {
@@ -462,14 +462,14 @@ test('scrub preview is debounced and latest-wins without seeking until change', 
   const preview = page.locator('#scrub-preview');
   await range.evaluate(element => { element.value = '60'; element.dispatchEvent(new Event('input', {bubbles:true})); });
   await expect(preview).toBeVisible();
-  await expect(page.locator('#scrub-preview-time')).toHaveText('1:00');
+  await expect(page.locator('#scrub-preview-time')).toHaveText(/^1:00 \/ /);
   expect(await page.evaluate(() => window.__calls.some(call => call.method === 'preview.frame'))).toBe(false);
   await expect.poll(() => page.evaluate(() => window.__calls.filter(call => call.method === 'preview.frame').map(call => call.params.position))).toEqual([60]);
   await range.evaluate(element => { element.value = '120'; element.dispatchEvent(new Event('input', {bubbles:true})); });
   await expect.poll(() => page.evaluate(() => window.__calls.filter(call => call.method === 'preview.frame').map(call => call.params.position))).toEqual([60, 120]);
   await expect(preview).toHaveAttribute('data-image', 'true');
   await expect(preview).toHaveAttribute('data-position', '120');
-  await expect(page.locator('#scrub-preview-time')).toHaveText('2:00');
+  await expect(page.locator('#scrub-preview-time')).toHaveText(/^2:00 \/ /);
   expect(await page.evaluate(() => window.__calls.some(call => call.method === 'receiver.seek'))).toBe(false);
   await page.waitForTimeout(400);
   await expect(preview).toHaveAttribute('data-position', '120');
@@ -499,6 +499,45 @@ test('scrub preview is debounced and latest-wins without seeking until change', 
   await expect(preview).toBeHidden();
 });
 
+test('fast drags are 1:1 while slow drags gain fine control, and undo/redo jump between seek checkpoints', async ({ page }) => {
+  const content = {key:'framextv:tv:284833:1:1',kind:'tv',contentId:'284833',season:1,episode:1,watchUrl:'https://framextv.cc/watch/284833/1/1',title:'Household episode'};
+  await openApp(page, {
+    connection:{connected:true,configured:true,host:'192.168.1.50',name:'Test LUMA'}, settings:{hasReceiver:true,hasPairing:true,autoConnect:true},
+    playback:{active:true,playing:true,sourceUrl:media.url,content,positionSeconds:300,durationSeconds:600,canSeek:true},
+    remote:{media:{...media,content},tracks:[],catalog:[],selectedIndex:null,subtitlesEnabled:false},
+  });
+  const box = await page.locator('#seek-range').boundingBox();
+  const thumb = box.x + box.width / 2, y = box.y + box.height / 2;
+  const drag = async (steps, dxPerStep, msPerStep) => page.evaluate(async ({ thumb, y, steps, dxPerStep, msPerStep }) => {
+    const track = document.querySelector('#seek-track');
+    const fire = (type, x) => track.dispatchEvent(new PointerEvent(type, { pointerId: 7, clientX: x, clientY: y, bubbles: true, cancelable: true }));
+    fire('pointerdown', thumb);
+    let x = thumb;
+    for (let i = 0; i < steps; i++) { await new Promise(r => setTimeout(r, msPerStep)); x += dxPerStep; fire('pointermove', x); }
+    fire('pointerup', x);
+  }, { thumb, y, steps, dxPerStep, msPerStep });
+  const seeks = () => page.evaluate(() => window.__calls.filter(call => call.method === 'receiver.seek').map(call => call.params.position));
+  // Grabbing the thumb keeps its place; preview shows on touch, before any movement.
+  await drag(30, 3, 60); // ~0.05 px/ms for 1.8 s: 1:1, then 1/3, then 1/10
+  const slow = (await seeks()).at(-1) - 300;
+  const pixels = 90, oneToOne = pixels * 600 / box.width;
+  expect(slow).toBeGreaterThan(0);
+  expect(slow).toBeLessThan(oneToOne * 0.6);
+  await drag(4, 40, 16); // ~2.5 px/ms: 1:1
+  const fast = (await seeks()).at(-1);
+  expect(fast - 300).toBeGreaterThan(160 * 600 / box.width * 0.7);
+  await expect(page.locator('#seek-undo')).toBeEnabled();
+  await expect(page.locator('#seek-redo')).toBeDisabled();
+  await page.locator('#seek-undo').click();
+  // Undo returns to where the last scrub started: the slow seek's target.
+  await expect.poll(async () => (await seeks()).at(-1)).toBe(300 + slow);
+  await expect(page.locator('#seek-redo')).toBeEnabled();
+  const saved = await page.evaluate(() => window.__seekHistory);
+  expect(saved[content.key].forward.length).toBe(1);
+  await page.locator('#seek-redo').click();
+  await expect.poll(async () => (await seeks()).length).toBeGreaterThan(3);
+});
+
 test('unsupported scrub frames leave a usable timestamp-only scrubber', async ({ page }) => {
   const content = {key:'framextv:tv:284833:1:1',kind:'tv',contentId:'284833',season:1,episode:1,watchUrl:'https://framextv.cc/watch/284833/1/1',title:'Household episode'};
   await openApp(page, {
@@ -513,13 +552,13 @@ test('unsupported scrub frames leave a usable timestamp-only scrubber', async ({
   await expect.poll(() => page.evaluate(() => window.__calls.filter(call => call.method === 'preview.frame').length)).toBe(1);
   await expect(preview).toBeVisible();
   await expect(preview).toHaveAttribute('data-image', 'false');
-  await expect(page.locator('#scrub-preview-time')).toHaveText('1:30');
+  await expect(page.locator('#scrub-preview-time')).toHaveText(/^1:30 \/ /);
   expect(await page.evaluate(() => window.__calls.some(call => call.method === 'receiver.seek'))).toBe(false);
   await range.evaluate(element => element.dispatchEvent(new Event('pointercancel', {bubbles:true})));
   await expect(preview).toBeHidden();
 });
 
-test('scrubbing mirrors the latest position and JPEG frame to LUMA Receiver and clears it when the preview ends', async ({ page }) => {
+test('scrubbing mirrors the latest position (never the frame) to LUMA Receiver and clears it when the preview ends', async ({ page }) => {
   const content = {key:'framextv:tv:284833:1:1',kind:'tv',contentId:'284833',season:1,episode:1,watchUrl:'https://framextv.cc/watch/284833/1/1',title:'Household episode'};
   await openApp(page, {
     connection:{connected:true,configured:true,host:'192.168.1.50',name:'Test LUMA'}, settings:{hasReceiver:true,hasPairing:true,autoConnect:true},
@@ -543,16 +582,12 @@ test('scrubbing mirrors the latest position and JPEG frame to LUMA Receiver and 
   expect(await scrubs()).toHaveLength(3);
   expect(await page.evaluate(() => window.__calls.some(call => call.method === 'receiver.seek'))).toBe(false);
 
-  // A WebP phone frame stays local; only a JPEG frame is forwarded with the position.
-  await page.evaluate(() => { window.__receiver.previewUnsupported = false; });
-  await range.evaluate(element => { element.value = '30'; element.dispatchEvent(new Event('input', {bubbles:true})); });
-  await expect(page.locator('#scrub-preview')).toHaveAttribute('data-image', 'true');
-  await expect.poll(async () => (await scrubs()).length).toBe(5);
-  expect((await scrubs()).slice(3)).toEqual([{ active: true, positionSeconds: 30, durationSeconds: 600 }, { active: true, positionSeconds: 30, durationSeconds: 600 }]);
-  await page.evaluate(jpeg => { window.__receiver.previewDataUri = jpeg; }, jpeg);
+  // Frames never ride along: the projector draws the frames phones already shared with it.
+  await page.evaluate(jpeg => { window.__receiver.previewUnsupported = false; window.__receiver.previewDataUri = jpeg; }, jpeg);
   await range.evaluate(element => { element.value = '90'; element.dispatchEvent(new Event('input', {bubbles:true})); });
   await expect(page.locator('#scrub-preview')).toHaveAttribute('data-position', '90');
-  await expect.poll(async () => (await scrubs()).at(-1)).toEqual({ active: true, positionSeconds: 90, durationSeconds: 600, image: jpeg });
+  await expect.poll(async () => (await scrubs()).at(-1)).toEqual({ active: true, positionSeconds: 90, durationSeconds: 600 });
+  expect((await scrubs()).every(call => call.image === undefined)).toBe(true);
   await range.evaluate(element => element.dispatchEvent(new Event('change', {bubbles:true})));
   await expect.poll(async () => (await scrubs()).at(-1)).toEqual({ active: false });
   await expect.poll(() => page.evaluate(() => window.__calls.filter(call => call.method === 'receiver.seek').map(call => call.params.position))).toEqual([90]);
@@ -660,12 +695,10 @@ test('disconnect requires pairing again and Browse resumes unless the address fo
   await setup(page);
   await settingsDevice(page);
   await page.getByRole('button', { name: 'Disconnect projector', exact: true }).click();
-  await expect(page.locator('#refresh-playback')).toBeDisabled();
   await page.getByRole('button', { name: 'Connect', exact: true }).click();
   await expect(page.locator('#pair-panel')).toBeVisible();
-  await expect(page.locator('#refresh-playback')).toBeDisabled();
   await pair(page);
-  await expect(page.locator('#refresh-playback')).toBeEnabled();
+  await expect(page.locator('#pair-form')).toBeHidden();
   await page.getByRole('tab', { name: 'Browse', exact: true }).click();
   let calls = await page.evaluate(() => window.__calls);
   expect(calls.filter(call => call.method === 'app.browse').at(-1).params).toEqual({});
@@ -687,8 +720,11 @@ test('the local interface loads without a native receiver or external network de
   await page.goto(appUrl);
   await expect(page.locator('#message')).toHaveText('Open this page in the LUMA app to use the remote.');
   await expect(page.getByRole('button', { name: 'Connect', exact: true })).toBeDisabled();
+  // Nothing connected: the Remote tab shows the connect view in its place.
   await page.getByRole('tab', { name: 'Remote', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Pause', exact: true })).toBeDisabled();
+  await expect(page.getByRole('tab', { name: 'Remote', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.locator('#receiver-panel')).toBeVisible();
+  await expect(page.locator('#page-remote')).toBeHidden();
   await layout(page);
   expect(requests.every(url => new URL(url).origin === appUrl)).toBe(true);
 });
@@ -745,8 +781,6 @@ test('pairing requests a projector code, saves the pairing and opens the remote'
   expect(calls.find(call => call.method === 'receiver.pairComplete').params).toEqual({ pairingId: 'pairing-1', code: '123456' });
   const diagnostics = calls.filter(call => call.method === 'app.handoffStatus').map(call => call.params.stage);
   expect(diagnostics).toEqual(['setup', 'ready', 'setup', 'waiting', 'ready']);
-  await page.getByRole('button', { name: 'Refresh playback', exact: true }).click();
-  await expect(page.locator('#message')).toHaveText('Playback refreshed.');
 });
 
 test('pairing launches LUMA Receiver once when it does not answer, then shows the code', async ({ page }) => {
@@ -836,7 +870,8 @@ test('service restoration opens the existing remote and language aliases without
   await openApp(page, snapshot);
   await expect(page.getByRole('tab', { name: 'Remote', exact: true })).toHaveAttribute('aria-selected', 'true');
   await expect(page.locator('#media-title')).toHaveText('Restored household episode');
-  await expect(page.locator('#playback-status')).toHaveText('Playing · 3:05 / 10:00');
+  await expect(page.locator('#playback-status')).toHaveText('Playing');
+  await expect(page.locator('#seek-time')).toHaveText('3:05');
   await expect(page.locator('#volume-level')).toHaveText('6 / 30');
   await expect(page.locator('#pair-code')).toHaveValue('');
   await expect(page.locator('#pair-form')).toBeHidden();
@@ -1139,8 +1174,8 @@ test('canceling setup waiting prevents a queued Cast even if native validation f
   await expect(page.locator('#message')).toHaveText('Pairing stopped. No video was sent.');
   await page.evaluate(() => { window.__release(); window.LumaApp.onConnectionState({ settings: { hasReceiver: true, hasPairing: true }, connection: { connected: true, configured: true } }); });
   await page.getByRole('tab', { name: 'Remote', exact: true }).click();
-  await page.getByRole('button', { name: 'Refresh volume', exact: true }).click();
-  await expect(page.locator('#message')).toHaveText('Volume refreshed.');
+  await page.locator('.dpad [data-key="home"]').click();
+  await expect(page.locator('#message')).toHaveText('Remote command sent.');
   expect(await page.evaluate(() => window.__calls.some(call => call.method === 'receiver.open' || call.method === 'app.beginHandoff'))).toBe(false);
 });
 
@@ -1371,7 +1406,7 @@ test('projector power requires confirmation, defaults to Cancel and dismisses wi
   await openApp(page);
   await page.getByRole('tab', { name: 'Remote', exact: true }).click();
   const power = page.getByRole('button', { name: 'Power off projector', exact: true });
-  await expect(power).toBeDisabled();
+  await expect(page.locator('#receiver-panel')).toBeVisible();
   await layout(page);
   await page.getByRole('tab', { name: 'Devices', exact: true }).click();
   await setup(page);
