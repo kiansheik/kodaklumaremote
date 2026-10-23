@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>LUMA TV</title>
+  <style>
+    html,body{margin:0;height:100%;background:#070b11;color:#f5f7fa;font-family:Arial,sans-serif}
+    body{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:5vh 6vw;box-sizing:border-box}
+    h1{font-size:5vh;margin:0 0 2vh}
+    p{font-size:2.8vh;line-height:1.5;max-width:70vw;margin:0 0 3vh;color:#c2d7df}
+    #phones{display:grid;gap:1.5vh;min-width:40vw}
+    button{font:inherit;font-size:2.6vh;color:#fff;background:#1c3340;border:2px solid #48616e;border-radius:1vh;padding:1.6vh 2vw;text-align:left}
+    button:focus{outline:4px solid #b0f2dc;outline-offset:3px;background:#315c57}
+    small{display:block;font-size:1.9vh;color:#aab7c5;margin-top:.5vh}
+  </style>
+</head>
+<body>
+  <h1>LUMA Remote</h1>
+  <p id="status">Looking for your phone…</p>
+  <div id="phones"></div>
+  <script>
+  /* Fixed address for the TV browser's speed dial. It never talks to a phone (an
+     https page cannot reach a phone's http server); it remembers the phones that
+     opened it and sends the TV to one. Phones open it as tv.html#phone=IP:PORT. */
+  (function () {
+    'use strict';
+    var KEY = 'luma-phones', MAX = 8, AUTO_MS = 4000;
+    var status = document.getElementById('status'), list = document.getElementById('phones');
+    function address(value) {
+      var match = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3}):(\d{4,5})$/.exec(String(value || ''));
+      if (!match) return null;
+      var a = +match[1], b = +match[2], parts = [a, b, +match[3], +match[4]], port = +match[5];
+      for (var i = 0; i < 4; i++) if (parts[i] > 255 || String(parts[i]) !== match[i + 1]) return null;
+      var privateRange = a === 10 || a === 172 && b >= 16 && b <= 31 || a === 192 && b === 168;
+      return privateRange && port >= 1024 && port <= 65535 ? parts.join('.') + ':' + port : null;
+    }
+    function clean(value) { return String(value || '').replace(/[\x00-\x1f\x7f<>]/g, '').slice(0, 40); }
+    function load() {
+      var saved = [];
+      try { saved = JSON.parse(localStorage.getItem(KEY) || '[]'); } catch (_) {}
+      return (saved instanceof Array ? saved : []).filter(function (item) { return item && address(item.address); });
+    }
+    function save(phones) { try { localStorage.setItem(KEY, JSON.stringify(phones.slice(0, MAX))); } catch (_) {} }
+    function params() {
+      var result = {};
+      location.hash.replace(/^#/, '').split('&').forEach(function (pair) {
+        var index = pair.indexOf('=');
+        if (index > 0) { try { result[pair.slice(0, index)] = decodeURIComponent(pair.slice(index + 1)); } catch (_) {} }
+      });
+      return result;
+    }
+    function client() {
+      var value = '';
+      try { value = localStorage.getItem('luma-tv-client') || ''; } catch (_) {}
+      if (!/^tv-[a-zA-Z0-9_-]{16,96}$/.test(value)) {
+        value = 'tv-';
+        if (window.crypto && window.crypto.getRandomValues) {
+          var bytes = new Uint8Array(16); window.crypto.getRandomValues(bytes);
+          for (var i = 0; i < bytes.length; i++) value += ('0' + bytes[i].toString(16)).slice(-2);
+        } else value += Date.now().toString(36) + Math.random().toString(36).slice(2, 12);
+        try { localStorage.setItem('luma-tv-client', value); } catch (_) {}
+      }
+      return value;
+    }
+    function go(phone, phones) {
+      var others = phones.filter(function (item) { return item.address !== phone.address; }).map(function (item) { return item.address; });
+      status.textContent = 'Opening LUMA Remote on ' + (phone.name || phone.address) + '…';
+      // One TV identity for every phone address (approvals survive address changes); the
+      // receiver page uses the other addresses to move to another phone if this one leaves.
+      location.replace('http://' + phone.address + '/msx/connect.html#client=' + client() + (others.length ? '&phones=' + others.join(',') : ''));
+    }
+    var phones = load(), wanted = params(), given = address(wanted.phone);
+    if (given) {
+      phones = phones.filter(function (item) { return item.address !== given; });
+      phones.unshift({address: given, name: clean(wanted.name), at: Date.now()});
+      save(phones);
+      try { history.replaceState(null, '', location.pathname); } catch (_) {}
+      go(phones[0], phones);
+      return;
+    }
+    if (!phones.length) {
+      status.textContent = 'Open LUMA Remote on your phone, choose Philips, then tap Open TV receiver. This page remembers your phones after that.';
+      return;
+    }
+    phones.sort(function (a, b) { return (b.at || 0) - (a.at || 0); });
+    var timer = setTimeout(function () { go(phones[0], phones); }, AUTO_MS);
+    status.textContent = 'Opening the most recent phone. Choose another phone to use it instead.';
+    phones.forEach(function (phone, index) {
+      var button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = phone.name || 'Phone';
+      var detail = document.createElement('small');
+      detail.textContent = phone.address + (index === 0 ? ' · most recent' : '');
+      button.appendChild(detail);
+      button.addEventListener('click', function () {
+        clearTimeout(timer);
+        phone.at = Date.now(); save(phones.sort(function (a, b) { return (b.at || 0) - (a.at || 0); }));
+        go(phone, phones);
+      });
+      button.addEventListener('focus', function () { if (index !== 0) clearTimeout(timer); });
+      list.appendChild(button);
+    });
+    list.firstChild.focus();
+    document.addEventListener('keydown', function (event) {
+      var buttons = Array.prototype.slice.call(list.querySelectorAll('button')), index = buttons.indexOf(document.activeElement);
+      if (event.keyCode === 40 || event.keyCode === 39) { clearTimeout(timer); buttons[Math.min(buttons.length - 1, index + 1)].focus(); event.preventDefault(); }
+      else if (event.keyCode === 38 || event.keyCode === 37) { clearTimeout(timer); buttons[Math.max(0, index - 1)].focus(); event.preventDefault(); }
+    });
+  }());
+  </script>
+</body>
+</html>
