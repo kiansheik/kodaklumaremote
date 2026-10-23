@@ -48,6 +48,18 @@ test('first visit infers the subnet, asks only for the phone IP and remembers it
   expect(visits).toHaveLength(2);
 });
 
+test('focused launcher field accepts the exact direct URL filled by the phone', async ({ page }) => {
+  const visits = [];
+  await localNetwork(page);
+  await serve(page, visits);
+  await page.goto(LAUNCHER);
+  await expect(page.locator('#phone-ip')).toBeFocused();
+  await page.locator('#phone-ip').fill('http://192.168.68.24:49153/tv/connect.html');
+  await page.locator('#phone-ip').press('Enter');
+  await page.waitForURL(/^http:\/\/192\.168\.68\.24:49153\/tv\/connect\.html/);
+  expect(visits).toHaveLength(1);
+});
+
 test('an unavailable saved phone opens the editable address with an open-anyway fallback', async ({ page }) => {
   const visits = [];
   await localNetwork(page, '192.168.68.55', false);

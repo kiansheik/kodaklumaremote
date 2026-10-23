@@ -228,7 +228,7 @@ test('unavailable Philips receiver becomes setup and never attempts a failing br
   await expect(page.locator('#open-tv-receiver')).toHaveText('Set up TV receiver');
   await page.locator('#open-tv-receiver').click();
   await expect(page.locator('#msx-title')).toHaveText('Set up the Philips receiver');
-  await expect(page.locator('#browser-steps')).toContainText('Open Internet on the TV');
+  await expect(page.locator('#browser-steps')).toContainText('only speed dial');
   await expect(page.locator('#msx-type-address')).toHaveText('Type and open selected address');
   await expect(page.locator('#msx-startup')).toHaveText('https://kiansheik.io/kodaklumaremote/tv.html');
   expect(await page.evaluate(() => window.__calls.some(call => call.method === 'msx.launchBrowser'))).toBe(false);
@@ -257,6 +257,21 @@ test('one browser typing button offers stable and direct receiver addresses', as
   await expect(page.locator('body')).not.toContainText('Media Station X');
 });
 
+test('LUMA speed-dial page can be filled with this phone direct receiver URL', async ({ page }) => {
+  const matter = { available: true, paired: true, connected: true, capabilities: { navigation: true } };
+  await openApp(page, { selectedTarget: 'philips', tvConnected: false, textState: {
+    matter, startupUrl: 'http://192.168.1.10:4178', configured: true, pairingOpen: true,
+    textPermissionSaved: true, typingAvailable: true,
+  } });
+  await page.locator('#show-more').click();
+  await page.locator('#open-tv-receiver').click();
+  await expect(page.locator('#browser-steps')).toContainText('only speed dial');
+  await page.locator('#msx-fill-launcher').click();
+  expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'msx.typeBrowserAddress').map(call => call.params))).toEqual([{ address: 'direct' }]);
+  await expect.poll(() => page.evaluate(() => window.__calls.filter(call => call.method === 'matter.key').length)).toBe(1);
+  expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'matter.key').map(call => call.params))).toEqual([{ key: 'enter' }]);
+});
+
 test('first address-typing action prepares the receiver and requests one-time TV permission', async ({ page }) => {
   const matter = { available: true, paired: true, connected: true, capabilities: { navigation: true } };
   await openApp(page, { selectedTarget: 'philips', tvConnected: false, textState: { matter, configured: false, pairingOpen: false } });
@@ -266,6 +281,21 @@ test('first address-typing action prepares the receiver and requests one-time TV
   await page.locator('#msx-type-address').click();
   await expect(page.locator('#msx-text-form')).toBeVisible();
   expect(await page.evaluate(() => window.__calls.filter(call => ['msx.start', 'msx.textPairRequest'].includes(call.method)).map(call => call.method))).toEqual(['msx.start', 'msx.textPairRequest']);
+});
+
+test('saved Philips typing permission can be rebound after the TV address changes', async ({ page }) => {
+  const matter = { available: true, paired: true, connected: true, capabilities: { navigation: true } };
+  await openApp(page, { selectedTarget: 'philips', tvConnected: false, textState: {
+    matter, startupUrl: 'http://192.168.1.10:4178', configured: true, pairingOpen: true,
+    textPermissionSaved: true, typingAvailable: false,
+  } });
+  await page.locator('#show-more').click();
+  await page.locator('#open-tv-receiver').click();
+  await expect(page.locator('#msx-title')).toHaveText('Set up the Philips receiver');
+  await expect(page.locator('#msx-type-status')).toContainText('TV network address changed');
+  await page.locator('#msx-type-address').click();
+  await expect(page.locator('#msx-text-form')).toBeVisible();
+  expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'msx.textPairRequest').length)).toBe(1);
 });
 
 test('Turn on TV requires its advertised discrete capability and stays separate from browser launch', async ({ page }) => {
@@ -750,7 +780,7 @@ test('Philips setup, approval and remote panels fit a narrow phone without scrol
 test('TV setup diagnostics show only observed fixed guidance and keep narrow-phone controls visible', async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 592 });
   await openApp(page, { selectedTarget: 'philips', tvConnected: false });
-  await expect(page.locator('#browser-steps')).toContainText('Open Internet on the TV');
+  await expect(page.locator('#browser-steps')).toContainText('only speed dial');
   await expect(page.locator('#msx-diagnostic')).toBeHidden();
   const cases = [
     ['HTTPS_REQUEST', 'direct phone address uses http'],

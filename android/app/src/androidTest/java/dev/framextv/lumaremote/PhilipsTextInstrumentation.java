@@ -36,10 +36,10 @@ public final class PhilipsTextInstrumentation {
     private static final class Factory implements PhilipsTextController.Factory {
         final List<JSONObject> calls = new ArrayList<>(); final List<String> pins = new ArrayList<>();
         boolean rejectGrant, unicode = true, browserSupported = true; int inputCount, failInput = -1, browserCount; long inputDelay; final Clock clock;
-        String browserError; Runnable onSystem;
+        String browserError, expectedHost = HOST; Runnable onSystem;
         Factory(Clock clock) { this.clock = clock; }
         public PhilipsTextController.Transport create(String host, String pin) {
-            require(HOST.equals(host), "Text transport changed its explicit peer"); pins.add(pin);
+            require(expectedHost.equals(host), "Text transport changed its explicit peer"); pins.add(pin);
             return new PhilipsTextController.Transport() {
                 boolean closed;
                 public String certificatePin() { return PIN; }
@@ -115,6 +115,18 @@ public final class PhilipsTextInstrumentation {
             require(restored.status(HOST).getBoolean("textPermissionSaved") && restored.status(HOST).getBoolean("typingAvailable") && !restored.status("192.168.50.9").getBoolean("typingAvailable"), "Restored readiness lost its peer binding");
             require(restoredFactory.calls.isEmpty(), "Permission/readiness status made a TV request"); restored.close();
             rejects("TEXT_ALREADY_PAIRED", () -> controller.pairRequest(HOST));
+            String movedHost = "192.168.50.9";
+            factory.expectedHost = movedHost;
+            JSONObject movedPending = controller.pairRequest(movedHost);
+            require(movedPending.getBoolean("pairing") && controller.status(movedHost).getBoolean("textPermissionSaved")
+                    && !controller.status(movedHost).getBoolean("typingAvailable") && controller.status(HOST).getBoolean("typingAvailable"),
+                    "Address-change pairing discarded the old permission before the replacement grant");
+            factory.rejectGrant = true; rejects("TEXT_REJECTED", () -> controller.pairGrant(movedHost, "0123"));
+            require(controller.status(HOST).getBoolean("typingAvailable") && !controller.status(movedHost).getBoolean("typingAvailable"),
+                    "Failed address-change grant replaced the working credential");
+            factory.rejectGrant = false; controller.pairGrant(movedHost, "0123");
+            require(!controller.status(HOST).getBoolean("typingAvailable") && controller.status(movedHost).getBoolean("typingAvailable"),
+                    "Successful address-change grant did not rebind typing to the current TV peer");
             JSONObject grant = factory.calls.get(factory.calls.size() - 1).getJSONObject("body");
             require("0123".equals(grant.getJSONObject("auth").getString("pin")) && "ShAVnLeilQQ00rvqN1kn5BJnIbQ=".equals(grant.getJSONObject("auth").getString("auth_signature")), "Grant changed PIN or signature");
             controller.close();

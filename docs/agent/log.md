@@ -1,5 +1,16 @@
 # Work log
 
+- 2026-10-23 Philips typing recovery and speed-dial autofill: fixed the saved
+  permission dead end when DHCP changes the Matter-resolved TV address. A new
+  PIN pairing is allowed for the new private peer while the old credential is
+  retained until grant success. The phone now instructs the user to keep the
+  stable LUMA page as the TV Internet browser's only speed dial and can type its
+  exact current direct receiver URL into that page's auto-focused field. The
+  direct browser URL remains a fallback. Node 247, focused browser 10 and the
+  two corrected full-suite wording/layout cases pass; Android app and
+  AndroidTest sources compile. Real Philips behavior remains unverified.
+  [Handoff](session-handoffs/2026-10-23-philips-typing-rebind-speed-dial.md).
+
 - 2026-10-23 Philips browser-only setup: disconnected video setup now says
   **Set up TV receiver** rather than attempting the failing native launch. The
   visible Media Station X path was removed. One **Type and open selected

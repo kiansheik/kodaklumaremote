@@ -9,15 +9,18 @@ connection does not stop or reset the TV player.
 ## Setup and platform boundary
 
 When the receiver is offline, LUMA Remote shows **Set up TV receiver** instead
-of attempting a browser launch. Open **Internet** on the TV, select and clear
-its address field, then choose either **Stable address** or **Direct phone
-address** on the phone and tap **Type and open selected address**. First use
-requests the separate four-digit Philips TV-text permission in the same flow.
+of attempting a browser launch. In the TV Internet browser, keep the stable LUMA
+page as its only speed dial and open it. The launcher's phone-address field takes
+focus automatically; **Autofill this phone on LUMA page** types the current
+native-owned direct receiver URL and presses Go. First use requests the separate
+four-digit Philips TV-text permission in the same flow. If the speed dial is
+unavailable, **Direct phone address** plus **Type and open selected address**
+remains the backup for the browser address bar.
 
 The stable choice types only
 `https://kiansheik.io/kodaklumaremote/tv.html`. The fixed page attempts to infer
-the TV's private `/24` network prefix and asks for the phone's final IP number,
-then remembers it. One saved phone is probed and opened automatically; multiple
+the TV's private `/24` network prefix and accepts either the phone's IP or the
+exact direct URL filled by the phone, then remembers it. One saved phone is probed and opened automatically; multiple
 saved phones produce a chooser. If subnet discovery or the HTTPS-to-HTTP image
 probe is unavailable in the TV browser, the full address remains editable and
 an **Open saved phone anyway** fallback is shown. The direct backup types

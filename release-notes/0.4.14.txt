@@ -1,0 +1,5 @@
+LUMA Remote 0.4.14
+
+Philips TV typing can now recover when the TV receives a different local network address. Tap Type and open selected address again, enter the new four-digit TV PIN, and the app replaces the saved typing permission only after the new pairing succeeds.
+
+Philips browser setup now supports a simpler one-speed-dial flow. Save the stable LUMA page as the TV Internet browser's only speed dial, open it, then tap Autofill this phone on LUMA page. The phone types its current direct receiver URL into the focused field and presses Go. The direct browser address remains available as a backup.

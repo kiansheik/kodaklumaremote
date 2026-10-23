@@ -1,5 +1,24 @@
 # Current state
 
+## Philips typing rebind and one-speed-dial setup candidate
+
+- A saved JointSPACE typing credential no longer dead-ends after the Matter TV
+  resolves to a different private address. The same-address request remains a
+  no-op error, but a different current Matter peer may start a new TV PIN
+  exchange. The old credential stays saved and usable until the new grant
+  succeeds; only then is it replaced.
+- The setup screen explains the intended TV configuration: keep the canonical
+  LUMA page as the Internet browser's only speed dial. That fixed page focuses
+  its phone field and now accepts the exact native-owned direct receiver URL as
+  well as an IP. **Autofill this phone on LUMA page** types that current URL and
+  sends Matter Enter/Go. Direct browser-address typing remains the fallback.
+- Verified locally: Node 247/247; focused launcher/setup browser 10/10; full
+  browser 159/161 before two obsolete wording assertions were updated, then
+  both corrected cases passed; Android app and AndroidTest Java compilation.
+  The Android instrumentation source covers rebind/rollback but was only
+  compiled because no emulator is connected. Real TV focus, typing, Go and
+  speed-dial launch remain physical acceptance checks.
+
 ## Released 0.4.13: Philips browser-only receiver setup
 
 - When the Philips receiver is disconnected, More now says **Set up TV

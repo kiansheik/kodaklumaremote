@@ -152,6 +152,12 @@ historical, not the current readiness state.
     fix later produced actual hello/poll/state. The later LAN sample has playback/
     pause/resume reports and user-confirmed picture and sound.
     See [browser setup](session-handoffs/2026-10-18-philips-browser-setup.md).
+    The latest candidate repairs saved typing after a TV DHCP address change:
+    it re-pairs against the current Matter-resolved private peer without deleting
+    the old credential until grant success. The intended browser setup now uses
+    the canonical LUMA page as the only speed dial, then the phone types its
+    fixed direct receiver URL into that page's focused field. This does not yet
+    prove that phone controls can foreground Internet or select the speed dial.
 12. Can the physically confirmed DIAL route launch another supported receiver?
     Exact-TV multicast discovery supplied an `Application-URL`; Netflix state
     changed stopped→running after one empty POST201 and the user confirmed

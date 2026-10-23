@@ -245,13 +245,13 @@
         <section id="msx-panel" class="form-card" hidden>
           <h2 id="msx-title">Set up the Philips receiver</h2>
           <div id="msx-setup-fields">
-          <ol id="browser-steps" class="msx-steps"><li>Open Internet on the TV, then select and clear its address bar.</li><li>Choose the stable address, or the direct phone address as a backup.</li><li>Tap Type and open selected address. The phone types it and presses Go.</li><li>When the receiver opens, allow the TV here.</li></ol>
+          <ol id="browser-steps" class="msx-steps"><li>In the TV Internet browser, save the stable LUMA address as its only speed dial, then open it.</li><li>On the LUMA page, leave the phone-address field selected and tap Autofill this phone below.</li><li>If the speed dial is unavailable, choose Direct phone address and use Type and open selected address.</li><li>When the receiver opens, allow the TV here.</li></ol>
           <div id="tv-entry-methods" role="group" aria-label="Receiver address"><button id="receiver-address-stable" type="button" aria-pressed="true">Stable address</button><button id="receiver-address-direct" type="button" aria-pressed="false">Direct phone address</button></div>
           <p id="msx-startup" class="startup-address" hidden></p>
           <p id="msx-pairing" role="status">Use the same Wi-Fi network on both devices.</p>
           <p id="msx-diagnostic" role="status" hidden></p>
           <p id="msx-type-status" role="status">Select the TV browser address bar. The phone will type the address and press Go.</p>
-          <div class="form-row"><button id="msx-type-address" class="primary" type="button">Type and open selected address</button><button id="msx-refresh" class="quiet" type="button" hidden>Refresh</button></div>
+          <div class="form-row"><button id="msx-fill-launcher" class="primary" type="button">Autofill this phone on LUMA page</button><button id="msx-type-address" class="quiet" type="button">Type and open selected address</button><button id="msx-refresh" class="quiet" type="button" hidden>Refresh</button></div>
           <button id="msx-text-pair" class="quiet" type="button" hidden>Enable TV typing</button>
           <form id="msx-text-form" autocomplete="off" hidden><p class="hint">First time only: enter the TV’s PIN to let this phone type into the selected TV field.</p><label for="msx-text-pin">TV PIN</label><input id="msx-text-pin" type="password" inputmode="numeric" maxlength="4" pattern="[0-9]{4}" autocomplete="off" placeholder="4 digits"><div class="form-row"><button id="msx-text-grant" class="primary" type="submit">Save permission</button></div></form>
           <button id="msx-confirm" class="primary" type="button" hidden>Allow this TV</button>

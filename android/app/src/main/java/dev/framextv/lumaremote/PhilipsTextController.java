@@ -105,7 +105,11 @@ public final class PhilipsTextController implements AutoCloseable {
         final long revision = begin(); TextException failure = null;
         try {
             synchronized (lock) {
-                if (credentials != null) throw new TextException("TEXT_ALREADY_PAIRED");
+                // JointSPACE credentials are bound to the TV address that issued
+                // them. DHCP can move the same paired Matter TV to a new private
+                // address, so allow a fresh PIN exchange for that resolved peer.
+                // Keep the old credential until the replacement grant succeeds.
+                if (credentials != null && host.equals(credentials.optString("host"))) throw new TextException("TEXT_ALREADY_PAIRED");
                 if (pending != null && clock.now() < pendingUntil) throw new TextException("TEXT_PAIRING_PENDING");
                 pending = null; pendingUntil = 0;
             }

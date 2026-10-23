@@ -802,7 +802,7 @@ function renderControls() {
   const selectedAddress = state.tvAddress === 'direct' ? remote.browserSetupUrl : TV_LAUNCHER;
   $('#msx-startup').hidden = remote.textPairing === true;
   $('#msx-startup').textContent = selectedAddress || 'The direct phone address will appear when setup starts.';
-  $('#msx-title').textContent = remote.textOperation === 'msx.textPairGrant' ? 'Checking the TV PIN…' : remote.textOperation === 'msx.textPairRequest' ? 'Requesting the TV PIN…' : remote.textOperation === 'msx.launchBrowser' ? 'Requesting the TV browser…' : remote.textOperation === 'msx.typeBrowserAddress' ? 'Typing the receiver address…' : remote.textPairing ? 'Enter the TV PIN' : remote.connected ? 'TV receiver connected' : remote.awaitingApproval ? 'Allow your TV' : remote.textPermissionSaved ? 'TV typing enabled' : 'Set up the Philips receiver';
+  $('#msx-title').textContent = remote.textOperation === 'msx.textPairGrant' ? 'Checking the TV PIN…' : remote.textOperation === 'msx.textPairRequest' ? 'Requesting the TV PIN…' : remote.textOperation === 'msx.launchBrowser' ? 'Requesting the TV browser…' : remote.textOperation === 'msx.typeBrowserAddress' ? 'Typing the receiver address…' : remote.textPairing ? 'Enter the TV PIN' : remote.connected ? 'TV receiver connected' : remote.awaitingApproval ? 'Allow your TV' : remote.typingAvailable ? 'TV typing enabled' : 'Set up the Philips receiver';
   $('#tv-entry-methods').hidden = remote.textPairing === true;
   for (const address of ['stable', 'direct']) {
     $(`#receiver-address-${address}`).setAttribute('aria-pressed', String(state.tvAddress === address));
@@ -834,6 +834,8 @@ function renderControls() {
   $('#msx-type-address').hidden = remote.textPairing;
   $('#msx-type-address').textContent = 'Type and open selected address';
   $('#msx-type-address').disabled = !free || remote.typingBusy === true || !matter.connected;
+  $('#msx-fill-launcher').hidden = remote.textPairing;
+  $('#msx-fill-launcher').disabled = !free || remote.typingBusy === true || !matter.connected;
   $('#msx-text-pair').hidden = true;
   $('#msx-text-pair').textContent = 'Enable TV typing';
   $('#msx-text-pair').disabled = !free || remote.typingBusy === true;
@@ -841,7 +843,7 @@ function renderControls() {
   for (const control of $('#msx-text-form').querySelectorAll('button,input')) control.disabled = !free;
   $('#browser-steps').hidden = remote.textPairing === true;
   const textProgress = { 'msx.textPairRequest': 'Waiting for the TV to show its PIN…', 'msx.textPairGrant': 'Checking the PIN and saving permission. Please wait…', 'msx.typeBrowserAddress': 'Keep the empty Internet browser address bar selected. Typing the complete address…', 'msx.launchBrowser': 'Requesting the TV browser…' }[remote.textOperation];
-  const fieldHint = remote.typingAvailable ? 'Select and clear the TV browser address bar, choose an address, then tap Type and open selected address.' : remote.textPermissionSaved ? 'Permission saved. Reconnect your TV remote to type the receiver address.' : 'Tap Type and open selected address. The first time, the TV will show a PIN to enable typing.';
+  const fieldHint = remote.typingAvailable ? 'Select and clear the TV browser address bar, choose an address, then tap Type and open selected address.' : remote.textPermissionSaved ? 'The TV network address changed. Tap Type and open selected address to reconnect typing with a new PIN.' : 'Tap Type and open selected address. The first time, the TV will show a PIN to enable typing.';
   $('#msx-type-status').textContent = textProgress || remote.typingNotice || TV_TEXT_ERRORS[remote.textError] || (remote.textPairing ? 'Enter the four-digit PIN shown on the TV.' : fieldHint);
   $('#msx-type-status').dataset.error = String(!textProgress && (remote.typingNotice ? remote.typingNoticeError === true : !!remote.textError));
   $('#msx-text-grant').textContent = remote.textOperation === 'msx.textPairGrant' ? 'Checking PIN…' : 'Save permission';
@@ -1582,7 +1584,9 @@ async function openTvReceiver() {
   state.tvSetup = 'video';
   if (!state.philips.connected) {
     closeSheet(); page('devices');
-    state.philips.typingNotice = 'Select the TV browser address bar, then tap Type and open selected address.';
+    state.philips.typingNotice = state.philips.textPermissionSaved && !state.philips.typingAvailable
+      ? 'The TV network address changed. Tap Type and open selected address to reconnect typing with a new PIN.'
+      : 'Select the TV browser address bar, then tap Type and open selected address.';
     message('Set up the TV browser receiver first.'); renderControls();
     return;
   }
@@ -1672,7 +1676,7 @@ function tvTextCommand(method, params, consume) {
   }, {}, '', consume).finally(() => { remote.textOperation = null; renderControls(); });
 }
 function requestTvTypingPermission() {
-  if (!state.philips.startupUrl || state.philips.textPermissionSaved || state.philips.textPairing) return;
+  if (!state.philips.startupUrl || state.philips.typingAvailable || state.philips.textPairing) return;
   $('#msx-text-pin').value = '';
   void tvTextCommand('msx.textPairRequest', {}, result => {
     if (result?.pairing !== true) throw fixedError('TEXT_REJECTED');
@@ -1697,17 +1701,17 @@ $('#msx-text-form').addEventListener('submit', event => {
     message(state.philips.textPermissionSaved ? 'TV typing permission saved. Type and open the selected address next.' : state.philips.typingNotice, !state.philips.textPermissionSaved);
   });
 });
-$('#msx-type-address').addEventListener('click', async () => {
+async function typeTvBrowserAddress(address) {
   const tv = state.philips;
   if (tv.typingBusy || !state.matter.connected) return;
   if (!tv.startupUrl || tv.configured === false && tv.pairingOpen === false) {
     const started = await command('msx.start', {}, '', msxState);
     if (!started) return;
   }
-  if (!tv.textPermissionSaved) { requestTvTypingPermission(); return; }
-  if (!tv.typingAvailable || !tv.browserSetupUrl) { message(TV_TEXT_ERRORS.TEXT_ADDRESS_UNAVAILABLE, true); return; }
+  if (!tv.typingAvailable) { requestTvTypingPermission(); return; }
+  if (!tv.browserSetupUrl) { message(TV_TEXT_ERRORS.TEXT_ADDRESS_UNAVAILABLE, true); return; }
   tv.typingNotice = '';
-  void tvTextCommand('msx.typeBrowserAddress', { address: state.tvAddress }, async result => {
+  void tvTextCommand('msx.typeBrowserAddress', { address }, async result => {
     if (result?.accepted !== true || !Number.isInteger(result.totalChars) || result.totalChars < 1 || result.acknowledgedChars !== result.totalChars || result.textEntryMode !== 'browser') throw fixedError('TEXT_REJECTED');
     await new Promise(resolve => setTimeout(resolve, 350));
     try {
@@ -1719,7 +1723,9 @@ $('#msx-type-address').addEventListener('click', async () => {
     tv.typingNoticeError = false;
     message(tv.typingNotice);
   });
-});
+}
+$('#msx-type-address').addEventListener('click', () => { void typeTvBrowserAddress(state.tvAddress); });
+$('#msx-fill-launcher').addEventListener('click', () => { void typeTvBrowserAddress('direct'); });
 $('#msx-developer').addEventListener('toggle', renderControls);
 for (const [id, method, receiptMethod, notice] of [
   ['msx-debug-ping', 'msx.debugPing', 'ping', 'TV ping acknowledged.'],
