@@ -1,12 +1,12 @@
 {
   "schemaVersion": 1,
   "packageName": "dev.framextv.lumareceiver",
-  "versionName": "0.2.0",
-  "versionCode": 7,
+  "versionName": "0.2.3",
+  "versionCode": 10,
   "minSdk": 23,
-  "apkUrl": "https://github.com/kiansheik/kodaklumaremote/releases/download/v0.4.9/luma-receiver-0.2.0.apk",
-  "sha256": "f9f93dc8268b7b6f47a2fa47bc257cdfa74745b2418b4d8e7160501ffc7c91c0",
-  "sizeBytes": 1179782,
-  "releasedAt": "2026-10-23T07:05:20.329Z",
-  "notes": "LUMA Remote 0.4.9\n\nReplaces Kodi with LUMA Receiver, our own projector player. Install it once on the projector (open this release page in the projector's browser and download LUMA Receiver), then pair from the phone with the 6-digit code shown on the projector. Kodi logins and the Kodi metadata add-on are no longer used, and saved Kodi passwords are deleted from the phone on upgrade.\n\nLUMA Receiver plays HLS, DASH and MP4 directly on the projector's hardware video path, starts in the background when the projector boots and comes on screen as soon as you cast. Source checks for casting, Next episode and controls now happen on the projector in one step, so two phones can no longer replace each other's video between a check and an open.\n\nCaptions use a new outlined style kept to the centre of the screen on a nearly transparent panel. Change their size from the phone's Subtitles sheet or with Up/Down on the projector remote; the size is saved on the projector for every phone.\n\nScrubbing on the phone now shows the same position and preview frame on the projector at the same time.\n\nThe projector keeps its own watch history, even when every phone is off. Phones sync Resume positions with it every minute while connected, so every phone in the house sees the same progress.\n\nLUMA Receiver updates itself from the release feed and asks before installing. Physical phone acceptance of pairing, casting, Library sync and synced scrubbing is still pending.\n"
+  "apkUrl": "https://github.com/kiansheik/kodaklumaremote/releases/download/v0.4.10/luma-receiver-0.2.3.apk",
+  "sha256": "fadc21c1efd7367388ec06d1efbee138b35c333005374275eecc11d3520827e0",
+  "sizeBytes": 1185598,
+  "releasedAt": "2026-10-23T08:42:30.480Z",
+  "notes": "LUMA Remote 0.4.10\n\nSubtitles no longer interrupt the video. LUMA Receiver now downloads the chosen subtitle file itself and draws it, so picking or switching a language never rebuffers or reloads playback. It reads WebVTT, SRT, ASS/SSA and TTML in any common text encoding, skips individual broken lines instead of rejecting the file, removes stray positioning tags, and repairs Hebrew and Arabic files whose punctuation was stored backwards for older players. On a 63-track test episode every file now loads, including languages that previously failed.\n\nFixes subtitle tracks disappearing from the list when the provider's file name contained a space.\n\nFixes a crash when holding the scrub bar: a slow preview decode was released while still running. Slow previews now finish safely, and a single slow frame no longer disables previews for the rest of the video.\n\nThe app reconnects to the saved projector on its own after it is reopened, instead of forgetting it when the first attempt fails.\n\nLUMA Receiver keeps a smaller video buffer to reduce memory pressure on the projector, and keeps a short diagnostic log across restarts to help investigate freezes.\n"
 }
