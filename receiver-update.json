@@ -4,9 +4,9 @@
   "versionName": "0.3.2",
   "versionCode": 16,
   "minSdk": 23,
-  "apkUrl": "https://github.com/kiansheik/kodaklumaremote/releases/download/v0.4.18/luma-receiver-0.3.2.apk",
+  "apkUrl": "https://github.com/kiansheik/kodaklumaremote/releases/download/v0.4.19/luma-receiver-0.3.2.apk",
   "sha256": "b45d3e642c988d8eac256e8813fa1613308e50fd0f7577c4929cde7869ac2fdb",
   "sizeBytes": 1134598,
-  "releasedAt": "2026-10-23T17:35:17.969Z",
-  "notes": "LUMA Remote 0.4.18\n\nFixes the remaining Philips REQUEST_REJECTED response when the TV's actual browser connection address differs from its Matter-resolved address. Phone-IP autofill now opens a short explicit migration window, allowing the real private-LAN connection to update the saved peer while preserving the previously approved receiver identity.\n\nAlso includes no-pointer directional navigation: small remote movements become Up, Down, Left, or Right focus steps and OK activates the focused control.\n\nAdds a Speed dial button directly below the Philips remote. It requests the TV Internet browser even when the receiver is already connected, using the saved Philips browser permission.\n"
+  "releasedAt": "2026-10-23T17:48:27.116Z",
+  "notes": "LUMA Remote 0.4.19\n\nFixes Philips REQUEST_REJECTED using the browser's actual authenticated connection instead of guessing its address from Matter. A new private peer may load the receiver shell, but the saved TV browser must present the exact previously approved receiver identity before the phone persists the new address. Receiver logs now show the candidate and completed migration addresses for direct diagnosis.\n\nIncludes the Philips Speed dial button and no-pointer directional navigation from 0.4.18.\n"
 }
