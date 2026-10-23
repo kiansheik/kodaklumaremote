@@ -131,7 +131,7 @@
       status.textContent = 'Checking your saved phone…';
       probe(phones[0], function (alive) {
         if (alive) go(phones[0], phones);
-        else showSetup('', 'The saved phone did not answer. Use phone autofill, enter its IP, or open the saved phone anyway.', phones[0]);
+        else showSetup('', 'Ready to connect this phone. Use Autofill this phone in LUMA Remote.', phones[0]);
       });
       return;
     }

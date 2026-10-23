@@ -37,6 +37,10 @@ blank and the phone types only its private IP address.
 
 - The previously deployed full-URL autofill was incompatible with the real TV
   page and produced a simple JSON rejection, per user observation.
+- The real TV's saved-phone image probe also reached its negative path. That
+  HTTPS-origin probe is not proof that the HTTP phone receiver is unavailable;
+  the page now opens neutral blank-field/autofill guidance instead of saying the
+  phone did not answer.
 - No emulator is connected, so Android instrumentation was compiled, not run.
 
 ## Remaining questions

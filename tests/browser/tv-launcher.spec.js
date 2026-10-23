@@ -62,14 +62,14 @@ test('launcher rejects a full direct URL and accepts only a private IP', async (
   expect(visits).toHaveLength(0);
 });
 
-test('an unavailable saved phone opens the editable address with an open-anyway fallback', async ({ page }) => {
+test('an inconclusive saved-phone probe opens neutral autofill setup with a fallback', async ({ page }) => {
   const visits = [];
   await localNetwork(page, '192.168.68.55', false);
   await serve(page, visits);
   await page.goto(LAUNCHER);
   await page.evaluate(() => localStorage.setItem('luma-phones', JSON.stringify([{ address: '192.168.68.24:4178', name: 'Phone 24', at: 1 }])));
   await page.reload();
-  await expect(page.locator('#status')).toContainText('saved phone did not answer');
+  await expect(page.locator('#status')).toHaveText('Ready to connect this phone. Use Autofill this phone in LUMA Remote.');
   await expect(page.locator('#phone-ip')).toHaveValue('');
   await expect(page.getByRole('button', { name: 'Open saved phone anyway' })).toBeVisible();
   expect(visits).toEqual([]);

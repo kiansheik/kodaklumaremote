@@ -14,6 +14,10 @@
 - Focused launcher/setup browser tests pass 10/10, and Android app plus
   AndroidTest Java compilation passes. The actual Philips field/JSON behavior
   still needs physical confirmation after deployment.
+- Real-TV follow-up showed the HTTPS image probe falling into its negative path.
+  Because that probe can be browser-blocked and does not prove receiver
+  reachability, its negative state now opens the same blank autofill field with
+  neutral guidance instead of claiming that the phone did not answer.
 
 ## Released 0.4.14: Philips typing rebind and one-speed-dial setup
 
