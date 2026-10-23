@@ -4,9 +4,9 @@
   "versionName": "0.3.2",
   "versionCode": 16,
   "minSdk": 23,
-  "apkUrl": "https://github.com/kiansheik/kodaklumaremote/releases/download/v0.4.16/luma-receiver-0.3.2.apk",
+  "apkUrl": "https://github.com/kiansheik/kodaklumaremote/releases/download/v0.4.17/luma-receiver-0.3.2.apk",
   "sha256": "b45d3e642c988d8eac256e8813fa1613308e50fd0f7577c4929cde7869ac2fdb",
   "sizeBytes": 1134598,
-  "releasedAt": "2026-10-23T17:24:50.352Z",
-  "notes": "LUMA Remote 0.4.16\n\nFixes a white screen after Philips direct navigation when the TV's network address changed. Before IP autofill, the app now safely moves the saved browser-receiver approval to the current authenticated Matter TV address while preserving the TV's saved receiver identity.\n\nThe TV launcher continues to accept only the phone's private IP address, and an inconclusive browser probe no longer claims that the phone failed to answer.\n"
+  "releasedAt": "2026-10-23T17:29:25.412Z",
+  "notes": "LUMA Remote 0.4.17\n\nMakes Philips directional-pad navigation reliable on the TV receiver page. The page no longer requests or follows a mouse pointer; tiny remote movements accumulate into one Up, Down, Left, or Right focus step, and OK activates the focused control.\n\nAlso includes the receiver approval repair from 0.4.16 for TVs whose local network address changed.\n"
 }

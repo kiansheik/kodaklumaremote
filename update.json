@@ -1,12 +1,12 @@
 {
   "schemaVersion": 1,
   "packageName": "dev.framextv.lumaremote",
-  "versionName": "0.4.16",
-  "versionCode": 26,
+  "versionName": "0.4.17",
+  "versionCode": 27,
   "minSdk": 24,
-  "apkUrl": "https://github.com/kiansheik/kodaklumaremote/releases/download/v0.4.16/luma-remote-0.4.16.apk",
-  "sha256": "54406ba6220343b273e8d764d86e11d7cf42e91b36208b214de4230226a94774",
-  "sizeBytes": 9821746,
-  "releasedAt": "2026-10-23T17:24:45.036Z",
-  "notes": "LUMA Remote 0.4.16\n\nFixes a white screen after Philips direct navigation when the TV's network address changed. Before IP autofill, the app now safely moves the saved browser-receiver approval to the current authenticated Matter TV address while preserving the TV's saved receiver identity.\n\nThe TV launcher continues to accept only the phone's private IP address, and an inconclusive browser probe no longer claims that the phone failed to answer.\n"
+  "apkUrl": "https://github.com/kiansheik/kodaklumaremote/releases/download/v0.4.17/luma-remote-0.4.17.apk",
+  "sha256": "f1c3765f40ad3ad701feb2449397636a0026f8eb6344c8545320e95e9d52aa29",
+  "sizeBytes": 9821446,
+  "releasedAt": "2026-10-23T17:29:20.516Z",
+  "notes": "LUMA Remote 0.4.17\n\nMakes Philips directional-pad navigation reliable on the TV receiver page. The page no longer requests or follows a mouse pointer; tiny remote movements accumulate into one Up, Down, Left, or Right focus step, and OK activates the focused control.\n\nAlso includes the receiver approval repair from 0.4.16 for TVs whose local network address changed.\n"
 }
