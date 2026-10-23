@@ -46,6 +46,8 @@ phone's correct `192.168.68…` address.
 
 - Does the real Philips now load the receiver without another **Allow TV** tap?
 - Can the TV's browser reliably focus and submit the launcher field?
+- Does the 0.4.17 four-pixel no-pointer adapter turn each physical Philips
+  directional stroke into exactly one focus step?
 
 ## Suggested next prompt
 

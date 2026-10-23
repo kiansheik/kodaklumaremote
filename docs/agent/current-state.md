@@ -27,6 +27,21 @@
   peer, preserves the receiver identity/capability, clears the stale session and
   persists the new peer. Public addresses are rejected. Android app and
   AndroidTest sources compile; physical Philips acceptance remains pending.
+- Published 0.4.16/code 26 from `faa7c6f`; its 9,821,746-byte APK has SHA-256
+  `54406ba6220343b273e8d764d86e11d7cf42e91b36208b214de4230226a94774`.
+  It was installed in place and cold-launched on the Samsung. A fresh real-TV
+  retry after installation is still required.
+
+## Philips no-pointer directional receiver candidate
+
+- The phone-hosted receiver reached through the GitHub speed dial no longer
+  requests Pointer Lock or maps hover position directly to a control. Tiny
+  Philips remote movements accumulate to four pixels, select their dominant
+  axis and produce one Up/Down/Left/Right focus step with a 160 ms repeat bound;
+  OK activates the focused control. The cursor remains hidden.
+- The focused receiver browser suite passes 11/11. Because this page is bundled
+  into the phone listener, deployment requires the 0.4.17 phone build rather
+  than a GitHub Pages-only change.
 
 ## Released 0.4.14: Philips typing rebind and one-speed-dial setup
 

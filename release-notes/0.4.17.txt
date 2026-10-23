@@ -1,0 +1,5 @@
+LUMA Remote 0.4.17
+
+Makes Philips directional-pad navigation reliable on the TV receiver page. The page no longer requests or follows a mouse pointer; tiny remote movements accumulate into one Up, Down, Left, or Right focus step, and OK activates the focused control.
+
+Also includes the receiver approval repair from 0.4.16 for TVs whose local network address changed.

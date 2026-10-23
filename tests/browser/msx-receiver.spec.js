@@ -183,26 +183,26 @@ test('background clicks open controls once and only handled input classes appear
   expect(fixture.pageErrors).toEqual([]);
 });
 
-test('locked relative pointer motion moves one focus step and a trusted click activates it with clean Escape release', async ({page}) => {
+test('small relative pointer strokes become one arrow step without pointer lock', async ({page}) => {
   const fixture = await remoteFixture(page, {pointerMode: 'void'});
   const motion = (x, y) => page.evaluate(({x,y}) => document.dispatchEvent(new MouseEvent('mousemove',{movementX:x,movementY:y,bubbles:true})), {x,y});
   await page.locator('#video').click({position:{x:500,y:300}});
-  expect(await page.evaluate(() => window.__pointer.order)).toEqual(['lock','fullscreen']);
-  expect(await page.evaluate(() => window.__player.state().receiverDebug.pointerLocked)).toBe(true);
-  await motion(5,0); await expect(page.locator('#tv-play-pause')).toBeFocused();
-  await motion(8,0); await expect(page.locator('#tv-seek-back')).toBeFocused();
+  expect(await page.evaluate(() => window.__pointer.order)).toEqual([]);
+  expect(await page.evaluate(() => window.__player.state().receiverDebug)).toMatchObject({pointerLocked:false,pointerLockError:'disabled'});
+  await motion(2,0); await expect(page.locator('#tv-play-pause')).toBeFocused();
+  await motion(2,0); await expect(page.locator('#tv-seek-back')).toBeFocused();
   await motion(100,0); await expect(page.locator('#tv-seek-back')).toBeFocused();
-  await page.clock.runFor(181); await motion(0,20); await expect(page.locator('#tv-seek-forward')).toBeFocused();
+  await page.clock.runFor(161); await motion(0,4); await expect(page.locator('#tv-seek-forward')).toBeFocused();
   await page.keyboard.press('ArrowLeft'); await motion(100,0); await expect(page.locator('#tv-seek-back')).toBeFocused();
   await page.clock.runFor(251); await motion(-20,0); await expect(page.locator('#tv-play-pause')).toBeFocused();
   expect(await page.evaluate(() => window.__player.state().receiverDebug.lastInput)).toBe('pointer-arrow');
-  await page.mouse.down(); await page.mouse.up();
+  await page.locator('#video').click({position:{x:500,y:300}});
   expect(await page.evaluate(() => window.__player.state().paused)).toBe(true);
   await page.keyboard.press('Escape');
   await expect(page.locator('#tv-controls')).toBeHidden();
-  expect(await page.evaluate(() => [window.__pointer.exits,window.__player.state().receiverDebug.pointerLocked])).toEqual([1,false]);
+  expect(await page.evaluate(() => [window.__pointer.requests,window.__pointer.exits,window.__player.state().receiverDebug.pointerLocked])).toEqual([0,0,false]);
   await page.locator('#video').click({position:{x:500,y:300}});
-  expect(await page.evaluate(() => window.__pointer.requests)).toBe(1);
+  expect(await page.evaluate(() => window.__pointer.requests)).toBe(0);
   await expect(page.locator('#tv-controls')).toBeVisible();
   await page.locator('#tv-close-controls').click();
   const before = await page.evaluate(() => window.__player.state().receiverDebug.inputCount);
@@ -212,27 +212,24 @@ test('locked relative pointer motion moves one focus step and a trusted click ac
   expect(fixture.pageErrors).toEqual([]);
 });
 
-test('pointer-lock rejection preserves hover focus and modified browser navigation without retry', async ({page}) => {
+test('directional adapter never requests pointer lock and preserves browser-modified keys', async ({page}) => {
   const fixture = await remoteFixture(page, {pointerMode:'reject'});
   await page.locator('#video').click({position:{x:500,y:300}});
-  await expect(page.locator('#tv-control-feedback')).toHaveText('Use the arrows to choose a control, then press OK.');
-  await page.locator('#tv-seek-forward').hover();
-  await expect(page.locator('#tv-seek-forward')).toBeFocused();
-  expect(await page.evaluate(() => window.__player.state().receiverDebug)).toMatchObject({pointerLockSupported:true,pointerLocked:false,lastInput:'pointer-arrow'});
+  expect(await page.evaluate(() => window.__player.state().receiverDebug)).toMatchObject({pointerLockSupported:true,pointerLocked:false,pointerLockError:'disabled'});
   expect(await page.evaluate(() => { const event=new KeyboardEvent('keydown',{key:'ArrowLeft',altKey:true,cancelable:true});document.dispatchEvent(event);return event.defaultPrevented; })).toBe(false);
   await page.clock.runFor(1000);
-  expect(await page.evaluate(() => window.__pointer.requests)).toBe(1);
+  expect(await page.evaluate(() => window.__pointer.requests)).toBe(0);
   await page.locator('#tv-seek-forward').click();
   expect(await page.evaluate(() => window.__player.state().positionSeconds)).toBe(35);
   expect(fixture.pageErrors).toEqual([]);
 });
 
-test('Hide controls releases captured pointer and later closed motion cannot navigate', async ({page}) => {
+test('Hide controls leaves pointer capture unused and later closed motion cannot navigate', async ({page}) => {
   await remoteFixture(page, {pointerMode:'promise'});
   await page.locator('#video').click({position:{x:500,y:300}});
   await page.locator('#tv-close-controls').dispatchEvent('click');
   await expect(page.locator('#tv-controls')).toBeHidden();
-  expect(await page.evaluate(() => [window.__pointer.exits,window.__player.state().receiverDebug.pointerLocked])).toEqual([1,false]);
+  expect(await page.evaluate(() => [window.__pointer.requests,window.__pointer.exits,window.__player.state().receiverDebug.pointerLocked])).toEqual([0,0,false]);
 });
 
 test('unlocked native pointer motion advances focus and background OK activates it once', async ({page}) => {
@@ -249,7 +246,7 @@ test('unlocked native pointer motion advances focus and background OK activates 
   await page.evaluate(()=>document.dispatchEvent(new MouseEvent('mousemove',{movementX:100,movementY:0,bubbles:true})));
   expect(await page.evaluate(()=>document.activeElement.id)).toBe(focused);
   const debug=await page.evaluate(()=>window.__player.state().receiverDebug);
-  expect(debug.pointerMoveCount).toBeGreaterThan(0); expect(debug.pointerLockError).toBe('unsupported');
+  expect(debug.pointerMoveCount).toBeGreaterThan(0); expect(debug.pointerLockError).toBe('disabled');
   expect(Object.keys(debug).some(key=>/clientX|clientY|movementX|movementY/.test(key))).toBe(false);
   await page.locator('#tv-close-controls').dispatchEvent('click');
   const before=await page.evaluate(()=>window.__player.state().receiverDebug.inputCount);
@@ -258,12 +255,12 @@ test('unlocked native pointer motion advances focus and background OK activates 
   expect(fixture.pageErrors).toEqual([]);
 });
 
-test('unlocked pointer coordinate fallback and fixed capture errors remain bounded', async ({page}) => {
+test('coordinate fallback remains bounded while pointer capture stays disabled', async ({page}) => {
   await remoteFixture(page,{pointerMode:'denied'});
   await page.locator('#video').click({position:{x:500,y:300}});
-  await expect.poll(()=>page.evaluate(()=>window.__player.state().receiverDebug.pointerLockError)).toBe('not-allowed');
+  await expect.poll(()=>page.evaluate(()=>window.__player.state().receiverDebug.pointerLockError)).toBe('disabled');
   await page.evaluate(()=>document.dispatchEvent(new Event('pointerlockerror')));
-  expect(await page.evaluate(()=>window.__player.state().receiverDebug.pointerLockError)).toBe('not-allowed');
+  expect(await page.evaluate(()=>window.__player.state().receiverDebug.pointerLockError)).toBe('disabled');
   await page.evaluate(()=>document.dispatchEvent(new MouseEvent('mousemove',{clientX:520,clientY:300,bubbles:true})));
   await expect(page.locator('#tv-seek-back')).toBeFocused();
   await page.evaluate(()=>document.dispatchEvent(new MouseEvent('mousemove',{clientX:620,clientY:300,bubbles:true})));

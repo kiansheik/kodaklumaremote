@@ -297,21 +297,11 @@
       else focus(items[Math.min(items.length - 1, index + 1)]);
       scheduleHide();
     }
-    function capturePointer(event) {
-      if (!event.isTrusted || captureDeclined || capturePending || pointerLocked()) return;
-      if (!pointerLockSupported()) { pointerLockError = 'unsupported'; return; }
-      capturePending = true;
-      pointerLockError = 'none';
-      function denied(error) { clearTimeout(captureTimer); capturePending = false; var name = error && error.name; pointerLockError = name === 'NotAllowedError' || name === 'SecurityError' ? 'not-allowed' : name === 'NotSupportedError' ? 'unsupported' : 'other'; tell('Use the arrows to choose a control, then press OK.'); }
-      captureTimer = setTimeout(function () { if (capturePending) denied(); }, 2000);
-      try {
-        var lock = document.body.requestPointerLock();
-        if (lock && lock.catch) lock.catch(denied);
-      } catch (_) { denied(); }
-      // Pointer Lock must be requested before Fullscreen consumes activation.
-      if (!document.fullscreenElement && typeof document.documentElement.requestFullscreen === 'function') {
-        try { var screen = document.documentElement.requestFullscreen(); if (screen && screen.catch) screen.catch(function () {}); } catch (_) {}
-      }
+    function capturePointer() {
+      // Philips remotes expose their directional pad as tiny mouse movements.
+      // Pointer Lock makes that firmware show/own a cursor instead, so leave it
+      // disabled and translate the relative strokes in mousemove below.
+      pointerLockError = 'disabled';
     }
     document.addEventListener('pointerlockchange', function () {
       var locked = pointerLocked(); clearTimeout(captureTimer); capturePending = false;
@@ -528,21 +518,10 @@
       var now = clock(), x = event.movementX, y = event.movementY;
       if (typeof x !== 'number' || !isFinite(x) || typeof y !== 'number' || !isFinite(y) || x === 0 && y === 0) { x = fallbackX; y = fallbackY; }
       if (now - lastKeyArrow < 250) { pointerX = pointerY = 0; return; }
-      // An actual button under an unlocked pointer takes focus directly. Only
-      // background motion becomes relative navigation; one event cannot do both.
-      if (!pointerLocked()) {
-        var hovered = event.target;
-        while (hovered && hovered.tagName !== 'BUTTON') hovered = hovered.parentElement;
-        if (hovered && panel.contains(hovered) && !hovered.disabled && hovered.getClientRects().length) {
-          pointerX = pointerY = 0;
-          if (document.activeElement !== hovered || focusedButton !== hovered) { recordInput('pointer-arrow'); focus(hovered); scheduleHide(); }
-          return;
-        }
-      }
-      if (now - lastPointerStep < 180) { pointerX = pointerY = 0; return; }
+      if (now - lastPointerStep < 160) { pointerX = pointerY = 0; return; }
       if (now - lastMotion > 250) pointerX = pointerY = 0;
       lastMotion = now; pointerX += x; pointerY += y;
-      if (Math.max(Math.abs(pointerX), Math.abs(pointerY)) < 12) return;
+      if (Math.max(Math.abs(pointerX), Math.abs(pointerY)) < 4) return;
       var direction = Math.abs(pointerX) >= Math.abs(pointerY) ? pointerX < 0 ? 'left' : 'right' : pointerY < 0 ? 'up' : 'down';
       pointerX = pointerY = 0; lastPointerStep = now; recordInput('pointer-arrow'); moveFocus(direction);
     });

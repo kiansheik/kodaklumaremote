@@ -1091,3 +1091,7 @@
   current private Matter-authenticated peer before autofill, preserves receiver
   identity, clears the stale session and persists the peer. Android app and
   AndroidTest compilation pass; real-TV validation remains.
+- 2026-10-23 no-pointer Philips navigation candidate: disabled Pointer Lock and
+  hover targeting in the phone-hosted receiver reached from the GitHub speed
+  dial. Four accumulated pixels now emit one dominant-axis arrow step with a
+  160 ms bound; OK retains focused activation. Focused browser tests pass 11/11.
