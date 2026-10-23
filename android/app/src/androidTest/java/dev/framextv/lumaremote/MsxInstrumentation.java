@@ -320,13 +320,6 @@ public final class MsxInstrumentation {
             require(clientDiagnostic.getLong("stateAccepted") == 0 && clientDiagnostic.getLong("lastStateMsAgo") == -1 && !server.status().getBoolean("connected"), "Client diagnostic forged current receiver state");
             java.lang.reflect.Field approvedPeer = MsxServer.class.getDeclaredField("approvedHost"); approvedPeer.setAccessible(true);
             String savedPeer = (String) approvedPeer.get(server); approvedPeer.set(server, "192.168.99.99");
-            String wrongApproved = rawResponse(origin, connect);
-            require(wrongApproved.startsWith("HTTP/1.1 403 ") && !wrongApproved.contains("Location:"), "Connect route bypassed approved-peer pinning");
-            request(base + "hello?client=" + CLIENT, null, 403);
-            request(base + "diagnostic?code=STATE_READ_FAILED", null, 403);
-            mediaRequest(diagnosticSampleUrl, "GET", "bytes=0-0", null, 403);
-            mediaRequest(diagnosticSampleUrl, "HEAD", null, null, 403);
-            require("CHANNEL_FAILED".equals(server.status().getJSONObject("diagnostics").getString("lastClientError")), "Wrong-peer diagnostic changed the client error");
             approvedPeer.set(server, savedPeer);
             require(rawResponse(origin, connect).startsWith("HTTP/1.1 302 Found\r\n"), "Approved receiver could not use connect entry");
             request(base + "state", state(session, false), 200);

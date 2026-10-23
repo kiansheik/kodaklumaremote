@@ -1024,15 +1024,19 @@ public final class MsxServer implements AutoCloseable {
     private void admitBootstrap(String peer, Request request) throws HttpFailure {
         bootstrapRequests++;
         requireBootstrapOrigin(request.headers.get("origin"));
-        if (!approvedHost.isEmpty() && !approvedHost.equals(peer)) {
-            rebindCandidateHost = peer; rebindCandidateUntil = SystemClock.elapsedRealtime() + 60000;
-            Log.i("MsxReceiver", "PEER_CANDIDATE incoming=" + peer + " saved=" + approvedHost);
+        if (!approvedHost.isEmpty()) {
+            // A process/app restart invalidates only the short-lived session.
+            // The exact saved TV must be able to reload the stable bootstrap and
+            // prove its saved browser identity without opening a new pairing window.
+            if (!approvedHost.equals(peer)) {
+                rebindCandidateHost = peer; rebindCandidateUntil = SystemClock.elapsedRealtime() + 60000;
+                Log.i("MsxReceiver", "PEER_CANDIDATE incoming=" + peer + " saved=" + approvedHost);
+            }
+            return;
         }
-        else {
-            if (!pairingOpen()) throw new HttpFailure(403, "PAIRING_EXPIRED");
-            if (pendingHost != null && !pendingHost.equals(peer)) throw new HttpFailure(403, "PEER_REJECTED");
-            if ("GET".equals(request.method)) pendingHost = peer;
-        }
+        if (!pairingOpen()) throw new HttpFailure(403, "PAIRING_EXPIRED");
+        if (pendingHost != null && !pendingHost.equals(peer)) throw new HttpFailure(403, "PEER_REJECTED");
+        if ("GET".equals(request.method)) pendingHost = peer;
     }
     /** Caller holds lock. A candidate can load only long enough to prove the saved browser identity. */
     private boolean rebindCandidate(String peer) {

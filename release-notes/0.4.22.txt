@@ -1,0 +1,5 @@
+LUMA Remote 0.4.22
+
+Restores an already-approved Philips receiver automatically after the phone app or its background service restarts. The exact saved TV may reload its private bootstrap and prove its saved browser identity without reopening pairing; different private peers still require the explicit migration and Allow TV flow.
+
+Includes the 0.4.21 steady timeline seek queue: slow TV seeks no longer flash the phone playback controls, and repeated scrubs coalesce instead of piling up.

@@ -32,8 +32,8 @@ android {
         applicationId 'dev.framextv.lumaremote'
         minSdk 24
         targetSdk 35
-        versionCode 31
-        versionName '0.4.21'
+        versionCode 32
+        versionName '0.4.22'
         testInstrumentationRunner 'dev.framextv.lumaremote.BackendInstrumentation'
     }
     compileOptions {
