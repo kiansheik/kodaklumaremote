@@ -36,7 +36,18 @@ Latest: [playback reattachment and subtitle readiness](session-handoffs/2026-10-
 Current: [system volume, confirmed power and Kodi error receipts](session-handoffs/2026-10-18-phone-volume-power.md).
 Distribution: [signed releases and optional updates](../releasing.md),
 [GitHub/Pages handoff](session-handoffs/2026-10-18-github-release-updates.md).
+Local dual-device install: [guarded Make target](session-handoffs/2026-10-23-install-latest-apks-target.md).
+ADB duplicate resolution: [physical-phone selection for the install target](session-handoffs/2026-10-23-install-latest-apks-device-resolution.md).
 Current release: [0.4.23 receiver-first cold start and disconnected casting](session-handoffs/2026-10-23-receiver-first-cast-release.md).
+Projector launcher candidate: [receiver 0.3.6 as the Android Home app](session-handoffs/2026-10-24-receiver-home-launcher.md).
+Home/input observability: [receiver 0.3.7 diagnostics and live phone state](session-handoffs/2026-10-24-home-input-diagnostics-phone-state.md).
+Manual source switching: [exact watch/title pages in the built-in browser](session-handoffs/2026-10-24-manual-stream-source-pages.md).
+Local media and laptop remote: [phone byte-range streaming, compatibility HLS and cross-phone controls](session-handoffs/2026-10-30-local-media-browser-remote.md).
+Current local playback: [full-movie audio acceptance and receiver disk prefetch](session-handoffs/2026-10-31-receiver-disk-prefetch.md).
+Current buffer/DNS/subtitle follow-up: [truthful disk UI, ISP DNS diagnosis and episode-scoped subtitle caches](session-handoffs/2026-10-31-buffer-dns-subtitle-isolation.md).
+Current anime repair: [audited identity, sub/dub, Library and Next](session-handoffs/2026-10-23-anime-library-next.md).
+Anime audio UI: [episode-aware Sub/Dub toggle and guarded source swap](session-handoffs/2026-10-23-anime-audio-toggle.md).
+Current Library/provider repair: [deletion, current-title shortcut and wrong-server fallback](session-handoffs/2026-10-23-library-delete-provider-identity.md).
 Dual receiver: [Philips MSX and LUMA selection](msx-receiver.md),
 [implementation handoff](session-handoffs/2026-10-18-dual-receiver-msx.md).
 Current local Android update: [phone receiver, address entry and layout](session-handoffs/2026-10-20-phone-msx-native-text.md).

@@ -8,6 +8,100 @@ remain unverified. The user ended Philips device work, then authorized publicati
 and added a durable offline viewing Library for Philips/Kodak. Follow
 [current state](current-state.md) over the older chronological observations below.
 
+Current Browse diagnosis has three distinct layers. The ISP resolvers originally
+suppressed the apex `.cc`/`.xyz` names; changing Deco to public DNS was correct,
+but Android retained negative entries for those exact names. Before the flush,
+ordinary phone resolution failed while Google DoH plus certificate-verified HTTPS
+worked and a fresh `www` name resolved. Android's DNS-cache-clear broadcast made
+ordinary root/embed requests return 200; reloading restored the real iframe
+player at its saved position and it remained visible after 30 seconds. This is
+physical causal acceptance for the reported `net::ERR_FAILED`. Do not hardcode
+Cloudflare IPs.
+
+Clean automated Chromium still reproduces the public anti-debug bundle's
+`about:blank` navigation, and fresh public API probes currently report no streams
+for the exact later episode plus a provider 404 hidden by missing CORS. Neither
+reproduced as the cause of the post-flush physical player: its cached source
+loaded and stayed present. Recheck with a fully fresh title before changing child
+blank handling, mixed-content policy or third-party cookies. Phone 0.4.32/code42
+is installed with data preserved; public feeds are unchanged.
+
+Current Backup-server boundary: the installed phone now observes bounded likely
+media requests only in memory while the exact FrameXTV page is open, then uses
+them only after an explicit Cast and only when normal DOM capture reports source
+unavailable. The live Avatar S1E11 Backup case independently verified HLS and
+reached active/ready playback on receiver 0.3.13. It does not cast `iframe.src`,
+copy cookies/Authorization, infer MP4 from unknown extensionless URLs or attach
+observed subtitles. Remaining work is stronger visible-player/segment
+correlation, duration/ad disambiguation, pinned connections and an authenticated
+projector-side probe before Open; blob/service-worker, DRM, cookie-dependent and
+source-IP-bound providers remain unsupported rather than bypassed.
+
+Receiver 0.3.13/code27 is installed and live on the projector. Phone 0.4.32
+acceptance additionally needs one public subtitle chosen after playback starts,
+visible text on the projector, and a Philips selection held across repeated
+native status snapshots without a refresh/frozen remote. During a local
+progressive cast, confirm RAM
+and disk values rise independently on phone and laptop, paused disk growth
+continues, a far seek resets then grows actual disk-ahead, and Stop shows
+`clearing` then removes disk status. For the next series transition, confirm the
+new episode's subtitles; the prior exact mismatch could not be recovered from
+the offline receiver, although content-scoped/expiring caches and the stale-Next
+race are now fixed.
+
+Current local-media acceptance: the user watched the complete 6292.832-second
+*Never After Dark* MKV and confirmed AAC sound, English subtitles and seeking;
+buffering was substantially improved. The laptop server is now off. Installed
+receiver 0.3.11/code25 adds low-priority current-title disk prefetch while
+preserving the accepted 8–20 second RAM window. The next local playback must
+observe disk bytes growing after RAM fills and while paused, a far seek moving
+the rolling window, and Stop/source replacement reaching `diskCacheState:off`
+after `clearing`. Only internal app storage was visible at install (about 1.57 GB
+usable/1.03 GB safe cache); no mounted app-writable SD surface appeared. If the
+card is mounted/reformatted, restart the receiver and verify
+`diskCacheStorage:"sd-card"` plus the larger limit before claiming whole-file
+caching. HLS/DASH/provider playback remains intentionally outside this cache.
+
+Current live 0.4.29 remaining acceptance: open the installed phone during a
+future local cast and confirm the receiver-owned track appears and can be
+selected; the exact projector rendering itself is now accepted. Then tap
+**Change stream** on the resumed
+`Buddy` item and verify the
+exact episode/player page opens while projector playback continues. Choose a
+different server in the page player, tap Cast, and confirm only that deliberate
+cast replaces the current stream. In Library, verify the selected episode and
+series-page shortcuts open the intended title/season. Browser fixtures establish
+route and command behavior, not which physical provider is fastest or whether
+yesterday's provider remains available.
+
+Current receiver startup acceptance: the first reported hard-start attempt
+failed—ports 4191 and 8121 refused connections until the user manually opened
+installed receiver 0.3.6. Install prepared 0.3.7 only after the current viewing
+session ends. Its `info.startup` must show `defaultHome:true`, increment exactly
+once for each discrete OK press, and show a Home-settings launch sourced from
+`ok`. Then hard power-cycle and record first visible receiver UI, first port-4191
+response and first accepted cast. Verify Home returns to the receiver before the
+native LUMA service is ready and Menu preserves the reversible setting. If a
+confirmed default Home still loses to the vendor launcher, ordinary APK boot
+broadcasts are insufficient and device-owner/system integration is the next
+boundary.
+
+Current 0.4.27 acceptance: install the prepared phone APK, cast an anime episode
+known to have both editions, open Subtitles and confirm the Sub/Dub selector
+appears. Switch editions mid-episode and confirm the replacement starts at the
+same position with its own subtitle catalog. For an episode such as the audited
+*World's Strongest Witch* S1E2 whose dub returned 404, confirm no unusable toggle
+appears. Emulator and browser fixtures prove the control flow, not physical
+provider playback.
+
+Current 0.4.26 acceptance: install both prepared APKs, recast `Buddy` and confirm
+that the previously cached `Buddy Games` Films365 URL is discarded and an
+alternate provider starts the intended movie. Then delete one episode and one
+whole series by long press, reconnect both devices and confirm neither stale
+phone nor receiver progress resurrects them. The guard can prove a conflict only
+when a provider exposes its own canonical title in the source URL; determining
+the contents of opaque HLS/CDN URLs before playback remains open.
+
 Current Kodi questions: install the packaged metadata add-on on the physical
 LUMA, start an episode from one updated phone, then join from a second updated
 phone and verify title/season/episode, Resume movement over time, subtitle

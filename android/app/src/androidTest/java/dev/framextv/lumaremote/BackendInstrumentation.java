@@ -120,6 +120,13 @@ public final class BackendInstrumentation extends UiSmokeInstrumentation {
             // The fixture starts idle, so the forwarded onlyIfInactive guard accepts this cold open.
             call("receiver.open", "media", media(FIRST), "expectedSourceUrl", FIRST, "onlyIfInactive", true, "sourceToken", "current");
             JSONObject status = call("receiver.status"); require(status.getBoolean("active") && FIRST.equals(status.getString("sourceUrl")) && !status.has("content"), "Current media identity missing");
+            require(status.getDouble("bufferAheadSeconds") == 18.5
+                    && "filling".equals(status.getString("diskCacheState"))
+                    && "internal".equals(status.getString("diskCacheStorage"))
+                    && status.getLong("diskCachedBytes") == 128L * 1024 * 1024
+                    && status.getLong("diskCacheTargetBytes") == 512L * 1024 * 1024
+                    && status.getDouble("diskCacheAheadSeconds") == 300.5,
+                "Bounded receiver buffer telemetry was not forwarded");
             JSONObject invalid = episodeMedia(); invalid.getJSONObject("content").put("key", "framextv:tv:42:2:4");
             call("receiver.open", "media", invalid, "sourceToken", "current");
             require(!call("receiver.status").has("content"), "Invalid content identity was forwarded");
@@ -219,6 +226,10 @@ public final class BackendInstrumentation extends UiSmokeInstrumentation {
                 rejects("RECEIVER_RESPONSE", "receiver.status");
                 JSONObject spoofed = call("receiver.status");
                 require(spoofed.getBoolean("active") && !spoofed.has("content"), "A non-canonical receiver identity was adopted");
+                require(!spoofed.has("bufferAheadSeconds") && !spoofed.has("diskCacheState")
+                        && !spoofed.has("diskCacheStorage") && !spoofed.has("diskCachedBytes")
+                        && !spoofed.has("diskCacheTargetBytes") && !spoofed.has("diskCacheAheadSeconds"),
+                    "Malformed optional buffer telemetry escaped the native boundary");
                 rejects("RECEIVER_RESPONSE", "receiver.connect");
                 rejects("RECEIVER_RESPONSE", "receiver.pairBegin", "port", malformed);
                 rejects("RECEIVER_RESPONSE", "receiver.pairComplete", "pairingId", "fixturePairing01", "code", CODE, "port", malformed);

@@ -51,6 +51,10 @@ public final class WebContentInstrumentation {
             require(result.getJSONObject("content").getString("key").equals("framextv:tv:42:0:2") && !result.getJSONArray("tracks").getJSONObject(0).getBoolean("active"), "Untrusted resume/active caption carried over");
             JSONObject bad = captured(); bad.getJSONObject("media").put("url", "http://192.168.1.2/private.mp4");
             try { WebContentResolver.project(bad, WebContentResolver.selection(selected())); throw new AssertionError("Private source admitted"); } catch (WebContentResolver.ResolveException expected) { require(expected.code.equals("SOURCE_UNSUPPORTED"), "Unsafe projection error"); }
+            JSONObject mismatch = captured(); mismatch.getJSONObject("media").put("title", "Buddy — FrameXTV").put("url",
+                    "https://crap.hybrows.workers.dev/?url=https%3A%2F%2Fxstreamx.films365.org%2Fmovie%2Fa8020a67-244b-4051-a6be-6f3771c93ba5%2FBuddy+Games");
+            try { WebContentResolver.project(mismatch, WebContentResolver.selection(selected())); throw new AssertionError("Different Films365 title admitted"); }
+            catch (WebContentResolver.ResolveException expected) { require(expected.code.equals("SOURCE_MISMATCH"), "Wrong title-mismatch error"); }
         });
         names.add("superseded renderer is destroyed before a fresh selection"); checks.add(() -> {
             ExecutorService executor = Executors.newFixedThreadPool(2); AtomicInteger created = new AtomicInteger(), alive = new AtomicInteger(), maxAlive = new AtomicInteger(), destroyed = new AtomicInteger(); CountDownLatch firstLoad = new CountDownLatch(1);

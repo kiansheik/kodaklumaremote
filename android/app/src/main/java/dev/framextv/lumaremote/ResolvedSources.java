@@ -18,6 +18,7 @@ import java.nio.file.Files;
  */
 final class ResolvedSources {
     static final int MAX_ENTRIES = 60;
+    static final long MAX_AGE_MS = 6L * 60 * 60 * 1000;
     private final File file;
 
     ResolvedSources(File directory) { file = new File(directory, "resolved-sources.json"); }
@@ -28,23 +29,35 @@ final class ResolvedSources {
         Integer season = tv && selection.opt("season") instanceof Number ? selection.optInt("season") : null;
         Integer episode = tv && selection.opt("episode") instanceof Number ? selection.optInt("episode") : null;
         JSONObject content = WatchHistory.contentFromCatalog(selection.optString("kind"), String.valueOf(selection.opt("id")), season, episode, "Video");
-        return content == null ? null : content.optString("key", null);
+        if (content == null) return null;
+        String key = content.optString("key", null);
+        Object anime = selection.opt("animeId");
+        if (anime instanceof String && ((String) anime).matches("[1-9][0-9]{0,9}")) {
+            String audio = "dub".equals(selection.optString("animeAudio")) ? "dub" : "sub";
+            key += ":anime:" + anime + ":" + audio;
+        }
+        return key;
     }
 
     synchronized JSONObject get(String key, long now) {
         if (key == null) return null;
-        JSONArray entries = read();
+        JSONArray entries = read(), kept = new JSONArray();
+        JSONObject result = null; boolean changed = false;
         for (int i = 0; i < entries.length(); i++) {
             JSONObject entry = entries.optJSONObject(i);
-            if (entry == null || !key.equals(entry.optString("key"))) continue;
-            JSONObject media = entry.optJSONObject("media");
-            return media != null ? copy(media) : null;
+            String entryKey = entry == null ? "" : entry.optString("key");
+            JSONObject media = entry == null ? null : entry.optJSONObject("media");
+            boolean valid = !entryKey.isEmpty() && fresh(entry, now) && entryKey.equals(mediaKey(media));
+            if (!valid || key.equals(entryKey) && result != null) { changed = true; continue; }
+            kept.put(entry);
+            if (key.equals(entryKey)) result = copy(media);
         }
-        return null;
+        if (changed) write(kept);
+        return result;
     }
 
     synchronized void put(String key, JSONObject media, long now) {
-        if (key == null || media == null) return;
+        if (key == null || media == null || now < 0 || !key.equals(mediaKey(media))) return;
         try {
             JSONArray kept = new JSONArray().put(new JSONObject().put("key", key).put("at", now).put("media", copy(media)));
             JSONArray entries = read();
@@ -63,6 +76,41 @@ final class ResolvedSources {
             if (entry != null && !String.valueOf(key).equals(entry.optString("key"))) kept.put(entry);
         }
         write(kept);
+    }
+
+    private static boolean fresh(JSONObject entry, long now) {
+        if (entry == null || now < 0 || !(entry.opt("at") instanceof Number)) return false;
+        double raw = ((Number) entry.opt("at")).doubleValue();
+        if (!Double.isFinite(raw) || raw < 0 || raw != Math.floor(raw) || raw > Long.MAX_VALUE) return false;
+        long at = (long) raw;
+        return now >= at && now - at <= MAX_AGE_MS;
+    }
+
+    /** Canonical identity actually carried by the cached media, including anime edition. */
+    private static String mediaKey(JSONObject media) {
+        JSONObject content = media == null ? null : media.optJSONObject("content");
+        if (content == null || !(content.opt("contentId") instanceof String)) return null;
+        boolean tv = "tv".equals(content.optString("kind"));
+        if (!tv && !"movie".equals(content.optString("kind"))) return null;
+        Integer season = tv ? integer(content.opt("season"), 0, 9999) : null;
+        Integer episode = tv ? integer(content.opt("episode"), 1, 9999) : null;
+        if (tv && (season == null || episode == null) || !tv && (content.opt("season") != JSONObject.NULL || content.opt("episode") != JSONObject.NULL)) return null;
+        JSONObject canonical = WatchHistory.contentFromCatalog(content.optString("kind"), content.optString("contentId"), season, episode, "Video");
+        if (canonical == null || !canonical.optString("key").equals(content.optString("key"))
+                || !canonical.optString("watchUrl").equals(content.optString("watchUrl"))) return null;
+        String result = canonical.optString("key");
+        if (content.has("animeId")) {
+            String animeId = WatchHistory.animeId(content), audio = content.optString("animeAudio", "sub");
+            if (animeId == null || !("sub".equals(audio) || "dub".equals(audio))) return null;
+            result += ":anime:" + animeId + ":" + audio;
+        } else if (content.has("animeAudio")) return null;
+        return result;
+    }
+
+    private static Integer integer(Object value, int min, int max) {
+        if (!(value instanceof Number)) return null;
+        double number = ((Number) value).doubleValue();
+        return Double.isFinite(number) && number == Math.rint(number) && number >= min && number <= max ? (int) number : null;
     }
 
     /** True when the source still answers; a stale provider link falls back to a fresh lookup. */

@@ -1,4 +1,4 @@
-.PHONY: configure-release deploy-gh-pages deploy-page
+.PHONY: configure-release deploy-gh-pages deploy-page install-latest-apks
 
 configure-release:
 	node scripts/configure-android-release.mjs
@@ -8,3 +8,6 @@ deploy-gh-pages:
 
 deploy-page:
 	node scripts/deploy-gh-pages.mjs
+
+install-latest-apks:
+	node scripts/install-latest-apks.mjs

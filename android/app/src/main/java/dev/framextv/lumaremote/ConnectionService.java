@@ -65,6 +65,8 @@ public final class ConnectionService extends Service {
             new ArrayBlockingQueue<>(16));
     private final ThreadPoolExecutor subtitleNetwork = new ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS,
             new ArrayBlockingQueue<>(4));
+    private final ThreadPoolExecutor localMediaIo = new ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS,
+            new ArrayBlockingQueue<>(2));
     private final ThreadPoolExecutor textNetwork = new ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS,
             new ArrayBlockingQueue<>(1));
     private final ThreadPoolExecutor catalogNetwork = new ThreadPoolExecutor(2, 2, 0, TimeUnit.MILLISECONDS,
@@ -72,9 +74,11 @@ public final class ConnectionService extends Service {
     private final ThreadPoolExecutor libraryReads = new ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS,
             new ArrayBlockingQueue<>(8));
     private SubtitleDelivery subtitleDelivery;
+    private LocalMediaServer localMedia;
     private WatchHistory watchHistory;
     private LibraryStore libraryStore;
     private CatalogClient catalogClient;
+    private AnimeCatalogClient animeCatalogClient;
     private WebContentResolver catalogWebResolver;
     private ResolvedSources resolvedSources;
     private ThumbnailStrip scrubPreviews;
@@ -167,10 +171,12 @@ public final class ConnectionService extends Service {
         libraryStore.migrate(watchHistory.snapshot());
         watchHistory.setProgressListener(libraryStore::record);
         catalogClient = new CatalogClient();
+        animeCatalogClient = new AnimeCatalogClient();
         catalogWebResolver = new WebContentResolver(getApplicationContext());
         resolvedSources = new ResolvedSources(getCacheDir());
         scrubPreviews = new ThumbnailStrip(getCacheDir());
         subtitleDelivery = new SubtitleDelivery(NativeBackend::publicUrl);
+        localMedia = new LocalMediaServer(getApplicationContext());
         backend = newBackend();
         settings = new SettingsStore(getApplicationContext());
         television = new MsxServer(getApplicationContext());
@@ -304,11 +310,56 @@ public final class ConnectionService extends Service {
     public void addListener(Listener listener) { if (listener != null) { listeners.add(listener); main.post(() -> { if (listeners.contains(listener)) listener.onStateChanged(snapshot()); }); } }
     public void removeListener(Listener listener) { listeners.remove(listener); }
     public JSONObject snapshot() { synchronized (stateLock) { return copy(state); } }
+    public void prepareLocalMedia(Uri video, java.util.List<Uri> subtitles, Callback callback) {
+        try {
+            localMediaIo.execute(() -> {
+                JSONObject result = null; String code = null;
+                try { result = localMedia.prepare(video, subtitles); }
+                catch (LocalMediaServer.LocalMediaException failure) { code = failure.code; }
+                catch (RuntimeException failure) { code = "LOCAL_MEDIA_UNAVAILABLE"; }
+                JSONObject prepared = result; String failure = code;
+                main.post(() -> {
+                    if (destroyed) { reject(callback, "NOT_CONNECTED", "Open the app to stream a local file."); return; }
+                    if (failure == null) { if (callback != null) callback.success(prepared); }
+                    else reject(callback, failure, localMediaMessage(failure));
+                });
+            });
+        } catch (RejectedExecutionException busy) { reject(callback, "BUSY", "Finish the current local-file selection first."); }
+    }
+
+    private static String localMediaMessage(String code) {
+        if ("LOCAL_MEDIA_NETWORK".equals(code)) return "Connect this phone and the receiver to the same Wi-Fi before streaming a local file.";
+        if ("LOCAL_MEDIA_FORMAT".equals(code)) return "Choose an MP4, MKV or WebM video. Use the laptop compatibility script for other formats or codecs.";
+        if ("LOCAL_MEDIA_SUBTITLES".equals(code)) return "Choose SRT, WebVTT, ASS/SSA or TTML subtitles smaller than 4 MB.";
+        if ("LOCAL_MEDIA_INVALID".equals(code)) return "This file provider did not expose a seekable local video.";
+        return "The local media server could not start. Check Wi-Fi and try again.";
+    }
+
+    private String mediaUrl(Object value) throws NativeBackend.BackendException {
+        try { return NativeBackend.publicUrl(value); }
+        catch (NativeBackend.BackendException publicFailure) {
+            if (localMedia != null) try { return localMedia.validateOwned(value); }
+            catch (NativeBackend.BackendException notOwned) { /* Try the authenticated receiver's exact observation. */ }
+            if (backend != null) return backend.observedMediaUrl(value);
+            throw publicFailure;
+        }
+    }
+    private static String localMediaId(JSONObject media) {
+        String value = media == null ? "" : media.optString("mediaId");
+        return value.matches("local:[a-f0-9]{32,64}") ? value : "";
+    }
+    private static String previewKey(JSONObject media) {
+        JSONObject content = validatedContent(media);
+        return content == null ? localMediaId(media) : content.optString("key");
+    }
     /** Stable identity comes from our native browser URL, never the stream URL. */
     public JSONObject attachWatchMetadata(JSONObject media, String pageUrl) {
+        JSONObject content = WatchHistory.contentFromPage(pageUrl, media == null ? "" : media.optString("title"));
+        return attachWatchMetadata(media, content);
+    }
+    private JSONObject attachWatchMetadata(JSONObject media, JSONObject content) {
         JSONObject result = copy(media);
-        JSONObject content = WatchHistory.contentFromPage(pageUrl, result.optString("title"));
-        result.remove("content"); result.remove("resumeSeconds");
+        result.remove("content"); result.remove("resumeSeconds"); result.remove("animeId"); result.remove("animeEpisode"); result.remove("animeAudio");
         if (content != null) {
             put(result, "content", content);
             JSONObject saved = libraryStore == null ? null : libraryStore.findProgress(content);
@@ -316,6 +367,46 @@ public final class ConnectionService extends Service {
             put(result, "resumeSeconds", saved == null ? 0 : saved.optDouble("resumeSeconds", 0));
         }
         return result;
+    }
+    /** Anime routes use AniList ids, so their TMDB library identity is resolved on the catalog worker. */
+    public void attachWatchMetadata(JSONObject media, String pageUrl, Callback callback) {
+        JSONObject standard = WatchHistory.contentFromPage(pageUrl, media == null ? "" : media.optString("title"));
+        int[] animeRoute = AnimeCatalogClient.route(pageUrl);
+        String hintedAnimeId = media != null && media.opt("animeId") instanceof String && media.optString("animeId").matches("[1-9][0-9]{0,9}")
+                ? media.optString("animeId") : null;
+        int rawAnimeEpisode = media != null && media.opt("animeEpisode") instanceof Number
+                ? media.optInt("animeEpisode", -1) : -1;
+        final int hintedAnimeEpisode = rawAnimeEpisode >= 1 && rawAnimeEpisode <= 9999 ? rawAnimeEpisode : -1;
+        boolean canonicalAnime = standard != null && "tv".equals(standard.optString("kind")) && hintedAnimeId != null && hintedAnimeEpisode > 0;
+        if (!canonicalAnime && animeRoute == null) {
+            if (callback != null) callback.success(attachWatchMetadata(media, standard)); return;
+        }
+        JSONObject owned = copy(media);
+        try {
+            catalogNetwork.execute(() -> {
+                JSONObject result = null; String code = null;
+                try {
+                    if (animeRoute != null && hintedAnimeEpisode > 0 && animeRoute[1] != hintedAnimeEpisode) throw new AnimeCatalogClient.AnimeException("CATALOG_RESPONSE");
+                    JSONObject anime = canonicalAnime
+                            ? animeCatalogClient.identify(standard, hintedAnimeId, hintedAnimeEpisode, owned.optString("animeAudio"))
+                            : animeCatalogClient.identify(pageUrl, owned.optString("title"), owned.optString("animeAudio"));
+                    if (hintedAnimeId != null && !hintedAnimeId.equals(WatchHistory.animeId(anime))) throw new AnimeCatalogClient.AnimeException("CATALOG_RESPONSE");
+                    result = attachWatchMetadata(owned, anime);
+                }
+                catch (AnimeCatalogClient.AnimeException failed) { code = failed.code; }
+                JSONObject resolved = result; String failure = code;
+                main.post(() -> {
+                    if (destroyed || callback == null) return;
+                    if (failure == null) callback.success(resolved);
+                    // The current stream is still useful even if optional library
+                    // identification is temporarily unavailable. Do not reject it
+                    // or guess a different resolver; omit canonical controls.
+                    else callback.success(attachWatchMetadata(owned, (JSONObject) null));
+                });
+            });
+        } catch (RejectedExecutionException busy) {
+            if (callback != null) callback.failure("BUSY", "Wait for the current catalog request, then try again.");
+        }
     }
     /** Retain controls for every accepted handoff. An unconfirmed resume binds
      * from zero so the receiver's observed position, rather than stale saved
@@ -391,7 +482,11 @@ public final class ConnectionService extends Service {
         if (next != null && "tv".equals(next.optString("kind")) && content.optString("contentId").equals(next.optString("id"))) {
             int season = next.optInt("season", -1), episode = next.optInt("episode", -1);
             if (season >= 0 && season <= 9999 && episode > 0 && episode <= 9999
-                    && (season > content.optInt("season") || season == content.optInt("season") && episode > content.optInt("episode"))) safe = copy(next);
+                    && (season > content.optInt("season") || season == content.optInt("season") && episode > content.optInt("episode"))) {
+                safe = copy(next);
+                String animeId = WatchHistory.animeId(content);
+                if (animeId != null) { put(safe, "animeId", animeId); put(safe, "animeAudio", WatchHistory.animeAudio(content)); }
+            }
         }
         synchronized (stateLock) {
             if (!revision.equals(mediaRevision)) return;
@@ -416,6 +511,9 @@ public final class ConnectionService extends Service {
     public void chooseCatalog(JSONObject params, java.util.function.BooleanSupplier current, Callback callback) {
         requestCatalog("catalog.resolve", params, current, callback);
     }
+    public void animeAudioAvailability(JSONObject params, java.util.function.BooleanSupplier current, Callback callback) {
+        requestCatalog("catalog.animeAudio", params, current, callback);
+    }
     private void requestLibrary(String method, JSONObject params, Callback callback) {
         JSONObject owned = copy(params);
         try {
@@ -424,14 +522,22 @@ public final class ConnectionService extends Service {
                 try {
                     if (destroyed || libraryStore == null) throw new IllegalStateException();
                     result = "watch.library".equals(method) ? libraryStore.list(owned)
-                            : "watch.libraryDetails".equals(method) ? libraryStore.details(owned) : libraryStore.nextEpisode(owned);
+                            : "watch.libraryDetails".equals(method) ? libraryStore.details(owned)
+                            : "watch.libraryDelete".equals(method) ? libraryStore.delete(owned) : libraryStore.nextEpisode(owned);
                 } catch (LibraryStore.LibraryException invalid) { failure = invalid.code; }
                 catch (RuntimeException unavailable) { failure = "LIBRARY_UNAVAILABLE"; }
                 JSONObject response = result; String code = failure;
                 main.post(() -> {
                     if (destroyed) { reject(callback, "NOT_CONNECTED", "Open the app to view your library."); return; }
-                    if (code != null) reject(callback, code, "The saved library could not load. Playback has not changed.");
-                    else if (callback != null) callback.success(response);
+                    if (code != null) reject(callback, code, "The saved library could not be changed. Playback has not changed.");
+                    else {
+                        if ("watch.libraryDelete".equals(method)) {
+                            lastLibrarySync = 0;
+                            try { response.put("projectorSyncPending", configured()); } catch (Exception ignored) { }
+                            schedulePoll(0);
+                        }
+                        if (callback != null) callback.success(response);
+                    }
                 });
             });
         } catch (RejectedExecutionException busy) { reject(callback, "BUSY", "Wait for the current library view."); }
@@ -446,11 +552,11 @@ public final class ConnectionService extends Service {
                 throw NativeBackend.fail("INVALID_INPUT");
             }
             JSONObject all = presentationSnapshot(), remote = all.optJSONObject("remote"), playback = all.optJSONObject("playback");
-            JSONObject media = remote == null ? null : remote.optJSONObject("media"), content = validatedContent(media);
-            String expected = NativeBackend.publicUrl(args.opt("expectedSourceUrl")), contentKey = args.optString("contentKey");
+            JSONObject media = remote == null ? null : remote.optJSONObject("media");
+            String expected = mediaUrl(args.opt("expectedSourceUrl")), contentKey = args.optString("contentKey"), mediaKey = previewKey(media);
             double position = ((Number) args.opt("position")).doubleValue();
-            if (!verifiedPlayback(all) || playback == null || !playback.optBoolean("canSeek") || content == null
-                    || !expected.equals(media.optString("url")) || !contentKey.equals(content.optString("key"))
+            if (!verifiedPlayback(all) || playback == null || !playback.optBoolean("canSeek") || mediaKey.isEmpty()
+                    || !expected.equals(media.optString("url")) || !contentKey.equals(mediaKey)
                     || !Double.isFinite(position)) throw NativeBackend.fail("SOURCE_CHANGED");
             syncScrubPreviews(all);
             if (!expected.equals(scrubPreviewSource) || !contentKey.equals(scrubPreviewContentKey)) throw NativeBackend.fail("SOURCE_CHANGED");
@@ -675,7 +781,7 @@ public final class ConnectionService extends Service {
                     || !(args.opt("around") instanceof Number) || !(args.opt("have") instanceof JSONArray)) throw NativeBackend.fail("INVALID_INPUT");
             JSONObject all = presentationSnapshot();
             syncScrubPreviews(all);
-            String expected = NativeBackend.publicUrl(args.opt("expectedSourceUrl")), key = args.optString("contentKey");
+            String expected = mediaUrl(args.opt("expectedSourceUrl")), key = args.optString("contentKey");
             if (!expected.equals(scrubPreviewSource) || !key.equals(scrubPreviewContentKey)) throw NativeBackend.fail("SOURCE_CHANGED");
             JSONArray have = args.optJSONArray("have");
             if (have.length() > 2400) throw NativeBackend.fail("INVALID_INPUT");
@@ -699,12 +805,13 @@ public final class ConnectionService extends Service {
     }
     private void syncScrubPreviews(JSONObject all) {
         JSONObject remote = all == null ? null : all.optJSONObject("remote"), playback = all == null ? null : all.optJSONObject("playback");
-        JSONObject media = remote == null ? null : remote.optJSONObject("media"), content = validatedContent(media);
+        JSONObject media = remote == null ? null : remote.optJSONObject("media");
         double duration = playback == null ? 0 : playback.optDouble("durationSeconds", 0);
-        if (!verifiedPlayback(all) || playback == null || !playback.optBoolean("canSeek") || content == null || !(duration > 0)) {
+        String key = previewKey(media);
+        if (!verifiedPlayback(all) || playback == null || !playback.optBoolean("canSeek") || key.isEmpty() || !(duration > 0)) {
             clearScrubPreviews(); return;
         }
-        String source = media.optString("url"), key = content.optString("key");
+        String source = media.optString("url");
         if (source.equals(scrubPreviewSource) && key.equals(scrubPreviewContentKey) && duration == scrubPreviewDuration) return;
         scrubPreviews.bind(source, media.optString("contentType"), key, duration);
         scrubPreviewSource = source; scrubPreviewContentKey = key; scrubPreviewDuration = duration;
@@ -716,7 +823,7 @@ public final class ConnectionService extends Service {
     }
     private void requestCatalog(String method, JSONObject params, java.util.function.BooleanSupplier current, Callback callback) {
         String action = method.substring("catalog.".length());
-        if (!java.util.Arrays.asList("list", "search", "details", "episodes", "resolve").contains(action)) {
+        if (!java.util.Arrays.asList("list", "search", "details", "episodes", "resolve", "animeAudio").contains(action)) {
             reject(callback, "CATALOG_INVALID_INPUT", "Choose a catalog action."); return;
         }
         JSONObject owned = copy(params);
@@ -725,7 +832,8 @@ public final class ConnectionService extends Service {
                 JSONObject result = null; String failure = null;
                 try {
                     if (!catalogCurrent(current)) throw new MsxServer.LibraryException("CANCELLED");
-                    result = "resolve".equals(action) ? resolveCatalogMedia(owned, current) : catalogClient.handle(action, owned);
+                    result = "resolve".equals(action) ? resolveCatalogMedia(owned, current)
+                            : "animeAudio".equals(action) ? animeAudioAvailability(owned, current) : catalogClient.handle(action, owned);
                     if (!catalogCurrent(current)) throw new MsxServer.LibraryException("CANCELLED");
                 } catch (MsxServer.LibraryException error) { failure = error.code; }
                 catch (CatalogClient.CatalogException error) { failure = error.code; }
@@ -743,6 +851,23 @@ public final class ConnectionService extends Service {
         try { return !destroyed && current != null && current.getAsBoolean(); }
         catch (RuntimeException cancelled) { return false; }
     }
+    private JSONObject animeAudioAvailability(JSONObject selection, java.util.function.BooleanSupplier current) throws MsxServer.LibraryException {
+        if (!"tv".equals(selection.opt("kind")) || !(selection.opt("animeId") instanceof String)
+                || !(selection.opt("animeAudio") instanceof String)) throw new MsxServer.LibraryException("CATALOG_INVALID_INPUT");
+        String audio = selection.optString("animeAudio");
+        if (!("sub".equals(audio) || "dub".equals(audio))) throw new MsxServer.LibraryException("CATALOG_INVALID_INPUT");
+        try {
+            JSONObject media = resolveCatalogMedia(selection, current);
+            JSONObject content = validatedContent(media);
+            if (content == null || !audio.equals(WatchHistory.animeAudio(content))) throw new MsxServer.LibraryException("CATALOG_RESPONSE");
+            return object("available", true, "audio", audio);
+        } catch (MsxServer.LibraryException error) {
+            if ("SOURCE_UNAVAILABLE".equals(error.code) || "SOURCE_UNSUPPORTED".equals(error.code)) {
+                return object("available", false, "audio", audio);
+            }
+            throw error;
+        }
+    }
     private JSONObject resolveCatalogMedia(JSONObject selection, java.util.function.BooleanSupplier current) throws MsxServer.LibraryException {
         JSONObject params = copy(selection);
         if (params.has("resume") && !(params.opt("resume") instanceof Boolean)) throw new MsxServer.LibraryException("CATALOG_INVALID_INPUT");
@@ -751,27 +876,50 @@ public final class ConnectionService extends Service {
         // A title played recently resolves from the on-phone cache when its source still answers.
         String cacheKey = ResolvedSources.key(params);
         JSONObject media = resolvedSources.get(cacheKey, System.currentTimeMillis());
+        if (media != null) {
+            String cachedAnimeId = WatchHistory.animeId(media.optJSONObject("content"));
+            if (params.has("animeId")) {
+                if (!params.optString("animeId").equals(cachedAnimeId)
+                        || !params.optString("animeAudio", "sub").equals(WatchHistory.animeAudio(media.optJSONObject("content")))) media = null;
+            } else if (cachedAnimeId != null) media = null;
+        }
+        if (media != null && !CatalogClient.sourceTitleMatches(media.optString("title"), media.optString("url"))) {
+            resolvedSources.forget(cacheKey); media = null;
+        }
         if (media != null && !ResolvedSources.reachable(media.optString("url"))) { resolvedSources.forget(cacheKey); media = null; }
         if (media == null) media = resolveFresh(params, current);
         else Log.i("LumaCatalog", "SOURCE_CACHED");
         if (!catalogCurrent(current)) throw new MsxServer.LibraryException("CANCELLED");
-        JSONObject content = media.optJSONObject("content");
+        JSONObject content = validatedContent(media);
         if (content == null) throw new MsxServer.LibraryException("SOURCE_UNSUPPORTED");
-        media = attachWatchMetadata(media, content.optString("watchUrl"));
+        media = attachWatchMetadata(media, content);
         if (!resume) put(media, "resumeSeconds", 0);
         return media;
     }
     private JSONObject resolveFresh(JSONObject params, java.util.function.BooleanSupplier current) throws MsxServer.LibraryException {
         JSONObject media;
-        try { media = catalogClient.handle("resolve", params); }
-        catch (CatalogClient.CatalogException error) {
-            if ("CATALOG_INVALID_INPUT".equals(error.code)) throw new MsxServer.LibraryException(error.code);
-            if (!catalogCurrent(current)) throw new MsxServer.LibraryException("CANCELLED");
-            try { media = catalogWebResolver.resolve(params, () -> catalogCurrent(current)); }
-            catch (WebContentResolver.ResolveException failure) { throw new MsxServer.LibraryException(failure.code); }
+        if (params.has("animeId")) {
+            try { media = animeCatalogClient.resolve(params); }
+            catch (AnimeCatalogClient.AnimeException error) { throw new MsxServer.LibraryException(error.code); }
+        } else {
+            try { media = catalogClient.handle("resolve", params); }
+            catch (CatalogClient.CatalogException error) {
+                if ("CATALOG_INVALID_INPUT".equals(error.code)) throw new MsxServer.LibraryException(error.code);
+                if (!catalogCurrent(current)) throw new MsxServer.LibraryException("CANCELLED");
+                try { media = catalogWebResolver.resolve(params, () -> catalogCurrent(current)); }
+                catch (WebContentResolver.ResolveException failure) { throw new MsxServer.LibraryException(failure.code); }
+            }
         }
         JSONObject content = media.optJSONObject("content");
-        if (content != null) resolvedSources.put(content.optString("key", null), media, System.currentTimeMillis());
+        if (content != null) {
+            JSONObject cacheSelection = copy(params);
+            String resolvedAnimeId = WatchHistory.animeId(content);
+            if (resolvedAnimeId != null) {
+                put(cacheSelection, "animeId", resolvedAnimeId);
+                put(cacheSelection, "animeAudio", WatchHistory.animeAudio(content));
+            }
+            resolvedSources.put(ResolvedSources.key(cacheSelection), media, System.currentTimeMillis());
+        }
         return media;
     }
     public void restoreReceivers() {
@@ -797,6 +945,7 @@ public final class ConnectionService extends Service {
             try { return subtitleDelivery.resolve(id, source, original, peer).url; }
             catch (SubtitleDelivery.DeliveryException error) { throw NativeBackend.fail("SUBTITLE_EXPIRED"); }
         });
+        transport.setLocalMediaResolver((url, peer) -> localMedia.resolve(url, peer));
         return transport;
     }
     private interface NetworkAction { void run(Work work); }
@@ -859,7 +1008,7 @@ public final class ConnectionService extends Service {
                 if (callback != null) callback.success(watchHistory.snapshot());
                 return;
             }
-            if ("watch.library".equals(method) || "watch.libraryDetails".equals(method) || "watch.nextEpisode".equals(method)) { requestLibrary(method, args, callback); return; }
+            if ("watch.library".equals(method) || "watch.libraryDetails".equals(method) || "watch.libraryDelete".equals(method) || "watch.nextEpisode".equals(method)) { requestLibrary(method, args, callback); return; }
             if (method != null && method.startsWith("catalog.")) { requestCatalog(method, args, callback); return; }
             if ("preview.frame".equals(method)) { requestScrubPreview(args, callback); return; }
             if ("preview.batch".equals(method)) { requestScrubBatch(args, callback); return; }
@@ -1016,7 +1165,7 @@ public final class ConnectionService extends Service {
                 if (!(raw instanceof Number)) throw NativeBackend.fail("INVALID_INPUT");
                 double value = ((Number) raw).doubleValue(); int maximum = volume.optInt("max");
                 if (!Double.isFinite(value) || value != Math.floor(value) || value < 0 || value > maximum) throw NativeBackend.fail("INVALID_INPUT");
-                String source = args.has("expectedSourceUrl") ? NativeBackend.publicUrl(args.opt("expectedSourceUrl")) : "";
+                String source = args.has("expectedSourceUrl") ? mediaUrl(args.opt("expectedSourceUrl")) : "";
                 if (!source.isEmpty() && (!source.equals(rememberedSource()) || !matches(state.optJSONObject("remote"), state.optJSONObject("playback")))) throw NativeBackend.fail("SOURCE_CHANGED");
                 if (queuedVolume == null && (int) value == volume.optInt("current")) {
                     if (callback != null) callback.success(object("volume", copy(volume), "volumePending", false, "queued", false));
@@ -1606,11 +1755,11 @@ public final class ConnectionService extends Service {
         return true;
     }
     private JSONObject rememberRemote(Work work, JSONObject args) throws NativeBackend.BackendException {
-        String expected = NativeBackend.publicUrl(args.opt("expectedSourceUrl"));
+        String expected = mediaUrl(args.opt("expectedSourceUrl"));
         JSONObject cached = snapshot().optJSONObject("remote"), proposed = args.optJSONObject("remote");
         JSONObject media = cached == null ? null : cached.optJSONObject("media"), proposedMedia = proposed == null ? null : proposed.optJSONObject("media");
         if (media == null || proposed == null || !expected.equals(media.optString("url"))
-                || proposedMedia == null || !expected.equals(NativeBackend.publicUrl(proposedMedia.opt("url")))) throw NativeBackend.fail("SOURCE_CHANGED");
+                || proposedMedia == null || !expected.equals(mediaUrl(proposedMedia.opt("url")))) throw NativeBackend.fail("SOURCE_CHANGED");
         JSONObject expectedContent = validatedContent(media), proposedContent = validatedContent(proposedMedia);
         if (expectedContent == null != (proposedContent == null)
                 || expectedContent != null && !expectedContent.optString("key").equals(proposedContent.optString("key"))) throw NativeBackend.fail("SOURCE_CHANGED");
@@ -1634,9 +1783,9 @@ public final class ConnectionService extends Service {
         if (Double.isNaN(number) || Double.isInfinite(number) || number != Math.floor(number) || number < 0 || number > 1024) throw NativeBackend.fail("INVALID_SUBTITLE");
         return (int) number;
     }
-    private static JSONObject remoteData(JSONObject media, JSONObject result, JSONArray sources) throws NativeBackend.BackendException {
+    private JSONObject remoteData(JSONObject media, JSONObject result, JSONArray sources) throws NativeBackend.BackendException {
         if (media == null || result == null) throw NativeBackend.fail("INVALID_SUBTITLE");
-        String url = NativeBackend.publicUrl(media.opt("url"));
+        String url = mediaUrl(media.opt("url"));
         JSONArray loaded = result.optJSONArray("tracks"), bindings = result.optJSONArray("catalog");
         if (result.has("tracks") && loaded == null || result.has("catalog") && bindings == null
                 || loaded != null && loaded.length() > 128 || bindings != null && bindings.length() > 128 || sources != null && sources.length() > 128) throw NativeBackend.fail("INVALID_SUBTITLE");
@@ -1650,7 +1799,7 @@ public final class ConnectionService extends Service {
         Map<String, JSONObject> catalog = new LinkedHashMap<>();
         if (sources != null) for (int i = 0; i < sources.length(); i++) {
             JSONObject item = sources.optJSONObject(i); if (item == null) throw NativeBackend.fail("INVALID_SUBTITLE");
-            String link = NativeBackend.publicUrl(item.opt("url"));
+            String link = mediaUrl(item.opt("url"));
             Object index = subtitleIndex(item.opt("index"));
             if (index instanceof Integer && !indices.contains((Integer) index)) index = JSONObject.NULL;
             if (!catalog.containsKey(link)) catalog.put(link, object("url", link, "language", clean(item.optString("language"), 64), "label", clean(item.optString("label"), 200), "index", index));
@@ -1659,7 +1808,7 @@ public final class ConnectionService extends Service {
         Set<String> seen = new HashSet<>();
         if (bindings != null) for (int i = 0; i < bindings.length(); i++) {
             JSONObject item = bindings.optJSONObject(i); if (item == null) throw NativeBackend.fail("INVALID_SUBTITLE");
-            String link = NativeBackend.publicUrl(item.opt("url"));
+            String link = mediaUrl(item.opt("url"));
             if (!catalog.containsKey(link) || !seen.add(link)) throw NativeBackend.fail("INVALID_SUBTITLE");
             Object index = subtitleIndex(item.opt("index"));
             if (index instanceof Integer && !indices.contains((Integer) index)) throw NativeBackend.fail("INVALID_SUBTITLE");
@@ -1677,6 +1826,9 @@ public final class ConnectionService extends Service {
         boolean enabled = result.optBoolean("subtitlesEnabled");
         if (selected instanceof Integer && !indices.contains((Integer) selected) || enabled && selected == JSONObject.NULL) throw NativeBackend.fail("INVALID_SUBTITLE");
         JSONObject safeMedia = object("url", url, "contentType", clean(media.optString("contentType"), 100), "title", clean(media.optString("title"), 200));
+        JSONObject headers = MediaHeaders.validated(media.opt("headers"));
+        if (headers.length() > 0) put(safeMedia, "headers", headers);
+        String mediaId = localMediaId(media); if (!mediaId.isEmpty()) put(safeMedia, "mediaId", mediaId);
         JSONObject content = validatedContent(media); if (content != null) put(safeMedia, "content", content);
         JSONObject normalized = object("media", safeMedia,
                 "tracks", tracks, "catalog", entries, "selectedIndex", selected, "subtitlesEnabled", enabled);
@@ -1689,16 +1841,26 @@ public final class ConnectionService extends Service {
         JSONObject safe = WatchHistory.contentFromCatalog(content.optString("kind"), content.optString("contentId"),
                 "tv".equals(content.optString("kind")) ? Integer.valueOf(content.optInt("season", -1)) : null,
                 "tv".equals(content.optString("kind")) ? Integer.valueOf(content.optInt("episode", -1)) : null, content.optString("title"));
-        return safe != null && safe.optString("key").equals(content.optString("key"))
-                && safe.optString("watchUrl").equals(content.optString("watchUrl")) ? safe : null;
+        if (safe == null || !safe.optString("key").equals(content.optString("key"))
+                || !safe.optString("watchUrl").equals(content.optString("watchUrl"))) return null;
+        if (content.has("animeId") && WatchHistory.animeId(content) == null
+                || content.has("animeAudio") && !("sub".equals(content.opt("animeAudio")) || "dub".equals(content.opt("animeAudio")))) return null;
+        return WatchHistory.preserveAnime(safe, content);
     }
     private static boolean sameMediaIdentity(JSONObject first, JSONObject second) {
         if (first == null || second == null || !first.optString("url").equals(second.optString("url"))) return false;
+        if (!first.optString("contentType").equals(second.optString("contentType"))) return false;
+        try { if (!MediaHeaders.same(first.opt("headers"), second.opt("headers"))) return false; }
+        catch (NativeBackend.BackendException invalid) { return false; }
         JSONObject left = validatedContent(first), right = validatedContent(second);
         return left == null ? right == null : right != null && left.optString("key").equals(right.optString("key"));
     }
     private static JSONObject systemMedia(JSONObject media, JSONObject content) {
         JSONObject safe = object("url", media.optString("url"), "contentType", clean(media.optString("contentType"), 100), "title", clean(media.optString("title"), 200));
+        try {
+            JSONObject headers = MediaHeaders.validated(media.opt("headers"));
+            if (headers.length() > 0) put(safe, "headers", headers);
+        } catch (NativeBackend.BackendException ignored) { }
         if (content != null) put(safe, "content", content);
         return safe;
     }
@@ -1710,8 +1872,29 @@ public final class ConnectionService extends Service {
     private void observeSubtitles(JSONObject observed) {
         JSONObject remote = state.optJSONObject("remote"), playback = state.optJSONObject("playback");
         if (remote == null || playback == null || !matches(remote, playback)) return;
+        JSONArray observedTracks = observed.optJSONArray("tracks"), tracks = new JSONArray();
+        Set<Integer> indices = new HashSet<>();
+        if (observedTracks != null) for (int i = 0; i < observedTracks.length(); i++) {
+            JSONObject item = observedTracks.optJSONObject(i);
+            int index = item == null ? -1 : item.optInt("index", -1);
+            if (index < 0 || index > 1024 || !indices.add(index)) return;
+            tracks.put(object("index", index, "language", clean(item.optString("language"), 64),
+                    "label", clean(item.optString("name"), 200)));
+        }
+        if (observedTracks != null) put(remote, "tracks", tracks);
         put(remote, "selectedIndex", observed.opt("currentIndex"));
         put(remote, "subtitlesEnabled", observed.optBoolean("enabled"));
+    }
+    /** Receiver-owned tracks can be added by the laptop or another paired phone.
+     * Keep them observable without inventing source URLs or replaying any write. */
+    private void refreshObservedSubtitles(Work work, JSONObject playback) throws NativeBackend.BackendException {
+        if (playback == null || !playback.optBoolean("active")
+                || !playback.optString("mediaId").matches("local:[a-f0-9]{32,64}")) return;
+        JSONObject args = object("expectedSourceUrl", playback.optString("sourceUrl"));
+        JSONObject content = validatedContent(object("content", playback.optJSONObject("content")));
+        if (content != null) put(args, "expectedContentKey", content.optString("key"));
+        JSONObject observed = work.transport.handle("receiver.getSubtitles", args);
+        synchronized (stateLock) { if (work.current()) observeSubtitles(observed); }
     }
     /** A failed HTTP read says nothing about whether receiver playback stopped. */
     private void observeReceiverFailure(NativeBackend.BackendException failure) {
@@ -1777,33 +1960,40 @@ public final class ConnectionService extends Service {
                 resetObservedHydrationLocked();
             } else {
                 String source;
-                try { source = NativeBackend.publicUrl(current.opt("sourceUrl")); }
+                try { source = mediaUrl(current.opt("sourceUrl")); }
                 catch (NativeBackend.BackendException ignored) { source = ""; observeCurrent = false; }
                 JSONObject content = validatedContent(object("content", current.optJSONObject("content")));
+                String observedMediaId = current.optString("mediaId");
+                boolean localObserved = observedMediaId.matches("local:[a-f0-9]{32,64}");
                 boolean sourceChanged = media != null && !source.equals(media.optString("url"));
                 boolean contentChanged = content != null && previousContent != null
                         && !content.optString("key").equals(previousContent.optString("key"));
-                if (previousContent != null && content == null && sourceChanged && !source.isEmpty()) {
+                if (!localObserved && previousContent != null && content == null && sourceChanged && !source.isEmpty()) {
                     if (canonicalTransitionSource.isEmpty()) {
                         canonicalTransitionSource = source;
                         canonicalTransitionUntil = SystemClock.elapsedRealtime() + CANONICAL_TRANSITION_GRACE;
                     }
-                } else if (content != null || source.isEmpty()) clearCanonicalTransitionLocked();
+                } else if (content != null || localObserved || source.isEmpty()) clearCanonicalTransitionLocked();
                 // A reusable stream URL cannot prove that the receiver is still on the
                 // old canonical item. During tag startup, fail closed until the
                 // add-on identity appears; legacy URL-only remotes remain usable.
-                if (previousContent != null && (content == null || contentChanged)) observeCurrent = false;
+                if (!localObserved && previousContent != null && (content == null || contentChanged)) observeCurrent = false;
                 boolean continuingCanonicalSession = media != null && previousContent != null;
                 boolean mayAdopt = !source.isEmpty() && !handoffInProgress && connection != null
                         && connection.optBoolean("configured")
                         && (connection.optBoolean("connected") || continuingCanonicalSession);
                 boolean canonicalTransition = content != null && (remote == null || sourceChanged
                         || previousContent == null || contentChanged);
+                boolean localTransition = localObserved && (remote == null || sourceChanged
+                        || !observedMediaId.equals(localMediaId(media)));
                 boolean adopted = false;
-                if (mayAdopt && (remote == null || canonicalTransition)) {
-                    JSONObject selectedMedia = object("url", source, "contentType", "",
-                            "title", content == null ? "Projector video" : content.optString("title"));
+                if (mayAdopt && (remote == null || canonicalTransition || localTransition)) {
+                    JSONObject selectedMedia = object("url", source,
+                            "contentType", localObserved ? clean(current.optString("contentType"), 100) : "",
+                            "title", localObserved ? clean(current.optString("title", "Projector video"), 200)
+                                : content == null ? "Projector video" : content.optString("title"));
                     if (content != null) put(selectedMedia, "content", content);
+                    if (localObserved) put(selectedMedia, "mediaId", observedMediaId);
                     put(state, "remote", object("media", selectedMedia, "tracks", new JSONArray(), "catalog", new JSONArray(),
                             "selectedIndex", JSONObject.NULL, "subtitlesEnabled", false));
                     // Subtitle delivery reuse is source-URL based. A canonical
@@ -1870,11 +2060,14 @@ public final class ConnectionService extends Service {
         if ("tv".equals(content.optString("kind"))) {
             put(selection, "season", content.optInt("season"));
             put(selection, "episode", content.optInt("episode"));
+            String animeId = WatchHistory.animeId(content);
+            if (animeId != null) { put(selection, "animeId", animeId); put(selection, "animeAudio", WatchHistory.animeAudio(content)); }
         }
         try {
             catalogNetwork.execute(() -> {
                 JSONObject result = null; String failure = null;
-                try { result = catalogClient.handle("hydrate", selection); }
+                try { result = selection.has("animeId") ? animeCatalogClient.resolve(selection) : catalogClient.handle("hydrate", selection); }
+                catch (AnimeCatalogClient.AnimeException unavailable) { failure = unavailable.code; }
                 catch (CatalogClient.CatalogException unavailable) { failure = unavailable.code; }
                 catch (RuntimeException unavailable) { failure = "CATALOG_UNAVAILABLE"; }
                 JSONObject hydrated = result; String error = failure;
@@ -1928,7 +2121,7 @@ public final class ConnectionService extends Service {
         publish();
         if (refreshNext && nextContent != null) refreshNextEpisode("luma", source, nextContent, revision, 0);
     }
-    private static JSONObject hydratedRemote(JSONObject media, JSONObject current, JSONArray sources) throws NativeBackend.BackendException {
+    private JSONObject hydratedRemote(JSONObject media, JSONObject current, JSONArray sources) throws NativeBackend.BackendException {
         Set<String> available = new HashSet<>();
         for (int i = 0; i < sources.length(); i++) {
             JSONObject source = sources.optJSONObject(i);
@@ -2048,6 +2241,7 @@ public final class ConnectionService extends Service {
             }
             JSONObject selection = object("kind", "tv", "id", target.optString("contentId"), "season", target.optInt("season"),
                     "episode", target.optInt("episode"), "resume", true);
+            String animeId = WatchHistory.animeId(content); if (animeId != null) { put(selection, "animeId", animeId); put(selection, "animeAudio", WatchHistory.animeAudio(content)); }
             PowerManager.WakeLock wakeLock = getSystemService(PowerManager.class)
                     .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "LumaRemote:SystemNext");
             // Catalog selection can use the fixed provider and its bounded web
@@ -2229,6 +2423,8 @@ public final class ConnectionService extends Service {
                         JSONObject current = work.transport.handle("receiver.status", new JSONObject());
                         synchronized (stateLock) { if (!work.current()) return; put(state, "playback", current); }
                         adoptObservedPlayback(current);
+                        try { refreshObservedSubtitles(work, current); }
+                        catch (NativeBackend.BackendException ignored) { /* Source may change between guarded reads. */ }
                         // Show fresh playback (and enable controls) before any background syncing.
                         work.post(this::publish);
                     } catch (NativeBackend.BackendException failure) {
@@ -2299,7 +2495,8 @@ public final class ConnectionService extends Service {
                 long updated = record == null ? 0 : record.optLong("updatedAt");
                 if (record == null || updated <= 0) continue;
                 newest = Math.max(newest, updated);
-                records.put(object("key", record.optString("key"), "type", "progress", "updatedAt", updated, "origin", origin, "data", record));
+                if (record.optBoolean("deleted")) records.put(object("key", record.optString("key"), "type", record.optString("type"), "updatedAt", updated, "origin", origin, "deleted", true));
+                else records.put(object("key", record.optString("key"), "type", "progress", "updatedAt", updated, "origin", origin, "data", record));
             }
             if (records.length() > 0) {
                 work.transport.handle("receiver.libraryPush", object("records", records));
@@ -2365,8 +2562,10 @@ public final class ConnectionService extends Service {
         if (records == null) return;
         for (int i = 0; i < records.length(); i++) {
             JSONObject record = records.optJSONObject(i);
-            // LibraryStore.record revalidates canonical identity and keeps newer local progress.
-            if (record != null && "progress".equals(record.optString("type")) && !record.optBoolean("deleted")) libraryStore.record(record.optJSONObject("data"));
+            // LibraryStore revalidates canonical identity and keeps newer local progress/deletions.
+            if (record == null) continue;
+            if (record.optBoolean("deleted")) libraryStore.applyDeletion(record);
+            else if ("progress".equals(record.optString("type"))) libraryStore.record(record.optJSONObject("data"));
         }
     }
     private void schedulePoll(long delay) {
@@ -2573,6 +2772,8 @@ public final class ConnectionService extends Service {
         clearSubtitleDelivery();
         if (subtitleDelivery != null) subtitleDelivery.close();
         subtitleNetwork.shutdownNow();
+        if (localMedia != null) localMedia.close();
+        localMediaIo.shutdownNow();
         cancelQueuedVolume();
         cancelNotificationFlush();
         destroyed = true; generation++; revokeTokens(); main.removeCallbacksAndMessages(null); listeners.clear();

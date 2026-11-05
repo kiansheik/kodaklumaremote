@@ -44,6 +44,16 @@ public final class WatchHistoryInstrumentation {
                 for (String invalid : new String[] {"http://framextv.cc/watch/42", "https://framextv.cc.attacker.example/watch/42", "https://user@framextv.cc/watch/42", "https://framextv.cc:8443/watch/42", "https://framextv.cc/watch/%34%32", "https://framextv.cc/watch/0", "https://framextv.cc/watch/42/1", "https://framextv.cc/watch/42/1/0"}) require(WatchHistory.contentFromPage(invalid, "Title") == null, "Invalid watch identity accepted");
                 require(WatchHistory.contentFromCatalog("episode", "42", 1, 1, "Wrong kind") == null && WatchHistory.contentFromCatalog("movie", "42", 1, 1, "Wrong shape") == null, "Invalid typed identity accepted");
             });
+            check("anime provider and audio provenance survive durable history", () -> {
+                MemoryStore store = new MemoryStore(); long[] clock = {100000}; WatchHistory history = new WatchHistory(store, () -> clock[0], () -> clock[0]);
+                JSONObject anime = content(3).put("animeId", "211778").put("animeAudio", "dub"); String source = "https://anime.example/master.m3u8";
+                require(history.bind("luma", media(anime, source)), "Anime identity was rejected");
+                require(history.observe("luma", playback(source, 120, 1400, true, false)), "Anime progress was not recorded");
+                history.flush(); WatchHistory restored = new WatchHistory(store, () -> clock[0], () -> clock[0]);
+                JSONObject saved = restored.find(anime.getString("key"));
+                require("211778".equals(saved.getString("animeId")) && "dub".equals(saved.getString("animeAudio")), "Anime audio edition was lost after restart");
+                restored.close(); history.close();
+            });
             check("only fresh bound playback persists, with throttle, pause and final-position protection", () -> {
                 MemoryStore store = new MemoryStore(); long[] wall = {1000000}, elapsed = {1000};
                 WatchHistory history = new WatchHistory(store, () -> wall[0], () -> elapsed[0]); String source = "https://cdn.example/first.m3u8?token=EPHEMERAL";

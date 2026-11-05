@@ -19,6 +19,12 @@
   demo. `scripts/public-cast-smoke.mjs`: actual SDK readiness only, no device.
 - `tests/*.test.mjs`: Node media/session unit tests.
 - `tests/browser/extension.spec.js`: actual loaded MV3 + mocked CAF in Chromium.
+- `PlaybackDiskCache` plus phone/laptop remote buffer labels: actual contiguous
+  disk-ahead and RAM-ahead telemetry for opaque local progressive sessions;
+  receiver paths/storage keys never cross the native boundary.
+- `ExternalCaptions` and `ResolvedSources`: six-hour, canonical-identity-scoped
+  caption/media-track caches. Receiver Next completion is also generation,
+  source and content guarded so slow work cannot replace a later cast.
 - `tests/fixtures/`: synthetic player/SDK/VTT and public-demo HTML, no media files.
 - `tests/manual-chromecast.md`: hardware acceptance checklist and evidence table.
 - `scripts/discover-tv.mjs`: bounded read-only SSDP/descriptor probe for the
@@ -116,6 +122,26 @@
 - `scripts/luma-{protocol,discovery,controller}.mjs`: archived-APK-derived native
   LUMA transport, bounded UDP discovery and loopback HTTP bridge. Persistent TCP
   controls are separate from Kodi; no fileserver or auth advertisement.
+- `scripts/stream-local-media.mjs`, `scripts/local-media-remote.mjs`: laptop
+  local-file path for LUMA Receiver. The first serves capability-scoped byte
+  ranges or high-quality ffmpeg HLS plus subtitle sidecars; the second is a
+  localhost-only, random-path browser remote for pairing, root-scoped source
+  selection, transport, captions, volume, scrubbing and shared previews.
+- `LocalMediaServer.java`: phone-owned private-LAN byte-range server for
+  user-selected document-provider MP4/MKV/WebM and external subtitles. Exact
+  capability URLs are accepted only by the service/native receiver path, never
+  by the browsing WebView or generic public-URL validator.
+- Receiver `MediaRequest`/`PlaybackController` and phone `NativeBackend`/
+  `ConnectionService`: opaque `local:` identities let a second paired phone
+  adopt authenticated receiver playback and reuse projector-cached scrub JPEGs
+  without granting it arbitrary access to the initiating phone or laptop.
+- Receiver `PlaybackDiskCache`: process-owned Media3 cache for progressive
+  opaque local sessions. Playback-priority reads keep the 8–20 second RAM window;
+  a lower-priority worker fills whole files that fit or a bounded rolling window
+  on constrained storage, including while paused. Opaque session keys are
+  cleared on source/Stop/startup. Mounted app-writable external cache surfaces
+  are considered and a roomier removable card is preferred; status exposes only
+  non-sensitive storage class/capacity/progress, never filesystem paths.
 - `src/luma/remote.html`: responsive projector remote, explicit short discovery/
   direct IP, app inventory/Kodi launch, navigation, text and volume refresh.
 - `tests/luma-*.test.mjs`, `tests/browser/luma.spec.js`: fake TCP/UDP/HTTP
@@ -134,7 +160,17 @@
   native RPC adapters, same-origin declared source/track capture and matched pause.
   The main remote exposes scrub, back 30 and catalog-proven next episode. The same
   exact successor is projected to notification/MediaSession skip-next. A
-  native-backed title preference stores one −30…+30% brightness value per movie
+  current-title tap opens the exact saved Library title/episode, while bounded
+  long-press actions delete an episode or whole title through native synchronized
+  tombstones. Provider-title mismatches have a distinct user-visible error. A
+  verified anime episode exposes a Sub/Dub segmented control inside the subtitle
+  sheet only when the opposite edition resolves. Switching uses a fresh guarded
+  source handoff at the observed position and adopts that edition's subtitle catalog.
+  **Change stream** opens the current canonical watch route in the separate
+  app-owned browser without mutating receiver playback. Library can likewise
+  open the selected watch route or the verified movie/TV/anime title route, then
+  relies on the site's ordinary server picker and existing capture/Cast flow.
+  A native-backed title preference stores one −30…+30% brightness value per movie
   or whole series and restores it with source/content guards after each cast. A
   notification tap returns through the app's guarded catalog selection, while a
   lock-screen MediaSession action resolves and opens it in the service without an
@@ -150,7 +186,13 @@
   not only mocked capture metadata. The native opt-in captures declared SRT,
   ASS/SSA and TTML alongside WebVTT; generic CAF extraction remains WebVTT-only.
 - `android/`: phone APK shell and native networking; browser WebView has no
-  native bridge. MainActivity owns capture/job lifecycle and visible-app retries;
+  native bridge. MainActivity owns capture/job lifecycle and visible-app retries.
+  `LiveMediaObserver` retains a bounded, page-generation-scoped set of likely
+  standard-media requests from the visible WebView, while `LiveMediaVerifier`
+  independently checks public HTTPS format evidence only after explicit Cast.
+  `MediaHeaders` is the shared phone-side Referer/Origin/User-Agent allowlist;
+  browser cookies and authorization are never copied. Normal same-origin DOM
+  capture remains first and only source-unavailable pages may use this fallback;
   ConnectionService owns background native-projector and LUMA Receiver traffic,
   MediaSession/notification and cached state. NativeBackend keeps independent
   `nativeConnected` (EShare/navigation 8121) and `receiverConnected` (paired
@@ -171,6 +213,14 @@
   polling and cancelling unsent writes on receiver/source changes. The
   [Motorola recovery handoff](session-handoffs/2026-10-18-motorola-kodi-recovery.md)
   distinguishes fixture evidence from pending physical acceptance.
+- `android-receiver/`: projector-side HTTP receiver, player, synchronized
+  Library and foreground service. `StartupReceiver` starts the sticky service
+  for boot/package replacement; `MainActivity` has separate launcher/Leanback
+  and `HOME`/`DEFAULT` intent filters. Selecting it once in Android's Home-app
+  settings makes the receiver the boot foreground/default Home screen; idle OK
+  opens setup and Menu reopens the reversible setting. Receiver 0.3.7 persists
+  distinct OK presses and Home-settings launches; the public `info.startup`
+  object exposes those counters/timestamps plus live default-Home/UI state.
 - `SubtitleNormalizer.java`, `SubtitleDelivery.java`: phone-side bounded text
   conversion to UTF-8 SRT and source/receiver-scoped RAM capabilities. Separate
   fetch work does not block Kodi controls. Up to128 tracks/16MiB stay available
@@ -269,9 +319,12 @@
   offers from fixed Pages metadata, verified GitHub release downloads and one
   temporary read-only APK grant to Android's installer. No background auto-install.
 - `site/`, `Makefile`, `scripts/{release-next-android,release-config,
-  configure-android-release,deploy-gh-pages}.mjs`:
+  configure-android-release,deploy-gh-pages,build-latest-apks}.mjs`:
   guarded next-patch Android release through `make deploy-gh-pages`, plus scoped
-  page-only fast-forward deployment through `make deploy-page`. One-time
+  page-only fast-forward deployment through `make deploy-page` and guarded
+  signed rebuild and direct installation of the current Gradle phone/receiver
+  APK outputs through `make install-latest-apks`, without update manifests.
+  One-time
   `make configure-release` creates a mode-0600, Git-ignored JSON config so
   repeated releases do not require signing-variable exports. The release target
   auto-stages bounded allowlisted new text files, ignores unrelated untracked
@@ -286,6 +339,11 @@
   read-only signing/decryption checks. Seed mode is explicitly emulator guarded.
 - `docs/releasing.md`, `release-notes/`: local signing/publication procedure and
   public plain-text notes. No signing credentials belong in the repository/CI.
+- `scripts/{build,install}-latest-apks.mjs`: rebuild both current signed Gradle
+  outputs, collapse duplicate ADB transports by hardware identity, select the
+  existing physical Remote installation, install it with an explicit serial and
+  then use the paired receiver update channel. Genuine multi-phone ambiguity
+  requires `ANDROID_SERIAL`; no update manifest is involved.
 - `tests/handoff.test.mjs`, `tests/browser/mobile*.spec.js`,
   `android/app/src/androidTest/`: coordinator, capture, layouts and Android tests.
 - `docs/agent/{phone-app,luma-review-findings}.md`: phone architecture/acceptance
@@ -297,13 +355,22 @@
   content identity; source bindings stay in RAM. Native fixtures cover receiver
   handoff ownership, resume guards and persistence. Service integration is active.
 - `CatalogClient.java`: typed metadata/source reads from the frontend’s fixed API
-  origins. Raw source resolution is not equivalent to the frontend fallback.
+  origins. A provider-owned Films365 title slug that conflicts with catalog
+  metadata is rejected and triggers bounded declared-provider fallback; opaque
+  source URLs remain unverifiable. `ConnectionService` also evicts cached sources
+  with that positive mismatch evidence. Raw source resolution is not equivalent
+  to every frontend fallback.
   The full TV catalog and owned WebView resolver are under active integration.
+- `AnimeCatalogClient.java`: fixed-origin AniZip/AniList bridge for canonical
+  anime identity and episode-specific sub/dub streams. `ConnectionService` uses
+  it for resolution, Next and a read-only alternate-edition availability probe;
+  its cache keys separate AniList season and audio edition.
 - [TV remote controls](tv-remote-controls.md): key/pointer delivery, native caption
   preparation, startup and shared-progress validation boundaries.
 
-- Offline viewing Library: `LibraryStore.java` persists watched title metadata and
-  per-episode progress in private SQLite; `WatchHistory` supplies validated points,
-  and `ConnectionService` serves paginated offline reads/durable resume lookup.
+- Offline viewing Library: `LibraryStore.java` persists watched title metadata,
+  per-episode progress and bounded deletion tombstones in private SQLite;
+  `WatchHistory` supplies validated points, and `ConnectionService` serves
+  paginated offline reads/durable resume lookup plus phone/receiver deletion sync.
   Phone Library uses existing typed fresh-source handoff.
   [Contract and boundaries](offline-library.md).

@@ -115,6 +115,11 @@ public class UiSmokeInstrumentation extends Instrumentation {
                 "https://user@framextv.cc/watch/episode", "https://framextv.cc:444/watch/episode", "https://framextv.cc./watch/episode", "https:///framextv.cc/watch/episode" }) {
             require(Boolean.FALSE.equals(supports.invoke(null, url)), "Unsupported or ambiguous capture origin was accepted");
         }
+        require(MainActivity.shouldBlockBrowserNavigation(CAPTURE_CC, "about:blank", true), "A loaded HTTPS page could still erase the Browse main frame");
+        require(!MainActivity.shouldBlockBrowserNavigation(null, "about:blank", true)
+                && !MainActivity.shouldBlockBrowserNavigation(CAPTURE_CC, "about:blank", false), "Owned or child-frame blank navigation was blocked");
+        require(MainActivity.shouldBlockBrowserNavigation(CAPTURE_CC, "http://framextv.cc/watch/episode", true)
+                && !MainActivity.shouldBlockBrowserNavigation(CAPTURE_CC, CAPTURE_XYZ, true), "Browse scheme boundary changed");
     }
     private void installCaptureFixture() {
         runOnMainSync(() -> {

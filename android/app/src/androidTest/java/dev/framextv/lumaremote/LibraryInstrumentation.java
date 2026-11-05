@@ -11,6 +11,7 @@ import org.json.JSONObject;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 /** App-private SQLite and fake metadata only; no receiver/catalog/CDN requests. */
 public final class LibraryInstrumentation {
@@ -51,8 +52,8 @@ public final class LibraryInstrumentation {
             calls.incrementAndGet(); if (failing) throw new Exception("No external error retained");
             int first = season == 3 ? 4 : 1, second = season == 3 ? 7 : 2;
             return object("id", id, "season", season, "source", "PRIVATE_SOURCE_URL", "episodes", new JSONArray()
-                    .put(object("number", second, "title", "Second cached episode", "overview", "", "still", "https://image.tmdb.org/t/p/w500/still.jpg", "airDate", "2025-01-02", "runtime", 24, "headers", object("secret", "PRIVATE_SESSION_TOKEN")))
-                    .put(object("number", first, "title", "First cached episode", "overview", "", "still", JSONObject.NULL, "airDate", "2025-01-01", "runtime", 23)));
+                    .put(object("number", second, "title", "Second cached episode", "overview", "", "still", "https://image.tmdb.org/t/p/w500/still.jpg", "airDate", "", "runtime", 24, "headers", object("secret", "PRIVATE_SESSION_TOKEN")))
+                    .put(object("number", first, "title", "First cached episode", "overview", "", "still", JSONObject.NULL, "airDate", "", "runtime", 23)));
         }
     }
     private static JSONObject awaitMetadata(LibraryStore library, String id, Integer nextSeason) throws Exception {
@@ -82,6 +83,24 @@ public final class LibraryInstrumentation {
                         require(restored.list(object("offset", 150, "limit", 100)).getJSONArray("items").length() == 30 && restored.list(new JSONObject()).getInt("total") == 180,
                                 "Durable library did not survive reopen/pagination");
                         require(restored.findProgress(content("movie", "1000", null, null)).getDouble("resumeSeconds") == 10, "Progress beyond recent100 did not survive reopen");
+                    }
+                } finally { context.deleteDatabase(name); }
+            });
+            check("version one Library upgrades in place before deletion tombstones are used", () -> {
+                String name = databaseName();
+                try {
+                    SQLiteDatabase legacy = context.openOrCreateDatabase(name, Context.MODE_PRIVATE, null);
+                    legacy.execSQL("CREATE TABLE titles(kind TEXT NOT NULL,id TEXT NOT NULL,title TEXT NOT NULL,metadata_title TEXT NOT NULL DEFAULT '',metadata TEXT,metadata_at INTEGER NOT NULL DEFAULT 0,metadata_due INTEGER NOT NULL DEFAULT 0,revision INTEGER NOT NULL DEFAULT 0,last_started_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,PRIMARY KEY(kind,id))");
+                    legacy.execSQL("CREATE TABLE progress(content_key TEXT PRIMARY KEY,kind TEXT NOT NULL,id TEXT NOT NULL,season INTEGER,episode INTEGER,record TEXT NOT NULL,last_started_at INTEGER NOT NULL,updated_at INTEGER NOT NULL)");
+                    legacy.execSQL("CREATE INDEX progress_title ON progress(kind,id,last_started_at DESC,updated_at DESC)");
+                    legacy.execSQL("CREATE TABLE seasons(id TEXT NOT NULL,number INTEGER NOT NULL,metadata TEXT NOT NULL,metadata_at INTEGER NOT NULL,PRIMARY KEY(id,number))");
+                    legacy.setVersion(1); legacy.close();
+                    try (LibraryStore library = new LibraryStore(context, name, null, () -> 1000000)) {
+                        library.record(movie(42, 1000));
+                        require(library.list(new JSONObject()).getInt("total") == 1, "Version-one data store did not upgrade");
+                        library.delete(object("scope", "title", "kind", "movie", "id", "42"));
+                        require(library.list(new JSONObject()).getInt("total") == 0 && library.progressSince(999999, 10).length() > 0,
+                                "Upgraded store could not retain a deletion tombstone");
                     }
                 } finally { context.deleteDatabase(name); }
             });
@@ -144,6 +163,22 @@ public final class LibraryInstrumentation {
                     require(library.details(select("tv", "42")).isNull("nextEpisode"), "Unlisted current episode proved a guessed next boundary");
                 } finally { context.deleteDatabase(name); }
             });
+            check("future catalog episodes do not become a Next action", () -> {
+                String name = databaseName(); LibraryStore.Metadata metadata = new LibraryStore.Metadata() {
+                    @Override public JSONObject details(String kind, String id) throws Exception { return object("kind", kind, "id", id, "title", "Airing anime", "seasons", new JSONArray().put(object("number", 1, "name", "Season 1", "episodeCount", 3, "poster", JSONObject.NULL))); }
+                    @Override public JSONObject episodes(String id, int season) throws Exception { return object("id", id, "season", season, "episodes", new JSONArray()
+                        .put(object("number", 1, "title", "One", "airDate", "2026-10-14"))
+                        .put(object("number", 2, "title", "Two", "airDate", "2026-10-21"))
+                        .put(object("number", 3, "title", "Three", "airDate", "2026-10-28"))); }
+                };
+                try (LibraryStore library = new LibraryStore(context, name, metadata, () -> 1792756800000L)) {
+                    library.record(record("tv", "42", 1, 1, 10, 1000, 1000, 1000, "luma"));
+                    JSONObject detail = awaitMetadata(library, "42", null); long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+                    while (detail.optJSONObject("nextEpisode") == null && System.nanoTime() < until) { Thread.sleep(10); detail = library.details(select("tv", "42")); }
+                    require(detail.getJSONObject("nextEpisode").getInt("episode") == 2, "Released next episode was hidden");
+                    require(library.nextEpisode(object("kind", "tv", "id", "42", "season", 1, "episode", 2)).isNull("nextEpisode"), "Future episode became a Next action");
+                } finally { context.deleteDatabase(name); }
+            });
             check("fresh authorized history feeds durable storage while metadata failure preserves progress", () -> {
                 String name = databaseName(); FakeMetadata metadata = new FakeMetadata(); metadata.failing = true;
                 try (LibraryStore library = new LibraryStore(context, name, metadata, () -> 1000000)) {
@@ -160,6 +195,34 @@ public final class LibraryInstrumentation {
                     require(metadata.calls.get() > 0 && library.findProgress(content("tv", "42", 1, 1)).getDouble("resumeSeconds") == 120, "Metadata failure erased saved progress");
                     require(library.list(new JSONObject()).getBoolean("storageAvailable") && !library.details(select("tv", "42")).getBoolean("metadataAvailable"), "Metadata failure was confused with storage failure");
                     String serialized = stored(context, name); require(!serialized.contains("PRIVATE_SOURCE_URL") && !serialized.contains("PRIVATE_SESSION_TOKEN") && !serialized.contains("cdn.example"), "Playback source/token entered durable SQLite");
+                } finally { context.deleteDatabase(name); }
+            });
+            check("episode and title deletion persist tombstones and reject stale resurrection", () -> {
+                String name = databaseName(); AtomicLong clock = new AtomicLong(1000000);
+                try (LibraryStore library = new LibraryStore(context, name, null, clock::get)) {
+                    library.record(record("tv", "42", 1, 1, 10, 1000, 1000, 1000, "luma"));
+                    library.record(record("tv", "42", 1, 2, 20, 1000, 2000, 2000, "luma"));
+                    library.record(record("tv", "43", 1, 1, 30, 1000, 3000, 3000, "philips"));
+                    JSONObject removed = library.delete(object("scope", "episode", "kind", "tv", "id", "42", "season", 1, "episode", 1));
+                    require(removed.getInt("removed") == 1 && episodeProgress(library.details(select("tv", "42")), 1, 1) == null
+                            && episodeProgress(library.details(select("tv", "42")), 1, 2) != null, "Episode deletion removed the wrong scope");
+                    JSONArray changes = library.progressSince(999999, 20); boolean episodeTombstone = false;
+                    for (int i = 0; i < changes.length(); i++) episodeTombstone |= changes.getJSONObject(i).optBoolean("deleted")
+                            && "framextv:tv:42:1:1".equals(changes.getJSONObject(i).optString("key"));
+                    require(episodeTombstone, "Episode deletion was not syncable");
+                    library.record(record("tv", "42", 1, 1, 99, 1000, 5000, 5000, "luma"));
+                    require(library.findProgress(content("tv", "42", 1, 1)) == null, "Stale progress resurrected a deleted episode");
+                    clock.set(2000000);
+                    library.delete(object("scope", "title", "kind", "tv", "id", "42"));
+                    require(library.list(new JSONObject()).getInt("total") == 1 && "43".equals(library.list(new JSONObject()).getJSONArray("items").getJSONObject(0).getString("id")), "Title deletion crossed series or left its row");
+                    library.record(record("tv", "42", 2, 1, 40, 1000, 1500000, 1500000, "philips"));
+                    require(library.list(new JSONObject()).getInt("total") == 1, "An older unseen episode resurrected a deleted title");
+                    changes = library.progressSince(1999999, 20); boolean titleTombstone = false;
+                    for (int i = 0; i < changes.length(); i++) titleTombstone |= changes.getJSONObject(i).optBoolean("deleted")
+                            && "title:tv:42".equals(changes.getJSONObject(i).optString("key"));
+                    require(titleTombstone, "Title deletion was not syncable");
+                    library.applyDeletion(object("key", "title:tv:43", "type", "title", "updatedAt", 3000000, "deleted", true));
+                    require(library.list(new JSONObject()).getInt("total") == 0, "Projector title tombstone did not clear the phone copy");
                 } finally { context.deleteDatabase(name); }
             });
             result.putInt("passed", passed); result.putInt("failures", 0); runner.finish(Activity.RESULT_OK, result);

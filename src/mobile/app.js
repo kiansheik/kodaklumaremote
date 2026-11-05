@@ -7,6 +7,10 @@ const TV_LAUNCHER = 'https://kiansheik.io/kodaklumaremote/tv.html';
 const TV_BROWSER_ACK = 'Address typed and Go sent. Waiting for the TV browser…';
 const TV_BROWSER_WAIT = 'Launch requested. Waiting for the TV to connect…';
 const TV_BROWSER_BOOKMARK = 'Open Internet on the TV, then choose your saved LUMA bookmark. The receiver is not connected yet.';
+const DISK_CACHE_LABELS = Object.freeze({
+  waiting: 'preparing', filling: 'saving', complete: 'complete', limited: 'window ready',
+  clearing: 'clearing', 'low-storage': 'disabled: low storage', error: 'unavailable',
+});
 const MSX_SETUP_HINTS = Object.freeze({
   HTTPS_REQUEST: 'The direct phone address uses http. Check that the TV browser kept the address exactly as shown.',
   ORIGIN_REJECTED: 'The TV reached this phone, but its app connection was rejected. Share the error shown on the TV.',
@@ -61,6 +65,12 @@ const errors = {
   METADATA_UNAVAILABLE: 'Video started without its title information. Cast it again.',
   NO_VIDEO: 'Nothing is playing on the projector. Choose a video in Browse first.',
   INVALID_MEDIA: 'The page did not expose a supported video. Open its player and try Cast again.',
+  LOCAL_MEDIA_INVALID: 'This file provider did not expose a seekable local video.',
+  LOCAL_MEDIA_FORMAT: 'Choose an MP4, MKV or WebM file, or use the laptop compatibility script.',
+  LOCAL_MEDIA_SUBTITLES: 'Choose SRT, WebVTT, ASS/SSA or TTML subtitles smaller than 4 MB.',
+  LOCAL_MEDIA_NETWORK: 'Connect this phone and the receiver to the same Wi-Fi before streaming a local file.',
+  LOCAL_MEDIA_UNAVAILABLE: 'The local media server could not start. Check Wi-Fi and try again.',
+  LOCAL_MEDIA_CANCELLED: 'Local file selection cancelled.',
   INVALID_SUBTITLE: 'Choose an available subtitle track or turn subtitles off.',
   SUBTITLE_DOWNLOAD: 'The subtitle could not be downloaded. Choose another language or try again.',
   SUBTITLE_FORMAT: 'This subtitle format is not supported. Choose another subtitle.',
@@ -73,6 +83,7 @@ const errors = {
   BUSY: 'The remote is busy. Wait a moment and try again.',
   CANCELLED: 'Casting was cancelled.',
   SOURCE_UNAVAILABLE: 'No supported video was found. Open its player and try Cast again.',
+  SOURCE_MISMATCH: 'A server returned a different movie or episode. It was rejected; choose another server or try again.',
   INVALID_REQUEST: 'That app action is unavailable. Try again.',
   SOURCE_CHANGED: 'The selected video changed. Choose it again in Browse.',
   STORAGE_UNAVAILABLE: 'Settings could not be saved on this phone. Try setup again.',
@@ -118,9 +129,9 @@ let flowId = 0;
 let lastKeyTime = -Infinity;
 let returnFocus;
 let keyboardCompact = false;
-let msxPolling = false;
 let deferredNativeTarget = null;
 let changingTarget = false;
+let subtitleRenderSignature = null;
 let pendingVolume = null;
 let volumeTimer = null;
 let volumeFlight = false;
@@ -184,6 +195,9 @@ let historySelection = 0;
 let historyController = null;
 let libraryItems = [], libraryDetail = null, librarySelected = null, libraryNext = null;
 let libraryLoading = false, libraryOffset = 0, libraryLimit = 50, libraryHasMore = false, libraryQuery = '';
+let libraryDeleteTarget = null;
+const animeAudioAvailability = new Map();
+let animeAudioProbe = 0;
 const VOLUME_COOLDOWN_MS = 1000;
 // Frames are local lookups now; only coalesce bursts within one display frame.
 const SCRUB_PREVIEW_DELAY_MS = 16;
@@ -198,21 +212,27 @@ function contentDescriptor(value) {
   const suffix = tv ? `/${value.season}/${value.episode}` : '';
   const key = `framextv:${value.kind}:${value.contentId}${tv ? `:${value.season}:${value.episode}` : ''}`;
   if (value.key !== key || value.watchUrl !== `https://framextv.cc/watch/${value.contentId}${suffix}`) return null;
-  return { key, kind: value.kind, contentId: value.contentId, season: tv ? value.season : null, episode: tv ? value.episode : null, watchUrl: value.watchUrl, title: title(value.title) };
+  const animeId = tv && typeof value.animeId === 'string' && /^[1-9][0-9]{0,9}$/.test(value.animeId) ? value.animeId : null;
+  if (Object.hasOwn(value, 'animeId') && !animeId) return null;
+  const animeAudio = animeId && ['sub','dub'].includes(value.animeAudio) ? value.animeAudio : 'sub';
+  if (Object.hasOwn(value, 'animeAudio') && !['sub','dub'].includes(value.animeAudio)) return null;
+  return { key, kind: value.kind, contentId: value.contentId, season: tv ? value.season : null, episode: tv ? value.episode : null, watchUrl: value.watchUrl, title: title(value.title), ...(animeId ? {animeId,animeAudio} : {}) };
 }
 function mediaMetadata(media) {
   const content = contentDescriptor(media?.content);
+  const mediaId = typeof media?.mediaId === 'string' && /^local:[a-f0-9]{32,64}$/u.test(media.mediaId) ? media.mediaId : null;
   const resumeSeconds = Number.isFinite(media?.resumeSeconds) && media.resumeSeconds >= 0 && media.resumeSeconds <= 17280000 ? media.resumeSeconds : 0;
-  return { ...(content ? { content } : {}), ...(resumeSeconds > 0 ? { resumeSeconds } : {}) };
+  return { ...(content ? { content } : {}), ...(mediaId ? { mediaId } : {}), ...(resumeSeconds > 0 ? { resumeSeconds } : {}) };
 }
 function currentScrubPreviewContext() {
   const remote = receiver();
   const snapshot = remote.playback;
   const source = remote.activeMedia?.url;
   const content = contentDescriptor(remote.activeMedia?.content);
+  const mediaId = typeof remote.activeMedia?.mediaId === 'string' && /^local:[a-f0-9]{32,64}$/u.test(remote.activeMedia.mediaId) ? remote.activeMedia.mediaId : null;
   if (!snapshot?.active || snapshot.canSeek === false || !(snapshot.durationSeconds > 0)
-      || typeof source !== 'string' || !source || snapshot.sourceUrl !== source || !content) return null;
-  return { target: state.target, source, contentKey: content.key };
+      || typeof source !== 'string' || !source || snapshot.sourceUrl !== source || (!content && !mediaId)) return null;
+  return { target: state.target, source, contentKey: content?.key || mediaId };
 }
 function sameScrubPreviewContext(expected) {
   const current = currentScrubPreviewContext();
@@ -405,7 +425,16 @@ function msxParams(extra = {}) { return state.philips.activeMedia ? { ...extra, 
 function renderRemote() {
   const remote = receiver();
   $('#media-title').textContent = remote.activeMedia ? title(remote.activeMedia.title) : remote.playback?.active ? 'Now playing' : remote.playback?.ended && remote.playback?.content?.title ? title(remote.playback.content.title) : 'Ready to cast';
+  const libraryContent = screenContent();
+  $('#media-title').disabled = !state.native || state.busy || state.handoff || !libraryContent;
+  $('#change-stream').hidden = !libraryContent;
+  $('#change-stream').disabled = !state.native || state.busy || state.handoff || !libraryContent;
+  if (libraryContent) $('#media-title').setAttribute('aria-label', `Open ${title(libraryContent.title)} in Library`);
+  else $('#media-title').removeAttribute('aria-label');
   const snapshot = remote.playback;
+  const bufferStatus = playbackBufferStatus(snapshot);
+  $('#buffer-status').textContent = bufferStatus;
+  $('#buffer-status').hidden = !bufferStatus;
   if (!snapshot?.active || snapshot.canSeek === false || !(snapshot.durationSeconds > 0)) clearScrubPreview();
   if (!snapshot) $('#playback-status').textContent = 'Choose a video in Browse.';
   else if (!snapshot.active) $('#playback-status').textContent = snapshot.ended && snapshot.content ? (snapshot.upNext ? 'Finished · next episode starts in a moment' : snapshot.content.kind === 'tv' ? 'Finished · Next episode is ready' : 'Finished') : 'No video playing.';
@@ -609,6 +638,30 @@ function title(value) {
 function clock(value) {
   const seconds = Math.max(0, Math.floor(Number(value) || 0));
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+}
+function bufferDuration(value) {
+  const seconds = Math.max(0, Math.floor(value));
+  return seconds < 60 ? `${seconds}s` : clock(seconds);
+}
+function storageAmount(value) {
+  return value >= 1024 ** 3 ? `${(value / 1024 ** 3).toFixed(1)} GiB` : `${Math.round(value / 1024 ** 2)} MiB`;
+}
+function playbackBufferStatus(snapshot) {
+  if (!snapshot || state.target === 'philips') return '';
+  const parts = [];
+  if (snapshot.active && Number.isFinite(snapshot.bufferAheadSeconds) && snapshot.bufferAheadSeconds >= 0)
+    parts.push(`RAM ${bufferDuration(snapshot.bufferAheadSeconds)}`);
+  const cacheLabel = Object.hasOwn(DISK_CACHE_LABELS, snapshot.diskCacheState) ? DISK_CACHE_LABELS[snapshot.diskCacheState] : null;
+  if (cacheLabel) {
+    let disk = `Disk ${cacheLabel}`;
+    const cached = snapshot.diskCachedBytes, target = snapshot.diskCacheTargetBytes;
+    if (Number.isSafeInteger(cached) && cached >= 0 && Number.isSafeInteger(target) && target > 0 && cached <= target)
+      disk += ` ${storageAmount(cached)} / ${storageAmount(target)}`;
+    if (Number.isFinite(snapshot.diskCacheAheadSeconds) && snapshot.diskCacheAheadSeconds >= 0)
+      disk += ` · ${bufferDuration(snapshot.diskCacheAheadSeconds)} ahead`;
+    parts.push(disk);
+  }
+  return parts.join(' · ');
 }
 function privateHost(value) {
   const parts = value.split('.');
@@ -957,6 +1010,7 @@ function renderControls() {
   $('#send-text').disabled = !luma || !$('#remote-text').value.trim();
   $('#clear-text').disabled = !free || !$('#remote-text').value;
   $('#subtitles-off').disabled = !active;
+  for (const button of $('#anime-audio').querySelectorAll('button')) button.disabled = !active;
   for (const button of $('#app-list').querySelectorAll('button')) button.disabled = !luma;
   for (const button of $('#subtitle-list').querySelectorAll('button')) button.disabled = !active;
   for (const button of document.querySelectorAll('button[data-panel]')) { button.disabled = !free; button.hidden = tv && ['typing', 'apps'].includes(button.dataset.panel); }
@@ -1143,7 +1197,7 @@ async function command(method, params, success, consume) {
       page('devices');
       deviceStep('pair');
     }
-    message(errors[error.adapterCode] || error.message, error.code !== 'MATTER_SCAN_CANCELLED');
+    message(errors[error.adapterCode] || error.message, !['MATTER_SCAN_CANCELLED', 'LOCAL_MEDIA_CANCELLED'].includes(error.code));
     return false;
   } finally {
     state.busy = false;
@@ -1156,6 +1210,17 @@ async function command(method, params, success, consume) {
 function handoffParams(options, extra = {}) {
   return { ...extra, ...(options.phase === 'remote' ? {} : { sourceToken: state.jobToken }), expectedSourceUrl: options.expectedSourceUrl,
     ...(typeof options.expectedContentKey === 'string' ? { expectedContentKey: options.expectedContentKey } : {}) };
+}
+function directLocalSubtitle(track, options) {
+  if (!/^local:[a-f0-9]{32,64}$/u.test(state.activeMedia?.mediaId || '') || options.expectedSourceUrl !== state.activeMedia?.url) return false;
+  try {
+    const source = new URL(options.expectedSourceUrl), subtitle = new URL(track.url);
+    const sourceMatch = source.pathname.match(/^\/local\/([a-f0-9]{64})\/video$/u);
+    const subtitleMatch = subtitle.pathname.match(/^\/local\/([a-f0-9]{64})\/subtitle\/(?:0|[1-9][0-9]?)$/u);
+    return source.protocol === 'http:' && subtitle.protocol === 'http:' && privateHost(source.hostname)
+      && source.origin === subtitle.origin && !source.search && !subtitle.search && !source.hash && !subtitle.hash
+      && sourceMatch?.[1] === subtitleMatch?.[1];
+  } catch { return false; }
 }
 async function handoffRpc(method, params, options) {
   try { return await rpc(method, params, options); }
@@ -1187,6 +1252,10 @@ const coordinator = createHandoffCoordinator({
     open: (media, options) => handoffRpc('receiver.open', handoffParams(options, { media, ...(options.onlyIfInactive === true ? { onlyIfInactive: true } : {}) }), options),
     status: async options => { const result = await handoffRpc('receiver.status', handoffParams(options), options); playback(result); return result; },
     getSubtitles: options => handoffRpc('receiver.getSubtitles', handoffParams(options), options),
+    prepareSubtitle: (track, options) => directLocalSubtitle(track, options)
+      ? Promise.resolve({ direct: true })
+      : handoffRpc('receiver.prepareSubtitle', handoffParams(options, { track }), options),
+    subtitleDelivery: (preparedId, track, options) => handoffRpc('receiver.subtitleDelivery', handoffParams(options, { preparedId, track }), options),
     addSubtitle: (track, options) => handoffRpc('receiver.addSubtitle', handoffParams(options, { track, ...(options.preparedId ? { preparedId: options.preparedId } : {}) }), options),
     setSubtitle: (index, options) => handoffRpc('receiver.setSubtitle', handoffParams(options, { index }), options),
   },
@@ -1446,17 +1515,91 @@ function renderApps() {
   $('#apps-next').disabled = result.current >= result.total - 1;
   renderControls();
 }
+function animeAudioKey(content, audio) {
+  return content?.animeId ? `${content.key}:${content.animeId}:${audio}` : null;
+}
+function renderAnimeAudio() {
+  const content = screenContent();
+  const current = content?.animeAudio;
+  const alternate = current === 'sub' ? 'dub' : current === 'dub' ? 'sub' : null;
+  const available = alternate && animeAudioAvailability.get(animeAudioKey(content, alternate)) === true;
+  $('#anime-audio').hidden = !available;
+  $('#anime-audio-sub').setAttribute('aria-pressed', String(current === 'sub'));
+  $('#anime-audio-dub').setAttribute('aria-pressed', String(current === 'dub'));
+}
+async function refreshAnimeAudioAvailability() {
+  const content = screenContent();
+  if (!content?.animeId || !['sub', 'dub'].includes(content.animeAudio)) { renderAnimeAudio(); return; }
+  const alternate = content.animeAudio === 'sub' ? 'dub' : 'sub';
+  const key = animeAudioKey(content, alternate);
+  animeAudioAvailability.set(animeAudioKey(content, content.animeAudio), true);
+  if (animeAudioAvailability.has(key)) { renderAnimeAudio(); return; }
+  const request = ++animeAudioProbe;
+  renderAnimeAudio();
+  try {
+    const result = await rpc('app.animeAudioAvailability', {
+      kind: 'tv', id: content.contentId, season: content.season, episode: content.episode,
+      animeId: content.animeId, animeAudio: alternate,
+    }, { timeoutMs: 150000 });
+    if (result?.audio !== alternate || typeof result?.available !== 'boolean') throw fixedError('INVALID_RESPONSE');
+    animeAudioAvailability.set(key, result.available);
+  } catch { /* A failed probe must not interrupt playback or expose an unusable toggle. */ }
+  finally {
+    if (request === animeAudioProbe) renderAnimeAudio();
+  }
+}
+async function switchAnimeAudio(audio) {
+  const target = state.target, remote = receiver(target), content = screenContent(target);
+  if (state.busy || state.handoff || !content?.animeId || !['sub', 'dub'].includes(audio)
+      || content.animeAudio === audio || animeAudioAvailability.get(animeAudioKey(content, audio)) !== true) return;
+  const source = remote.activeMedia?.url;
+  const position = playbackMatchesMedia(remote.activeMedia, remote.playback) && Number.isFinite(remote.playback.positionSeconds)
+    ? Math.max(0, Math.min(17280000, remote.playback.positionSeconds)) : 0;
+  state.busy = true;
+  renderControls();
+  message(`Finding the ${audio === 'dub' ? 'dubbed' : 'subtitled'} edition…`);
+  let handedOff = false;
+  try {
+    const media = await rpc('app.chooseCatalog', {
+      kind: 'tv', id: content.contentId, season: content.season, episode: content.episode,
+      animeId: content.animeId, animeAudio: audio, resume: false,
+    }, { timeoutMs: 150000 });
+    const current = screenContent(target), resolved = contentDescriptor(media?.content);
+    if (state.target !== target || receiver(target).activeMedia?.url !== source || current?.key !== content.key
+        || current?.animeAudio !== content.animeAudio) throw fixedError('SOURCE_CHANGED');
+    if (!media || typeof media.url !== 'string' || typeof media.sourceToken !== 'string'
+        || resolved?.key !== content.key || resolved.animeId !== content.animeId || resolved.animeAudio !== audio) throw fixedError('INVALID_MEDIA');
+    animeAudioAvailability.set(animeAudioKey(resolved, audio), true);
+    animeAudioAvailability.set(animeAudioKey(resolved, content.animeAudio), true);
+    state.busy = false;
+    handedOff = true;
+    closeSheet();
+    window.LumaApp.onCapturedMedia({ ...media, resumeSeconds: position });
+  } catch (error) {
+    message(errors[error.code] || `The ${audio === 'dub' ? 'dubbed' : 'subtitled'} edition could not load. Current playback is unchanged.`, true);
+  } finally {
+    if (!handedOff) state.busy = false;
+    renderControls();
+  }
+}
 function renderTracks() {
   const remote = receiver();
   const tracks = [...(remote.catalog.length ? remote.catalog : remote.tracks)].sort((a, b) => languageRank(a) - languageRank(b) || safeText(a.label).localeCompare(safeText(b.label))).map(track => ({ ...track, name: safeText(track.label) || safeText(track.language) || (Number.isInteger(track.index) ? `Track ${track.index + 1}` : 'Subtitle track') }));
   const result = paged(tracks, $('#subtitle-search').value, remote.subtitlePage);
   remote.subtitlePage = result.current;
-  $('#subtitle-list').replaceChildren(...result.items.map(track => listButton(track.name, () => selectSubtitle(track), Number.isInteger(track.index) && remote.subtitlesEnabled && remote.selectedIndex === track.index)));
-  if (!result.items.length) $('#subtitle-list').textContent = 'No matching subtitle tracks.';
-  $('#subtitles-off').setAttribute('aria-pressed', String(!remote.subtitlesEnabled));
-  $('#subtitles-page').textContent = `${result.current + 1} / ${result.total}`;
-  $('#subtitles-previous').disabled = result.current === 0;
-  $('#subtitles-next').disabled = result.current >= result.total - 1;
+  const signature = JSON.stringify({ target: state.target, media: remote.activeMedia?.url || '', query: $('#subtitle-search').value,
+    page: result.current, total: result.total, enabled: remote.subtitlesEnabled, selected: remote.selectedIndex,
+    tracks: result.items.map(track => [track.url || '', track.index ?? null, track.preparedId || '', track.language || '', track.name]) });
+  if (signature !== subtitleRenderSignature) {
+    subtitleRenderSignature = signature;
+    $('#subtitle-list').replaceChildren(...result.items.map(track => listButton(track.name, () => selectSubtitle(track), Number.isInteger(track.index) && remote.subtitlesEnabled && remote.selectedIndex === track.index)));
+    if (!result.items.length) $('#subtitle-list').textContent = 'No matching subtitle tracks.';
+    $('#subtitles-off').setAttribute('aria-pressed', String(!remote.subtitlesEnabled));
+    $('#subtitles-page').textContent = `${result.current + 1} / ${result.total}`;
+    $('#subtitles-previous').disabled = result.current === 0;
+    $('#subtitles-next').disabled = result.current >= result.total - 1;
+  }
+  renderAnimeAudio();
   renderControls();
 }
 function remoteDescriptor() {
@@ -1866,13 +2009,19 @@ for (const button of document.querySelectorAll('[data-reset]')) button.addEventL
   if (success) { closeSheet(); page('devices'); deviceStep(scope === 'pairing' ? 'pair' : 'receiver'); }
 });
 $('#choose-video').addEventListener('click', () => state.target === 'philips' && !state.philips.connected ? openTvReceiver() : browse());
+$('#change-stream').addEventListener('click', () => void openSitePage(screenContent(), 'episode'));
 function libraryIdentity(value) {
-  return value && ['movie', 'tv'].includes(value.kind) && typeof value.id === 'string' && /^[1-9][0-9]{0,9}$/.test(value.id) ? {kind:value.kind,id:value.id} : null;
+  if (!value || !['movie', 'tv'].includes(value.kind) || typeof value.id !== 'string' || !/^[1-9][0-9]{0,9}$/.test(value.id)) return null;
+  const animeId = value.kind === 'tv' && typeof value.animeId === 'string' && /^[1-9][0-9]{0,9}$/.test(value.animeId) ? value.animeId : null;
+  const animeAudio = animeId && value.animeAudio === 'dub' ? 'dub' : 'sub';
+  return {kind:value.kind,id:value.id,...(animeId ? {animeId,animeAudio} : {})};
 }
 function savedProgress(value) {
   if (!value || typeof value !== 'object') return null;
   for (const key of ['positionSeconds','durationSeconds','resumeSeconds']) if (!Number.isFinite(value[key]) || value[key] < 0 || value[key] > 17280000) return null;
-  return {positionSeconds:value.positionSeconds,durationSeconds:value.durationSeconds,resumeSeconds:value.completed === true ? 0 : value.resumeSeconds,completed:value.completed === true,lastReceiver:['luma','philips'].includes(value.lastReceiver) ? value.lastReceiver : null};
+  const animeId = typeof value.animeId === 'string' && /^[1-9][0-9]{0,9}$/.test(value.animeId) ? value.animeId : null;
+  const animeAudio = animeId && value.animeAudio === 'dub' ? 'dub' : 'sub';
+  return {positionSeconds:value.positionSeconds,durationSeconds:value.durationSeconds,resumeSeconds:value.completed === true ? 0 : value.resumeSeconds,completed:value.completed === true,lastReceiver:['luma','philips'].includes(value.lastReceiver) ? value.lastReceiver : null,...(animeId ? {animeId,animeAudio} : {})};
 }
 function libraryProgressText(progress) {
   if (!progress) return 'Not watched yet';
@@ -1884,10 +2033,33 @@ function episodeSelection(identity, season, episode, progress = null) {
   if (identity.kind === 'movie') return {...identity,progress};
   return Number.isInteger(season) && season >= 0 && season <= 9999 && Number.isInteger(episode) && episode > 0 && episode <= 9999 ? {...identity,season,episode,progress} : null;
 }
+function sitePages(value) {
+  if (!value || !['movie','tv'].includes(value.kind)) return null;
+  const id = typeof value.id === 'string' ? value.id : value.contentId;
+  if (typeof id !== 'string' || !/^[1-9][0-9]{0,9}$/.test(id)) return null;
+  if (value.kind === 'movie') return {
+    episode: `https://framextv.cc/watch/${id}`,
+    title: `https://framextv.cc/movie/${id}`,
+  };
+  if (!Number.isInteger(value.season) || value.season < 0 || value.season > 9999
+      || !Number.isInteger(value.episode) || value.episode < 1 || value.episode > 9999) return null;
+  const animeId = typeof value.animeId === 'string' && /^[1-9][0-9]{0,9}$/.test(value.animeId) ? value.animeId : null;
+  return {
+    episode: `https://framextv.cc/watch/${id}/${value.season}/${value.episode}`,
+    title: animeId ? `https://framextv.cc/anime/${animeId}` : `https://framextv.cc/tv/${id}?season=${value.season}`,
+  };
+}
+async function openSitePage(value, pageName) {
+  const pages = sitePages(value), url = pages?.[pageName];
+  if (!url || !state.native || state.busy || state.handoff) return;
+  closeSheet();
+  try { await rpc('app.browse', {url}); }
+  catch { message('The page could not open. Try Browse again.', true); }
+}
 function nextEpisodeSelection(value, media) {
   const current = contentDescriptor(media?.content);
   if (!current || current.kind !== 'tv' || !value || value.kind !== 'tv' || value.id !== current.contentId) return null;
-  const next = episodeSelection({kind:'tv',id:value.id}, value.season, value.episode);
+  const next = episodeSelection({kind:'tv',id:value.id,...(current.animeId ? {animeId:current.animeId,animeAudio:current.animeAudio} : {})}, value.season, value.episode);
   return next && (next.season > current.season || next.season === current.season && next.episode > current.episode) ? next : null;
 }
 function selectionLabel(selection) { return selection?.kind === 'tv' ? `S${selection.season} E${selection.episode}` : 'Movie'; }
@@ -1898,14 +2070,51 @@ function renderLibraryControls() {
   $('#history-resume').disabled = !free || libraryLoading || !librarySelected;
   $('#history-restart').disabled = !free || libraryLoading || !librarySelected;
   $('#history-next').disabled = !free || libraryLoading || !libraryNext;
+  $('#history-open-episode').disabled = !free || libraryLoading || !sitePages(librarySelected)?.episode;
+  $('#history-open-title').disabled = !free || libraryLoading || !sitePages(librarySelected)?.title;
+  $('#history-list-delete').disabled = !free || libraryLoading || libraryDeleteTarget?.view !== 'list';
+  $('#history-detail-delete').disabled = !free || libraryLoading || libraryDeleteTarget?.view !== 'detail';
   $('#history-search').disabled = !free || libraryLoading;
   $('#history-target').textContent = `Selected device: ${state.target === 'philips' ? 'Philips TV' : 'Kodak LUMA'}.`;
+}
+function clearLibraryDelete() {
+  libraryDeleteTarget = null;
+  $('#history-list-delete').hidden = true;
+  $('#history-detail-delete').hidden = true;
+}
+function offerLibraryDelete(target, view) {
+  if (!target || state.busy || state.handoff || libraryLoading) return;
+  libraryDeleteTarget = {...target,view};
+  const control = view === 'list' ? $('#history-list-delete') : $('#history-detail-delete');
+  const name = title(target.title);
+  control.textContent = target.scope === 'episode' ? `Delete ${selectionLabel(target)}` : `Delete ${target.kind === 'tv' ? 'series' : 'movie'} · ${name}`;
+  control.hidden = false;
+  control.disabled = false;
+  control.focus();
+}
+function bindLibraryLongPress(element, action) {
+  let timer = null, startX = 0, startY = 0, consumed = false;
+  const cancel = () => { clearTimeout(timer); timer = null; };
+  element.addEventListener('pointerdown', event => {
+    if (event.button !== 0 || element.disabled) return;
+    cancel(); startX = event.clientX; startY = event.clientY;
+    timer = setTimeout(() => { timer = null; consumed = true; action(); }, 550);
+  });
+  element.addEventListener('pointermove', event => { if (Math.abs(event.clientX - startX) > 10 || Math.abs(event.clientY - startY) > 10) cancel(); });
+  for (const type of ['pointerup','pointercancel','pointerleave']) element.addEventListener(type, cancel);
+  element.addEventListener('contextmenu', event => { event.preventDefault(); cancel(); consumed = true; action(); });
+  element.addEventListener('click', event => {
+    if (!consumed) return;
+    consumed = false; event.preventDefault(); event.stopImmediatePropagation();
+  }, true);
 }
 function selectLibraryEpisode(selection) {
   librarySelected = selection;
   $('#history-progress').textContent = selection ? `${selectionLabel(selection)} · ${libraryProgressText(selection.progress)}` : 'Choose an episode below.';
   const action = selection?.progress?.completed ? 'Watch again' : (selection?.progress?.resumeSeconds || 0) >= 1 ? 'Resume' : 'Play';
   $('#history-resume').textContent = `${action}${selection?.kind === 'tv' ? ` ${selectionLabel(selection)}` : ''}`;
+  $('#history-open-episode').textContent = selection?.kind === 'tv' ? `Open ${selectionLabel(selection)} page` : 'Open movie player';
+  $('#history-open-title').textContent = selection?.kind === 'tv' ? 'Open series page' : 'Open movie page';
   for (const button of $('#history-episodes').querySelectorAll('button')) button.setAttribute('aria-pressed', String(selection?.kind === 'tv' && Number(button.dataset.season) === selection.season && Number(button.dataset.episode) === selection.episode));
   renderLibraryControls();
 }
@@ -1918,14 +2127,16 @@ function renderLibraryEpisodes(seasonNumber) {
     if (!selection) continue;
     const button = document.createElement('button'); button.type = 'button'; button.dataset.season = String(season.number); button.dataset.episode = String(episode.number);
     button.textContent = `${selectionLabel(selection)} · ${safeText(episode.title, 200) || `Episode ${episode.number}`} · ${libraryProgressText(selection.progress)}`;
+    if (selection.progress) bindLibraryLongPress(button, () => { selectLibraryEpisode(selection); offerLibraryDelete({...selection,scope:'episode',title:episode.title}, 'detail'); });
     button.addEventListener('click', () => { if (!state.busy && !state.handoff) selectLibraryEpisode(selection); });
     $('#history-episodes').append(button);
   }
   selectLibraryEpisode(librarySelected);
 }
-async function showLibraryDetails(row) {
+async function showLibraryDetails(row, preferred = null) {
   const identity = libraryIdentity(row);
   if (!identity || state.busy || state.handoff) return;
+  clearLibraryDelete();
   const epoch = ++historySelection; libraryLoading = true; librarySelected = libraryNext = null;
   $('#history-list-view').hidden = true; $('#history-detail').hidden = false;
   $('#history-title').textContent = title(row.title); $('#history-year').textContent = ''; $('#history-overview').textContent = '';
@@ -1933,14 +2144,20 @@ async function showLibraryDetails(row) {
   $('#history-episodes').textContent = ''; $('#history-seasons').hidden = true; $('#history-next').hidden = true;
   renderLibraryControls();
   try {
-    const detail = await rpc('watch.libraryDetails', identity, {timeoutMs:5000});
+    const detail = await rpc('watch.libraryDetails', {kind:identity.kind,id:identity.id}, {timeoutMs:5000});
     if (epoch !== historySelection || state.sheet !== 'history') return;
     if (detail?.version !== 1 || detail.kind !== identity.kind || detail.id !== identity.id || !Array.isArray(detail.seasons) || detail.seasons.length > 1001) throw fixedError('INVALID_RESPONSE');
     libraryDetail = detail; libraryLoading = false;
     $('#history-title').textContent = title(detail.title); $('#history-year').textContent = safeText(detail.year, 12);
     $('#history-overview').textContent = safeText(detail.overview, 2000) || 'No description has been saved yet.';
     $('#history-detail-status').textContent = detail.storageAvailable === false ? 'Library storage is unavailable on this phone.' : detail.metadataAvailable === true ? 'Saved details are available offline.' : 'Saved progress is available offline. More title details have not been saved yet.';
-    librarySelected = episodeSelection(identity, detail.latest?.season, detail.latest?.episode, savedProgress(identity.kind === 'movie' ? detail.movieProgress || detail.latest : detail.latest));
+    if (detail.animeId && !identity.animeId) { identity.animeId = detail.animeId; identity.animeAudio = detail.animeAudio === 'dub' ? 'dub' : 'sub'; }
+    const preferredEpisode = identity.kind === 'tv' && preferred?.kind === 'tv' && preferred.id === identity.id
+      ? detail.seasons.flatMap(season => Array.isArray(season?.episodes) ? season.episodes.map(episode => ({season:season.number,episode})) : [])
+          .find(item => item.season === preferred.season && item.episode?.number === preferred.episode) : null;
+    librarySelected = preferredEpisode
+      ? episodeSelection(identity, preferred.season, preferred.episode, savedProgress(preferredEpisode.episode?.progress))
+      : episodeSelection(identity, detail.latest?.season, detail.latest?.episode, savedProgress(identity.kind === 'movie' ? detail.movieProgress || detail.latest : detail.latest));
     libraryNext = detail.nextEpisode?.kind === 'tv' && detail.nextEpisode.id === identity.id ? episodeSelection(identity,detail.nextEpisode.season,detail.nextEpisode.episode) : null;
     $('#history-next').hidden = !libraryNext;
     if (libraryNext) $('#history-next').textContent = `Play next episode · ${selectionLabel(libraryNext)}`;
@@ -1980,6 +2197,7 @@ async function loadLibrary(more = false) {
       const button = document.createElement('button'); button.type = 'button';
       const latest = episodeSelection(identity,row.latest?.season,row.latest?.episode,savedProgress(row.latest));
       button.textContent = `${title(row.title)}${identity.kind === 'tv' ? latest ? ` · ${selectionLabel(latest)}` : ' · Series' : ' · Movie'} · ${libraryProgressText(latest?.progress)}`;
+      bindLibraryLongPress(button, () => offerLibraryDelete({...identity,scope:'title',title:row.title}, 'list'));
       button.addEventListener('click', () => void showLibraryDetails(row)); $('#history-list').append(button);
     }
     $('#history-status').textContent = saved.storageAvailable === false ? 'Library storage is unavailable on this phone.' : saved.total ? `${libraryItems.length} of ${saved.total} saved titles${libraryQuery ? ' found' : ''}.` : libraryQuery ? 'No saved titles match this search.' : 'Movies and series will appear here after you watch them.';
@@ -1989,9 +2207,39 @@ async function loadLibrary(more = false) {
 }
 function openLibrary() {
   if (!state.native || state.busy || state.handoff) return;
+  clearLibraryDelete();
   sheet('history'); historySelection++; libraryLoading = false;
   $('#history-list-view').hidden = false; $('#history-detail').hidden = true; $('#history-more').hidden = true;
   void loadLibrary();
+}
+function openCurrentLibrary() {
+  const content = screenContent();
+  if (!content || !state.native || state.busy || state.handoff) return;
+  clearLibraryDelete();
+  sheet('history'); historySelection++; libraryLoading = false;
+  $('#history-list-view').hidden = true; $('#history-detail').hidden = false; $('#history-more').hidden = true;
+  const identity = {kind:content.kind,id:content.contentId,...(content.animeId ? {animeId:content.animeId,animeAudio:content.animeAudio} : {})};
+  const preferred = content.kind === 'tv' ? {...identity,season:content.season,episode:content.episode} : identity;
+  void showLibraryDetails({...identity,title:content.title}, preferred);
+}
+async function deleteLibrarySelection() {
+  const target = libraryDeleteTarget;
+  if (!target || libraryLoading || state.busy || state.handoff) return;
+  const params = {scope:target.scope,kind:target.kind,id:target.id,...(target.scope === 'episode' ? {season:target.season,episode:target.episode} : {})};
+  const epoch = ++historySelection; libraryLoading = true; renderLibraryControls();
+  try {
+    const result = await rpc('watch.libraryDelete', params, {timeoutMs:8000});
+    if (epoch !== historySelection || state.sheet !== 'history' || result?.deleted !== true) return;
+    const pending = result.projectorSyncPending === true ? ' The projector copy will clear on this connection.' : ' The projector copy will clear when it reconnects.';
+    const removedEpisode = target.scope === 'episode';
+    clearLibraryDelete(); libraryLoading = false;
+    if (removedEpisode) await showLibraryDetails(libraryDetail);
+    else { $('#history-detail').hidden = true; $('#history-list-view').hidden = false; await loadLibrary(); }
+    message(`${removedEpisode ? 'Saved episode' : target.kind === 'tv' ? 'Series' : 'Movie'} deleted.${pending}`);
+  } catch (error) {
+    if (epoch !== historySelection) return;
+    libraryLoading = false; message(errors[error.code] || 'The saved item could not be deleted. Nothing changed.', true); renderLibraryControls();
+  }
 }
 async function playLibrarySelection(selection, resume) {
   if (!selection || state.busy || state.handoff) return;
@@ -1999,7 +2247,7 @@ async function playLibrarySelection(selection, resume) {
   state.busy = true; renderControls();
   $('#history-detail-status').textContent = 'Finding this video… Close to cancel. Current playback continues.';
   try {
-    const params = {kind:selection.kind,id:selection.id,resume,...(selection.kind === 'tv' ? {season:selection.season,episode:selection.episode} : {})};
+    const params = {kind:selection.kind,id:selection.id,resume,...(selection.kind === 'tv' ? {season:selection.season,episode:selection.episode,...(selection.animeId ? {animeId:selection.animeId,animeAudio:selection.animeAudio} : {})} : {})};
     const media = await rpc('app.chooseCatalog', params, {signal:historyController.signal,timeoutMs:150000});
     if (epoch !== historySelection || state.target !== target || state.sheet !== 'history') return;
     if (!media || typeof media.url !== 'string' || typeof media.sourceToken !== 'string') throw fixedError('INVALID_MEDIA');
@@ -2020,7 +2268,7 @@ async function playNextEpisode() {
   const nextKey = `${selection.id}:${selection.season}:${selection.episode}`;
   state.busy = true; renderControls(); message(`Finding ${selectionLabel(selection)}…`);
   try {
-    const media = await rpc('app.chooseCatalog', {kind:'tv',id:selection.id,season:selection.season,episode:selection.episode,resume:true}, {timeoutMs:150000});
+    const media = await rpc('app.chooseCatalog', {kind:'tv',id:selection.id,season:selection.season,episode:selection.episode,resume:true,...(selection.animeId ? {animeId:selection.animeId,animeAudio:selection.animeAudio} : {})}, {timeoutMs:150000});
     const current = receiver(), currentNext = current.nextEpisode;
     if (state.target !== target || current.activeMedia?.url !== source
         || (contentDescriptor(current.activeMedia?.content)?.key || null) !== contentKey
@@ -2061,7 +2309,7 @@ async function sampleScreen(target) {
   return { at: (started + done) / 2, position: status.positionSeconds, playing: status.playing === true, rate: status.rate || 1, active: !!status.active, ended: !!status.ended };
 }
 async function castTitleTo(target, content, position) {
-  const media = await rpc('app.chooseCatalog', { kind: content.kind, id: content.contentId, resume: true, ...(content.kind === 'tv' ? { season: content.season, episode: content.episode } : {}) }, { timeoutMs: 150000 });
+  const media = await rpc('app.chooseCatalog', { kind: content.kind, id: content.contentId, resume: true, ...(content.kind === 'tv' ? { season: content.season, episode: content.episode, ...(content.animeId ? {animeId:content.animeId,animeAudio:content.animeAudio} : {}) } : {}) }, { timeoutMs: 150000 });
   if (!media || typeof media.url !== 'string' || typeof media.sourceToken !== 'string') throw fixedError('INVALID_MEDIA');
   if (state.target !== target) await selectTarget(target);
   if (state.target !== target) throw fixedError('SOURCE_CHANGED');
@@ -2142,14 +2390,27 @@ $('#move-playback').addEventListener('click', () => void movePlayback());
 $('#sync-playback').addEventListener('click', () => sync.on ? stopSync('Stopped keeping the screens in step. Both keep playing.') : void startSync());
 $('#show-history').addEventListener('click', openLibrary);
 $('#open-library').addEventListener('click', openLibrary);
+$('#media-title').addEventListener('click', openCurrentLibrary);
 $('#history-search-form').addEventListener('submit', event => { event.preventDefault(); void loadLibrary(); });
 $('#history-more').addEventListener('click', () => void loadLibrary(true));
-$('#history-back').addEventListener('click', () => { if (state.busy || state.handoff) return; historySelection++; libraryLoading = false; $('#history-detail').hidden = true; $('#history-list-view').hidden = false; renderLibraryControls(); });
-$('#history-season').addEventListener('change', () => renderLibraryEpisodes(Number($('#history-season').value)));
+$('#history-back').addEventListener('click', () => { if (state.busy || state.handoff) return; historySelection++; libraryLoading = false; clearLibraryDelete(); $('#history-detail').hidden = true; $('#history-list-view').hidden = false; renderLibraryControls(); });
+$('#history-season').addEventListener('change', () => { clearLibraryDelete(); renderLibraryEpisodes(Number($('#history-season').value)); });
 $('#history-resume').addEventListener('click', () => void playLibrarySelection(librarySelected,true));
 $('#history-restart').addEventListener('click', () => void playLibrarySelection(librarySelected,false));
 $('#history-next').addEventListener('click', () => void playLibrarySelection(libraryNext,true));
+$('#history-open-episode').addEventListener('click', () => void openSitePage(librarySelected, 'episode'));
+$('#history-open-title').addEventListener('click', () => void openSitePage(librarySelected, 'title'));
+$('#history-list-delete').addEventListener('click', () => void deleteLibrarySelection());
+$('#history-detail-delete').addEventListener('click', () => void deleteLibrarySelection());
+bindLibraryLongPress($('#history-title'), () => {
+  const identity = libraryIdentity(libraryDetail);
+  if (identity) offerLibraryDelete({...identity,scope:'title',title:libraryDetail.title}, 'detail');
+});
 $('#browser-form').addEventListener('submit', event => { event.preventDefault(); void browse(true); });
+$('#local-media').addEventListener('click', () => command('app.pickLocalMedia', {}, '', media => {
+  if (!media || typeof media.url !== 'string' || typeof media.sourceToken !== 'string') throw fixedError('LOCAL_MEDIA_INVALID');
+  window.LumaApp.onCapturedMedia(media);
+}));
 $('#capture-video').addEventListener('click', () => command('app.capture', {}, '', result => {
   const media = result?.media || (result?.url ? result : null);
   if (media && media.sourceToken !== (state.pendingMedia?.captureToken || state.pendingMedia?.sourceToken)) window.LumaApp.onCapturedMedia(media);
@@ -2553,6 +2814,7 @@ $('#subtitle-larger').addEventListener('click', () => stepSubtitleSize(1));
 $('#show-subtitles').addEventListener('click', () => {
   sheet('subtitles');
   renderTracks();
+  void refreshAnimeAudioAvailability();
   $('#subtitle-size').hidden = state.target === 'philips' ? !state.philips.connected : !state.configured;
   if (state.target === 'philips') { renderSubtitleSize(state.philips.playback?.display); void command('msx.status', {}, '', msxState); return; }
   if (state.configured) void rpc('receiver.display', {}, { timeoutMs: 4000 }).then(renderSubtitleSize).catch(() => {});
@@ -2563,6 +2825,8 @@ $('#show-subtitles').addEventListener('click', () => {
     renderTracks();
   });
 });
+$('#anime-audio-sub').addEventListener('click', () => void switchAnimeAudio('sub'));
+$('#anime-audio-dub').addEventListener('click', () => void switchAnimeAudio('dub'));
 $('#subtitles-off').addEventListener('click', () => state.target === 'philips' ? selectMsxSubtitle(state.philips.selectedIndex ?? 0, false) : command('receiver.setSubtitle', remoteParams({ index: 'off' }), 'Subtitles turned off.', async () => {
   state.subtitlesEnabled = false; state.selectedIndex = null; rememberCaption(state.activeMedia, ''); renderTracks();
   if (state.activeMedia && state.catalog.length) await rpc('app.rememberRemote', remoteParams({ remote: remoteDescriptor() }));
@@ -2814,15 +3078,6 @@ document.addEventListener('keydown', event => {
 });
 window.addEventListener('error', () => message('The remote could not finish that action. Try again.', true));
 window.addEventListener('unhandledrejection', event => { event.preventDefault(); message('The remote could not finish that action. Try again.', true); });
-
-setInterval(() => {
-  if (!state.native || !state.philips.startupUrl || msxPolling || state.busy || state.handoff || document.visibilityState === 'hidden') return;
-  msxPolling = true;
-  void rpc('msx.status', {}, { timeoutMs: 2500 }).then(msxState).catch(() => {
-    state.philips.connected = false;
-    renderControls();
-  }).finally(() => { msxPolling = false; });
-}, 3000);
 
 renderApps();
 renderTracks();

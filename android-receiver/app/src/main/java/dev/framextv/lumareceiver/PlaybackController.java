@@ -21,6 +21,8 @@ import androidx.media3.exoplayer.DefaultLoadControl;
 import androidx.media3.exoplayer.DefaultRenderersFactory;
 import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
+import androidx.media3.exoplayer.source.MediaSource;
+import androidx.media3.exoplayer.source.MergingMediaSource;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -39,9 +41,21 @@ final class PlaybackController implements Player.Listener {
     interface Ui { void onPlaybackChanged(); void bringToFront(); void onDisplayChanged(); void onNotice(String text); }
 
     static final long PROGRESS_INTERVAL_MS = 10_000;
+    // Start quickly, retain enough media for ordinary Wi-Fi jitter, and avoid the
+    // old 70-second prefetch. Time takes priority over the byte target: otherwise
+    // a high-bitrate local file can fill 24 MB in only a few seconds and oscillate
+    // between READY and BUFFERING without ever reaching the useful time buffer.
+    // Media3 1.11 still stops early when its heap-headroom guard detects pressure.
+    static final int MIN_BUFFER_MS = 8_000;
+    static final int MAX_BUFFER_MS = 20_000;
+    static final int PLAYBACK_BUFFER_MS = 750;
+    static final int REBUFFER_MS = 2_000;
+    static final int TARGET_BUFFER_BYTES = 24 * 1024 * 1024;
+    static final boolean PRIORITIZE_BUFFER_TIME = true;
     private final Context context;
     private final LibraryStore library;
     private final DisplaySettings display;
+    private final PlaybackDiskCache diskCache;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private final Object revisionLock = new Object();
@@ -63,12 +77,13 @@ final class PlaybackController implements Player.Listener {
     private int unattended;
     private final Runnable upNext = () -> { upNextPending = false; startNext(true); };
     private Ui ui;
-    private long revision, lastStartedAt;
+    private long revision, lastStartedAt, sourceGeneration;
     private String error;
     private boolean seenPlaying;
 
     private final Runnable progressTick = new Runnable() {
         @Override public void run() {
+            if (player != null) diskCache.updatePosition(player.getCurrentPosition(), player.getDuration(), false);
             recordProgress();
             if (player != null && player.isPlaying()) main.postDelayed(this, PROGRESS_INTERVAL_MS);
         }
@@ -76,6 +91,7 @@ final class PlaybackController implements Player.Listener {
 
     PlaybackController(Context context, LibraryStore library, DisplaySettings display) {
         this.context = context.getApplicationContext(); this.library = library; this.display = display;
+        diskCache = new PlaybackDiskCache(this.context);
         settings = this.context.getSharedPreferences("receiver", Context.MODE_PRIVATE);
     }
 
@@ -107,16 +123,21 @@ final class PlaybackController implements Player.Listener {
     /** Main thread. Resolves and opens the following episode on a worker; reports through status. */
     void startNext(boolean automatic) {
         if (current == null || current.content == null || !"tv".equals(current.content.optString("kind"))) return;
-        JSONObject content = current.content;
+        JSONObject content;
+        try { content = new JSONObject(current.content.toString()); }
+        catch (Exception invalid) { return; }
+        String expectedUrl = current.url, expectedKey = current.content.optString("key");
+        long expectedGeneration = sourceGeneration;
         String language = externalSelected() ? externals.get(selectedExternal).language : settings.getString("captionLanguage", "");
         captionLoader.execute(() -> {
             try {
                 JSONObject media = resolveNext(content, language);
                 main.post(() -> {
                     try {
+                        if (!nextRequestCurrent(expectedGeneration, expectedUrl, expectedKey)) return;
                         if (media == null) { if (ui != null) ui.onNotice("That was the last episode."); return; }
                         MediaRequest request = MediaRequest.parse(media);
-                        open(request, false, null, null);
+                        open(request, false, expectedUrl, expectedKey);
                         fallbackCaptions.addAll(externals);
                         currentAutoplayed = automatic;
                         if (automatic) unattended++;
@@ -124,14 +145,28 @@ final class PlaybackController implements Player.Listener {
                 });
             } catch (Exception failure) {
                 android.util.Log.w("LumaNext", "RESOLVE_FAILED " + failure.getClass().getSimpleName());
-                main.post(() -> { if (ui != null) ui.onNotice("Couldn't load the next episode."); });
+                main.post(() -> {
+                    if (nextRequestCurrent(expectedGeneration, expectedUrl, expectedKey) && ui != null)
+                        ui.onNotice("Couldn't load the next episode.");
+                });
             }
         });
     }
 
+    /** Main-thread source generation closes races even when an old URL is reused. */
+    boolean nextRequestCurrent(long generation, String sourceUrl, String contentKey) {
+        return nextRequestMatches(generation, sourceUrl, contentKey, sourceGeneration, current);
+    }
+
+    static boolean nextRequestMatches(long expectedGeneration, String expectedUrl, String expectedKey,
+            long actualGeneration, MediaRequest actual) {
+        return expectedGeneration == actualGeneration && actual != null && actual.url.equals(expectedUrl)
+            && actual.content != null && actual.content.optString("key").equals(expectedKey);
+    }
+
     /** Worker thread: the next episode's media, resuming unfinished progress and keeping the caption language. */
     JSONObject resolveNext(JSONObject content, String language) throws Exception {
-        Catalog.Episode next = catalog.next(content.getString("contentId"), content.getInt("season"), content.getInt("episode"));
+        Catalog.Episode next = catalog.next(content);
         if (next == null) return null;
         JSONObject media = catalog.resolve(next);
         JSONObject saved = library.get("framextv:tv:" + next.id + ":" + next.season + ":" + next.episode);
@@ -168,12 +203,15 @@ final class PlaybackController implements Player.Listener {
     ExoPlayer player() {
         if (player == null) {
             DefaultRenderersFactory renderers = new DefaultRenderersFactory(context).setEnableDecoderFallback(true);
-            // The projector has little RAM; the default buffer held ~70 s of 1080p
-            // (about 50 MB). Keep 15-30 s and at most 24 MB.
+            // The projector has little RAM, so keep the time window bounded. The
+            // byte target is deliberately soft until MIN_BUFFER_MS is reached;
+            // making it a hard limit caused high-bitrate files to rebuffer often.
             DefaultLoadControl load = new DefaultLoadControl.Builder()
-                .setBufferDurationsMs(15_000, 30_000, 1_500, 3_000)
-                .setTargetBufferBytes(24 * 1024 * 1024).setPrioritizeTimeOverSizeThresholds(false).build();
+                .setBufferDurationsMs(MIN_BUFFER_MS, MAX_BUFFER_MS, PLAYBACK_BUFFER_MS, REBUFFER_MS)
+                .setTargetBufferBytes(TARGET_BUFFER_BYTES)
+                .setPrioritizeTimeOverSizeThresholds(PRIORITIZE_BUFFER_TIME).build();
             player = new ExoPlayer.Builder(context, renderers).setLoadControl(load)
+                .setPriorityTaskManager(diskCache.priorities()).setPriority(C.PRIORITY_PLAYBACK)
                 .setSeekBackIncrementMs(10_000).setSeekForwardIncrementMs(10_000)
                 .setAudioAttributes(new AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(), true)
                 .setWakeMode(C.WAKE_MODE_NETWORK)
@@ -220,10 +258,13 @@ final class PlaybackController implements Player.Listener {
         if (currentUrl != null && (current == null || !current.url.equals(currentUrl)
                 || current.content == null || !current.content.optString("key").equals(currentKey))) throw new ApiException("SOURCE_CHANGED", 409);
         recordProgress();
+        ExoPlayer exo = player();
+        exo.stop(); exo.clearMediaItems();
+        diskCache.begin(request);
+        sourceGeneration++;
         current = request; error = null; seenPlaying = false;
         externals.clear(); selectedExternal = -1; fallbackCaptions.clear();
         lastStartedAt = System.currentTimeMillis();
-        ExoPlayer exo = player();
         exo.setTrackSelectionParameters(exo.getTrackSelectionParameters().buildUpon()
             .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false).clearOverrides().build());
         exo.setPlaybackSpeed(1f);
@@ -243,11 +284,24 @@ final class PlaybackController implements Player.Listener {
             .setDefaultRequestProperties(current.headers);
         String mime = MediaRequest.HLS.equals(current.contentType) ? MimeTypes.APPLICATION_M3U8
             : MediaRequest.DASH.equals(current.contentType) ? MimeTypes.APPLICATION_MPD : null;
-        MediaItem item = new MediaItem.Builder().setUri(current.url).setMimeType(mime)
-            .setMediaMetadata(new MediaMetadata.Builder().setTitle(current.title).build()).build();
+        PlaybackDiskCache.Source videoSource = diskCache.source(current, http, current.url, "video");
+        MediaItem.Builder videoItem = new MediaItem.Builder().setUri(current.url).setMimeType(mime)
+            .setMediaMetadata(new MediaMetadata.Builder().setTitle(current.title).build());
+        if (videoSource.cacheKey != null) videoItem.setCustomCacheKey(videoSource.cacheKey);
+        MediaSource source = new DefaultMediaSourceFactory(videoSource.factory).createMediaSource(videoItem.build());
+        if (!current.audioUrl.isEmpty()) {
+            PlaybackDiskCache.Source audioSource = diskCache.source(current, http, current.audioUrl, "audio");
+            MediaItem.Builder audioItem = new MediaItem.Builder().setUri(current.audioUrl).setMimeType(MimeTypes.AUDIO_MP4)
+                .setMediaMetadata(new MediaMetadata.Builder().setTitle("LUMA compatible audio").build());
+            if (audioSource.cacheKey != null) audioItem.setCustomCacheKey(audioSource.cacheKey);
+            source = new MergingMediaSource(true, true, source,
+                new DefaultMediaSourceFactory(audioSource.factory).createMediaSource(audioItem.build()));
+        }
         ExoPlayer exo = player();
-        exo.setMediaSource(new DefaultMediaSourceFactory(http).createMediaSource(item), Math.max(0, positionMs));
+        exo.setMediaSource(source, Math.max(0, positionMs));
         exo.prepare();
+        diskCache.updatePosition(positionMs, exo.getDuration(), false);
+        diskCache.start();
     }
 
     void expect(JSONObject params) throws ApiException {
@@ -292,9 +346,11 @@ final class PlaybackController implements Player.Listener {
     void stop() {
         recordProgress();
         main.removeCallbacks(progressTick);
-        current = null; error = null; externals.clear(); selectedExternal = -1; fallbackCaptions.clear();
         cancelUpNext();
         if (player != null) { player.stop(); player.clearMediaItems(); }
+        diskCache.end();
+        sourceGeneration++;
+        current = null; error = null; externals.clear(); selectedExternal = -1; fallbackCaptions.clear();
         bump();
     }
 
@@ -304,7 +360,15 @@ final class PlaybackController implements Player.Listener {
      */
     ExternalCaptions addExternal(MediaRequest.Subtitle subtitle) throws ApiException {
         if (externals.size() >= MediaRequest.MAX_SUBTITLES) throw new ApiException("INVALID_SUBTITLE");
-        ExternalCaptions captions = new ExternalCaptions(subtitle, current == null ? java.util.Collections.emptyMap() : current.headers);
+        String cacheIdentity = "";
+        if (current != null) {
+            cacheIdentity = !current.mediaId.isEmpty() ? current.mediaId : current.content == null ? "" : current.content.optString("key");
+            if (!cacheIdentity.isEmpty() && current.content != null && current.content.has("animeId")) {
+                cacheIdentity += ":anime:" + current.content.optString("animeId") + ":" + current.content.optString("animeAudio", "sub");
+            }
+        }
+        ExternalCaptions captions = new ExternalCaptions(subtitle,
+            current == null ? java.util.Collections.emptyMap() : current.headers, cacheIdentity);
         externals.add(captions);
         // Selection waits for a usable file so a failed download cannot hide the current language.
         captionLoader.execute(() -> {
@@ -419,24 +483,32 @@ final class PlaybackController implements Player.Listener {
     JSONObject status() throws Exception {
         JSONObject result = new JSONObject().put("revision", revision()).put("active", active());
         if (current == null || player == null) {
-            return withSettings(result.put("playing", false).put("paused", false).put("state", "idle"));
+            return withSettings(diskCache.appendStatus(
+                result.put("playing", false).put("paused", false).put("state", "idle")));
         }
         int state = player.getPlaybackState();
         long duration = player.getDuration();
+        long position = Math.max(0, player.getCurrentPosition());
+        long buffered = Math.max(position, player.getBufferedPosition());
         result.put("playing", active() && player.getPlayWhenReady()).put("paused", !player.getPlayWhenReady())
             .put("state", error != null ? "error" : state == Player.STATE_BUFFERING ? "buffering" : state == Player.STATE_READY ? "ready"
                 : state == Player.STATE_ENDED ? "ended" : "idle")
-            .put("positionSeconds", player.getCurrentPosition() / 1000.0)
+            .put("positionSeconds", position / 1000.0)
             .put("rate", player.getPlaybackParameters().speed)
             .put("durationSeconds", duration == C.TIME_UNSET ? 0 : duration / 1000.0)
-            .put("bufferedSeconds", player.getBufferedPosition() / 1000.0)
+            .put("bufferedSeconds", buffered / 1000.0)
+            .put("bufferAheadSeconds", (buffered - position) / 1000.0)
             .put("canSeek", player.isCurrentMediaItemSeekable())
             .put("sourceUrl", current.url).put("title", current.title)
             .put("sampledAt", System.currentTimeMillis());
+        if (!current.mediaId.isEmpty()) result.put("mediaId", current.mediaId).put("contentType", current.contentType);
+        Format audio = player.getAudioFormat();
+        if (audio != null && audio.sampleMimeType != null) result.put("audioMime", audio.sampleMimeType)
+            .put("audioChannels", audio.channelCount);
         if (current.content != null) result.put("content", new JSONObject(current.content.toString()));
         if (error != null) result.put("error", error);
         result.put("ended", state == Player.STATE_ENDED).put("autoplayed", currentAutoplayed).put("upNext", upNextPending);
-        return withSettings(result);
+        return withSettings(diskCache.appendStatus(result));
     }
 
     private JSONObject withSettings(JSONObject result) throws Exception {
@@ -447,7 +519,10 @@ final class PlaybackController implements Player.Listener {
 
     String title() { return current == null ? null : current.title; }
 
-    String contentKey() { return current == null || current.content == null ? null : current.content.optString("key"); }
+    String contentKey() {
+        if (current == null) return null;
+        return current.content == null ? (current.mediaId.isEmpty() ? null : current.mediaId) : current.content.optString("key");
+    }
 
     private int droppedFrames;
 
@@ -457,10 +532,12 @@ final class PlaybackController implements Player.Listener {
     String diagnosticSummary() {
         if (player == null || current == null) return "player=idle";
         Format video = player.getVideoFormat();
-        return String.format(java.util.Locale.ROOT, "state=%d playing=%b pos=%.0f buffered=%.0f video=%s dropped=%d captions=%d/%d",
+        Format audio = player.getAudioFormat();
+        return String.format(java.util.Locale.ROOT, "state=%d playing=%b pos=%.0f buffered=%.0f video=%s audio=%s cache=%s dropped=%d captions=%d/%d",
             player.getPlaybackState(), player.isPlaying(), player.getCurrentPosition() / 1000.0,
             (player.getBufferedPosition() - player.getCurrentPosition()) / 1000.0,
             video == null ? "-" : video.width + "x" + video.height + "@" + (video.bitrate > 0 ? video.bitrate / 1000 + "k" : "?"),
+            audio == null ? "-" : audio.sampleMimeType + "/" + audio.channelCount, diskCache.diagnosticSummary(),
             droppedFrames, selectedExternal, externals.size());
     }
 
@@ -476,12 +553,14 @@ final class PlaybackController implements Player.Listener {
 
     @Override public void onIsPlayingChanged(boolean isPlaying) {
         main.removeCallbacks(progressTick);
+        if (player != null) diskCache.updatePosition(player.getCurrentPosition(), player.getDuration(), false);
         if (isPlaying) { seenPlaying = true; main.postDelayed(progressTick, PROGRESS_INTERVAL_MS); }
         else recordProgress();
         bump();
     }
 
     @Override public void onPlaybackStateChanged(int state) {
+        if (player != null) diskCache.updatePosition(player.getCurrentPosition(), player.getDuration(), false);
         if (state == Player.STATE_ENDED) {
             recordProgress();
             boolean series = current != null && current.content != null && "tv".equals(current.content.optString("kind"));
@@ -497,13 +576,32 @@ final class PlaybackController implements Player.Listener {
     @Override public void onPlayWhenReadyChanged(boolean playWhenReady, int reason) { bump(); }
 
     @Override public void onPositionDiscontinuity(Player.PositionInfo oldPosition, Player.PositionInfo newPosition, int reason) {
-        if (reason == Player.DISCONTINUITY_REASON_SEEK) bump();
+        if (reason == Player.DISCONTINUITY_REASON_SEEK) {
+            if (player != null) diskCache.updatePosition(newPosition.positionMs, player.getDuration(), true);
+            bump();
+        }
     }
 
-    @Override public void onTracksChanged(Tracks tracks) { bump(); }
+    private void selectCompanionAudio(Tracks tracks) {
+        if (current == null || current.audioUrl.isEmpty() || player == null) return;
+        for (Tracks.Group group : tracks.getGroups()) {
+            if (group.getType() != C.TRACK_TYPE_AUDIO) continue;
+            for (int index = 0; index < group.length; index++) {
+                Format format = group.getTrackFormat(index);
+                if (!MimeTypes.AUDIO_AAC.equals(format.sampleMimeType) || !group.isTrackSupported(index)) continue;
+                if (!group.isTrackSelected(index)) player.setTrackSelectionParameters(player.getTrackSelectionParameters().buildUpon()
+                    .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, false)
+                    .setOverrideForType(new TrackSelectionOverride(group.getMediaTrackGroup(), index)).build());
+                return;
+            }
+        }
+    }
+
+    @Override public void onTracksChanged(Tracks tracks) { selectCompanionAudio(tracks); bump(); }
 
     @Override public void onPlayerError(PlaybackException failure) {
         error = failure.getErrorCodeName();
+        diskCache.playbackFailed();
         android.util.Log.w("LumaPlayer", "PLAYER_ERROR " + error);
         recordProgress();
         bump();

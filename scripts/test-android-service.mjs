@@ -21,7 +21,7 @@ const NEXT = 'https://media.example/next.m3u8';
 const commands = [], mutations = [], sockets = new Set();
 let connections = 0, currentSource = '', playing = true, position = 20, stops = 0, contentOpens = 0, authRejections = 0, holdProperties = false, volume = 6;
 let failStatus = false, failStatusOnce = 0, failAfterPause = 0, failedStatusReads = 0;
-let lumaMetadata = false, lumaEpisode = 3;
+let lumaMetadata = false, lumaEpisode = 3, localMedia = false;
 let switchBeforeOpen = 0, expectedNextSource = NEXT, failNextSeek = false, seekFailures = 0;
 const TOKEN = 'fixture_receiver_token_0123456789', CODE = '123456', PAIRING = 'servicePairing01';
 // A fresh receiver identity per run, as after a receiver reinstall: its change cursor restarts.
@@ -85,6 +85,7 @@ const receiver = http.createServer(async (request, response) => {
       if (address.searchParams.get('source') === 'first') { currentSource = FIRST; playing = true; }
       if (address.searchParams.has('position')) position = Number(address.searchParams.get('position'));
       if (address.searchParams.has('lumaMetadata')) lumaMetadata = address.searchParams.get('lumaMetadata') === '1';
+      if (address.searchParams.has('localMedia')) localMedia = address.searchParams.get('localMedia') === '1';
       if (address.searchParams.has('episode')) lumaEpisode = Number(address.searchParams.get('episode'));
       if (address.searchParams.has('switchBeforeOpen')) switchBeforeOpen = Number(address.searchParams.get('switchBeforeOpen'));
       if (address.searchParams.has('nextSource')) expectedNextSource = address.searchParams.get('nextSource') === 'other' ? OTHER : NEXT;
@@ -109,7 +110,7 @@ const receiver = http.createServer(async (request, response) => {
         }
       }
       response.writeHead(200, { 'Content-Type': 'application/json' });
-      response.end(JSON.stringify({ source: currentSource, playing, position, lumaMetadata, lumaEpisode, switchBeforeOpen, expectedNextSource, failNextSeek, seekFailures, stops, contentOpens, volume, mutations: mutations.length, connections, held: heldResponses.size, failedStatusReads,
+      response.end(JSON.stringify({ source: currentSource, playing, position, lumaMetadata, lumaEpisode, localMedia, switchBeforeOpen, expectedNextSource, failNextSeek, seekFailures, stops, contentOpens, volume, mutations: mutations.length, connections, held: heldResponses.size, failedStatusReads,
         libraryPulls, libraryPushes, libraryPushed,
         volumeSets, volumeGets, volumeReadHeld: heldVolumeReads.length,
         volumeKeys: commands.filter(command => /^KEYEVENT\r\n(?:24|25)\r\n\r\n$/u.test(command)).length,
@@ -144,14 +145,16 @@ const receiver = http.createServer(async (request, response) => {
       const current = currentContent();
       const message = { ok: true, result: currentSource
         ? { revision: mutations.length, active: true, playing, paused: !playing, state: playing ? 'playing' : 'paused', positionSeconds: position, durationSeconds: 1355,
-          bufferedSeconds: 1355, canSeek: true, sourceUrl: currentSource, title: current ? current.title : 'Fixture', ...(current ? { content: current } : {}) }
+          bufferedSeconds: 1355, canSeek: true, sourceUrl: currentSource, title: current ? current.title : localMedia ? 'Laptop movie' : 'Fixture',
+          ...(current ? { content: current } : {}), ...(localMedia ? { mediaId: `local:${'a'.repeat(40)}`, contentType: 'application/vnd.apple.mpegurl' } : {}) }
         : { revision: mutations.length, active: false, playing: false, paused: false, state: 'idle', positionSeconds: 0, durationSeconds: 0, bufferedSeconds: 0, canSeek: false, sourceUrl: '' } };
       if (holdProperties) { const held = { response, message }; heldResponses.add(held); response.once('close', () => heldResponses.delete(held)); return; }
       reply(response, 200, message); return;
     }
     if (method === 'player.subtitles') {
       if (currentSource && !expect()) return;
-      reply(response, 200, { ok: true, result: { active: !!currentSource, enabled: false, currentIndex: null, tracks: [] } }); return;
+      reply(response, 200, { ok: true, result: { active: !!currentSource, enabled: localMedia, currentIndex: localMedia ? 512 : null,
+        tracks: localMedia ? [{ index: 512, name: 'Português local', language: 'pt-BR' }] : [] } }); return;
     }
     if (method === 'player.open') {
       assert.equal(typeof params.onlyIfInactive, 'boolean');
@@ -216,7 +219,7 @@ try {
   if (Number(sdk.trim()) >= 33) await run(adb, ['-s', serial, 'shell', 'pm', 'grant', appPackage, 'android.permission.POST_NOTIFICATIONS'], { timeout: 10000 });
   const { stdout, stderr } = await run(adb, ['-s', serial, 'shell', 'am', 'instrument', '-w', '-e', 'mode', 'service', '-e', 'targetHost', '10.0.2.2', '-e', 'receiverPort', String(receiver.address().port), `${appPackage}.test/dev.framextv.lumaremote.BackendInstrumentation`], { timeout: 150000, maxBuffer: 128 * 1024 });
   process.stdout.write(stdout); if (stderr) process.stderr.write(stderr);
-  assert.match(stdout, /INSTRUMENTATION_RESULT: failures=0/u); assert.match(stdout, /INSTRUMENTATION_RESULT: passed=19/u); assert.match(stdout, /INSTRUMENTATION_CODE: -1/u);
+  assert.match(stdout, /INSTRUMENTATION_RESULT: failures=0/u); assert.match(stdout, /INSTRUMENTATION_RESULT: passed=20/u); assert.match(stdout, /INSTRUMENTATION_CODE: -1/u);
   assert.equal(connections, 3);
   assert.ok(authRejections >= 2);
   assert.deepEqual(commands.filter(command => command.includes('setVolume')), [14, 14, 12, 14, 12, 14, 16, 18, 20, 16]
@@ -249,7 +252,7 @@ try {
     'KEYEVENT\r\n26\r\n\r\n',
   ]);
   assert.ok(commands.every(command => !/^(?:auth|CHECKPASSWORD|STARTAPPEVNET)/u.test(command)));
-  console.log('Android connection service: 19 pairing, lifecycle, direct-handoff restore, Library-sync, canonical-transition, locked-screen, rewind, coalesced-volume, transient-error, pending-catalog, independent-transport, disconnect, power and Matter checks passed against emulator-only fixtures.');
+  console.log('Android connection service: 20 pairing, lifecycle, direct-handoff restore, Library-sync, canonical-transition, local-subtitle adoption, locked-screen, rewind, coalesced-volume, transient-error, pending-catalog, independent-transport, disconnect, power and Matter checks passed against emulator-only fixtures.');
 } catch (error) {
   console.error(JSON.stringify({ fixture: { connections, stops, playing, mutations: mutations.map(({ method, params }) => ({ method, ...(typeof params.play === 'boolean' ? { play: params.play } : {}) })) } }));
   throw error;

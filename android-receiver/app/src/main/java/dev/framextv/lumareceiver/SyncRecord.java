@@ -26,6 +26,31 @@ final class SyncRecord {
 
     static boolean type(String type) { return "progress".equals(type) || "title".equals(type) || "season".equals(type); }
 
+    /** A title tombstone is the bounded command that clears every matching projector-side episode. */
+    static String[] deletedTitleScope(SyncRecord record) {
+        if (record == null || !record.deleted || !"title".equals(record.type)) return null;
+        java.util.regex.Matcher match = Pattern.compile("^title:(movie|tv):([1-9][0-9]{0,9})$").matcher(record.key);
+        return match.matches() ? new String[] {match.group(1), match.group(2)} : null;
+    }
+
+    static boolean belongsToTitle(SyncRecord record, String[] scope) {
+        if (record == null || record.deleted || !"progress".equals(record.type) || scope == null || scope.length != 2) return false;
+        try {
+            JSONObject data = new JSONObject(record.data);
+            return scope[0].equals(data.optString("kind")) && scope[1].equals(data.optString("contentId"));
+        } catch (Exception invalid) { return false; }
+    }
+
+    /** A title tombstone also dominates progress received after its original
+     * cascade when that progress is not newer than the deletion. */
+    static boolean blockedByTitle(SyncRecord record, SyncRecord title) {
+        if (record == null || record.deleted || !"progress".equals(record.type)
+                || title == null || !title.deleted || !"title".equals(title.type)
+                || title.updatedAt < record.updatedAt) return false;
+        String[] scope = deletedTitleScope(title);
+        return scope != null && belongsToTitle(record, scope);
+    }
+
     static SyncRecord parse(JSONObject value, long now) throws ApiException {
         try {
             String key = value.getString("key"), type = value.getString("type"), origin = value.getString("origin");

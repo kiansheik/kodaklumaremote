@@ -198,7 +198,8 @@ public final class WebContentResolver implements AutoCloseable {
             Integer season = tv ? number(value.opt("season"), 0, 9999) : null, episode = tv ? number(value.opt("episode"), 1, 9999) : null;
             if (!tv && (value.has("season") || value.has("episode"))) throw new Exception();
             JSONObject result = WatchHistory.contentFromCatalog((String) rawKind, (String) rawId, season, episode, ""); if (result == null) throw new Exception(); return result;
-        } catch (Exception invalid) { throw fail("SOURCE_UNSUPPORTED"); }
+        } catch (ResolveException rethrow) { throw rethrow; }
+        catch (Exception invalid) { throw fail("SOURCE_UNSUPPORTED"); }
     }
     static boolean sameContent(String url, JSONObject content) {
         try {
@@ -212,6 +213,7 @@ public final class WebContentResolver implements AutoCloseable {
             String url = NativeBackend.publicUrl(media.opt("url")), type = media.optString("contentType", "").toLowerCase(Locale.ROOT).split(";", 2)[0].trim();
             if (!(type.matches("video/(?:mp4|webm)") || type.equals("application/vnd.apple.mpegurl") || type.equals("application/x-mpegurl") || type.equals("application/dash+xml"))) throw new Exception();
             String title = text(media.optString("title", "Video"), 200); JSONArray tracks = new JSONArray(), raw = media.optJSONArray("tracks"); Set<String> seen = new HashSet<>();
+            if (!CatalogClient.sourceTitleMatches(title, url)) throw fail("SOURCE_MISMATCH");
             if (raw != null) for (int i = 0; i < Math.min(raw.length(), MAX_TRACKS); i++) {
                 JSONObject track = raw.optJSONObject(i); if (track == null) continue;
                 String trackUrl; try { trackUrl = NativeBackend.publicUrl(track.opt("url")); } catch (Exception invalid) { continue; }
@@ -224,7 +226,8 @@ public final class WebContentResolver implements AutoCloseable {
             JSONObject result = object("url", url, "contentType", type, "title", title, "tracks", tracks, "content", identity, "currentTime", 0, "autoSubtitles", false);
             Object duration = media.opt("duration"); if (duration instanceof Number) { double seconds = ((Number) duration).doubleValue(); if (Double.isFinite(seconds) && seconds > 0 && seconds <= 17280000) result.put("duration", seconds); }
             return result;
-        } catch (Exception invalid) { throw fail("SOURCE_UNSUPPORTED"); }
+        } catch (ResolveException rethrow) { throw rethrow; }
+        catch (Exception invalid) { throw fail("SOURCE_UNSUPPORTED"); }
     }
     private static int number(Object raw, int min, int max) throws Exception { if (!(raw instanceof Number)) throw new Exception(); double number = ((Number) raw).doubleValue(); if (!Double.isFinite(number) || number != Math.rint(number) || number < min || number > max) throw new Exception(); return (int) number; }
     private static String text(String value, int max) { String clean = value.replaceAll("[\\p{Cntrl}\\u007f-\\u009f\\u202a-\\u202e\\u2066-\\u2069]", " ").trim(); return clean.substring(0, Math.min(max, clean.length())); }
@@ -235,6 +238,7 @@ public final class WebContentResolver implements AutoCloseable {
             case "SOURCE_CHANGED": return "The title changed before its source was ready. Choose it again.";
             case "TIMEOUT": return "The site did not provide a playable video in time. Try again.";
             case "SOURCE_UNSUPPORTED": return "This player did not expose a supported video source.";
+            case "SOURCE_MISMATCH": return "The selected server exposed a different title. Try another server.";
             default: return "The video page could not be loaded. Check the phone connection and try again.";
         }
     }

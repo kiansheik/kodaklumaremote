@@ -115,8 +115,14 @@ final class ControlServer {
                 return ReceiverApp.onMain(() -> { JSONObject opened = playback.open(media, params.optBoolean("onlyIfInactive"), currentUrl, currentKey); playback.noteInteraction(); return opened; });
             }
             case "player.next": {
-                if (params.has("expectedContentKey")) ReceiverApp.onMain(() -> { playback.expectContent(params.opt("expectedContentKey")); return null; });
-                ReceiverApp.onMain(() -> { playback.startNext(false); return null; });
+                // Validate and enqueue from one main-thread turn. Otherwise a
+                // second controller can replace the title between the guard
+                // and startNext's snapshot, authorizing Next for the wrong item.
+                ReceiverApp.onMain(() -> {
+                    if (params.has("expectedContentKey")) playback.expectContent(params.opt("expectedContentKey"));
+                    playback.startNext(false);
+                    return null;
+                });
                 return accepted();
             }
             case "settings.get": return new JSONObject().put("autoNext", playback.autoNext());
@@ -280,7 +286,7 @@ final class ControlServer {
 
     private static String thumbKey(JSONObject params) throws ApiException {
         String key = params.optString("contentKey");
-        if (!SyncRecord.KEY.matcher(key).matches()) throw new ApiException("INVALID_INPUT");
+        if (!SyncRecord.KEY.matcher(key).matches() && !key.matches("local:[a-f0-9]{32,64}")) throw new ApiException("INVALID_INPUT");
         return key;
     }
 
@@ -294,8 +300,9 @@ final class ControlServer {
                 .put("manufacturer", Build.MANUFACTURER).put("model", Build.MODEL).put("hardware", Build.HARDWARE)
                 .put("abis", new JSONArray(java.util.Arrays.asList(Build.SUPPORTED_ABIS))))
             .put("pairingOpen", app.pairing.activeCode() != null)
+            .put("startup", app.startupStatus())
             .put("capabilities", new JSONArray(java.util.Arrays.asList("hls", "dash", "progressive", "subtitles.sideload",
-                "tracks.audio", "tracks.text", "status.longpoll", "library.sync", "update.release", "update.dev", "volume", "display.picture", "display.subtitles", "scrub.mirror", "open.atomic", "thumbs.share", "player.next", "autoNext")));
+                "tracks.audio", "tracks.text", "status.longpoll", "library.sync", "update.release", "update.dev", "volume", "display.picture", "display.subtitles", "scrub.mirror", "open.atomic", "thumbs.share", "player.next", "autoNext", "startup.diagnostics")));
     }
 
     private JSONObject volume() throws Exception {

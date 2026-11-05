@@ -5,6 +5,9 @@ import android.app.Instrumentation;
 import android.os.Bundle;
 import org.json.JSONArray;
 import org.json.JSONObject;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -78,6 +81,27 @@ public final class CatalogInstrumentation {
             for (String url : requests) require(url.startsWith("https://api.framextv.tech/api/"), "Media/subtitle was fetched by catalog client");
             require(requests.size() == 6, "Resolve was not a fresh bounded API operation");
         });
+        names.add("a provider title mismatch is rejected and an alternate server is selected"); checks.add(() -> {
+            List<String> requests = new ArrayList<>();
+            String wrong = "https://crap.hybrows.workers.dev/?origin=https%3A%2F%2Fwww.films365.org&url=https%3A%2F%2Fxstreamx.films365.org%2Fmovie%2Fa8020a67-244b-4051-a6be-6f3771c93ba5%2FBuddy+Games";
+            CatalogClient client = new CatalogClient((url, ms) -> {
+                requests.add(url);
+                if (url.contains("/api/details")) return reply(object("success", true, "id", 1514026, "type", "movie", "title", "Buddy"));
+                if (url.contains("/api/providers")) return reply(object("providers", new JSONArray()
+                        .put(object("id", "titan", "status", "down")).put(object("id", "balloon", "status", "available"))));
+                if (url.contains("/api/subtitles")) return reply(object("success", true, "subtitles", new JSONArray()));
+                if (url.contains("provider=balloon")) return reply(object("success", true, "provider", "balloon", "sources", new JSONArray()
+                        .put(object("url", "https://gcdn.example/movie/55774/vod.m3u8", "type", "hls"))));
+                return reply(object("success", true, "provider", "titan", "sources", new JSONArray().put(object("url", wrong, "type", "hls"))));
+            });
+            JSONObject resolved = client.resolve(object("kind", "movie", "id", "1514026"));
+            require(resolved.getString("url").equals("https://gcdn.example/movie/55774/vod.m3u8"), "Mismatched provider source was opened");
+            require(requests.stream().anyMatch(url -> url.contains("provider=balloon"))
+                    && requests.stream().noneMatch(url -> url.contains("provider=titan")), "Alternate provider choice was not bounded or skipped the rejected provider");
+            require(!CatalogClient.sourceTitleMatches("Buddy — FrameXTV", wrong)
+                    && CatalogClient.sourceTitleMatches("Buddy Games", wrong)
+                    && CatalogClient.sourceTitleMatches("Buddy", "https://opaque.example/vod.m3u8"), "Provider-specific title evidence was over- or under-applied");
+        });
         names.add("active playback hydration never selects a replacement source"); checks.add(() -> {
             List<String> requests = new ArrayList<>(); CatalogClient client = new CatalogClient((url, ms) -> {
                 requests.add(url);
@@ -116,6 +140,134 @@ public final class CatalogInstrumentation {
             JSONObject resolved = relative.resolve(object("kind", "movie", "id", "1"));
             require(resolved.getString("url").equals("https://api.framextv.xyz/api/proxy?fixture=1"), "Relative source rebound to wrong failover origin");
             require(resolved.getJSONObject("content").isNull("season") && resolved.getJSONObject("content").getString("key").equals("framextv:movie:1"), "Movie history contract differs");
+        });
+        names.add("anime routes map to canonical TV identity and preserve sub or dub"); checks.add(() -> {
+            List<String> requests = new ArrayList<>();
+            JSONObject mapped = object("mappings", object("anilist_id", 211778, "themoviedb_id", "321518"), "episodes", object(
+                "3", object("seasonNumber", 1, "episodeNumber", 3), "4", object("seasonNumber", 1, "episodeNumber", 4)));
+            AnimeCatalogClient client = new AnimeCatalogClient((url, ms) -> {
+                requests.add(url);
+                if (url.startsWith("https://api.ani.zip/")) return new AnimeCatalogClient.Response(200, mapped.toString());
+                if (url.contains("/anime/api/details")) return new AnimeCatalogClient.Response(200,
+                    object("success", true, "id", "211778", "anilistId", "211778", "title", "The World's Strongest Witch", "seasons", new JSONArray().put(object("id", "211778", "number", 1))).toString());
+                return new AnimeCatalogClient.Response(200, object("success", true, "audio", url.contains("sub_type=dub") ? "dub" : "sub", "meta", object("id", 211778), "sources", new JSONArray().put(object(
+                    "url", "https://anime-media.workers.dev/master.m3u8", "type", "hls", "headers", object("Referer", "https://provider.example/"))),
+                    "subtitles", new JSONArray().put(object("url", "https://api.framextv.tech/anime/api/subtitles/proxy?id=1", "language", "en", "label", "English"))).toString());
+            });
+            JSONObject content = client.identify("https://framextv.cc/watch/anime/211778?episode=3", "Witch", "dub");
+            require("framextv:tv:321518:1:3".equals(content.getString("key")) && "211778".equals(content.getString("animeId"))
+                && "dub".equals(content.getString("animeAudio")), "Anime capture lost canonical identity or audio edition");
+            JSONObject hinted = client.identify(WatchHistory.contentFromCatalog("tv", "321518", 1, 3, "Witch"), "211778", 3, "sub");
+            require("211778".equals(hinted.getString("animeId")) && "sub".equals(hinted.getString("animeAudio")), "Canonical redirect race lost verified anime provenance");
+            try {
+                client.identify(WatchHistory.contentFromCatalog("tv", "321518", 1, 3, "Witch"), "211778", 4, "sub");
+                throw new AssertionError("Mismatched embedded episode was accepted");
+            } catch (AnimeCatalogClient.AnimeException expected) { require("CATALOG_RESPONSE".equals(expected.code), "Wrong embedded-episode failure"); }
+            JSONObject media = client.resolve(object("kind", "tv", "id", "321518", "season", 1, "episode", 4, "animeId", "211778", "animeAudio", "dub"));
+            require("framextv:tv:321518:1:4".equals(media.getJSONObject("content").getString("key"))
+                && "dub".equals(media.getJSONObject("content").getString("animeAudio")) && media.getJSONArray("tracks").length() == 1,
+                "Anime next resolution changed identity, edition, or subtitles");
+            require(requests.stream().anyMatch(url -> url.contains("sub_type=dub") && url.endsWith("episode=4")), "Dub next used the subtitled endpoint");
+            require(AnimeCatalogClient.route("https://framextv.cc/watch/anime/211778/3?sub_type=sub") != null
+                && AnimeCatalogClient.route("https://evil.example/watch/anime/211778/3") == null, "Anime page trust boundary changed");
+            require(!ResolvedSources.key(object("kind", "tv", "id", "321518", "season", 1, "episode", 4, "animeId", "211778", "animeAudio", "sub"))
+                    .equals(ResolvedSources.key(object("kind", "tv", "id", "321518", "season", 1, "episode", 4, "animeId", "211778", "animeAudio", "dub"))),
+                "Sub and dub shared a resolved-source cache entry");
+        });
+        names.add("anime next crosses seasons only through a verified related AniList id"); checks.add(() -> {
+            List<String> requests = new ArrayList<>();
+            AnimeCatalogClient client = new AnimeCatalogClient((url, ms) -> {
+                requests.add(url);
+                if (url.contains("anilist_id=101922")) return new AnimeCatalogClient.Response(200, object("mappings", object("anilist_id", 101922, "themoviedb_id", "85937"),
+                    "episodes", object("26", object("seasonNumber", 1, "episodeNumber", 26))).toString());
+                if (url.contains("anilist_id=129874")) return new AnimeCatalogClient.Response(200, object("mappings", object("anilist_id", 129874, "themoviedb_id", "85937"),
+                    "episodes", object("1", object("seasonNumber", 2, "episodeNumber", 1))).toString());
+                if (url.contains("/anime/api/details?id=101922")) return new AnimeCatalogClient.Response(200, object("success", true, "anilistId", "101922", "title", "Demon Slayer",
+                    "seasons", new JSONArray().put(object("id", "101922", "number", 1)).put(object("id", "129874", "number", 2))).toString());
+                if (url.contains("/anime/api/details?id=129874")) return new AnimeCatalogClient.Response(200, object("success", true, "anilistId", "129874", "title", "Demon Slayer: Mugen Train",
+                    "seasons", new JSONArray().put(object("id", "129874", "number", 2))).toString());
+                return new AnimeCatalogClient.Response(200, object("success", true, "audio", "sub", "meta", object("id", 129874), "sources", new JSONArray().put(object(
+                    "url", "https://anime-media.workers.dev/demon-s2e1.m3u8", "type", "hls")), "subtitles", new JSONArray()).toString());
+            });
+            JSONObject media = client.resolve(object("kind", "tv", "id", "85937", "season", 2, "episode", 1, "animeId", "101922", "animeAudio", "sub"));
+            require("129874".equals(media.getJSONObject("content").getString("animeId")), "Cross-season next reused the previous season's AniList id");
+            require(requests.stream().anyMatch(url -> url.contains("id=129874") && url.endsWith("episode=1")), "Cross-season next did not resolve the related anime season");
+        });
+        names.add("anime stream response cannot change series or audio edition"); checks.add(() -> {
+            JSONObject mapped = object("mappings", object("anilist_id", 151807, "themoviedb_id", "127532"), "episodes", object("1", object("seasonNumber", 1, "episodeNumber", 1)));
+            AnimeCatalogClient client = new AnimeCatalogClient((url, ms) -> {
+                if (url.startsWith("https://api.ani.zip/")) return new AnimeCatalogClient.Response(200, mapped.toString());
+                if (url.contains("/anime/api/details")) return new AnimeCatalogClient.Response(200, object("success", true, "anilistId", "151807", "title", "Solo Leveling", "seasons", new JSONArray()).toString());
+                return new AnimeCatalogClient.Response(200, object("success", true, "audio", "sub", "meta", object("id", 101922),
+                    "sources", new JSONArray().put(object("url", "https://anime-media.workers.dev/wrong.m3u8", "type", "hls")), "subtitles", new JSONArray()).toString());
+            });
+            try {
+                client.resolve(object("kind", "tv", "id", "127532", "season", 1, "episode", 1, "animeId", "151807", "animeAudio", "dub"));
+                throw new AssertionError("Mismatched anime response was accepted");
+            } catch (AnimeCatalogClient.AnimeException expected) { require("CATALOG_RESPONSE".equals(expected.code), "Wrong mismatch failure"); }
+        });
+        names.add("missing anime audio edition is unavailable after fixed-host failover"); checks.add(() -> {
+            List<String> requests = new ArrayList<>();
+            JSONObject mapped = object("mappings", object("anilist_id", 211778, "themoviedb_id", "321518"), "episodes", object(
+                "2", object("seasonNumber", 1, "episodeNumber", 2)));
+            AnimeCatalogClient client = new AnimeCatalogClient((url, ms) -> {
+                requests.add(url);
+                if (url.startsWith("https://api.ani.zip/")) return new AnimeCatalogClient.Response(200, mapped.toString());
+                if (url.contains("/anime/api/details")) return new AnimeCatalogClient.Response(200,
+                    object("success", true, "anilistId", "211778", "title", "The World's Strongest Witch", "seasons", new JSONArray()).toString());
+                return new AnimeCatalogClient.Response(404, object("success", false).toString());
+            });
+            try {
+                client.resolve(object("kind", "tv", "id", "321518", "season", 1, "episode", 2, "animeId", "211778", "animeAudio", "dub"));
+                throw new AssertionError("Missing dub was accepted");
+            } catch (AnimeCatalogClient.AnimeException expected) { require("SOURCE_UNAVAILABLE".equals(expected.code), "Missing dub was not reported as unavailable"); }
+            require(requests.stream().filter(url -> url.contains("/anime/api/stream")).count() == 3, "Missing edition did not check every fixed anime host");
+        });
+        names.add("resolved source cache rejects a different canonical episode or anime edition"); checks.add(() -> {
+            File directory = new File(instrumentation.getTargetContext().getCacheDir(), "resolved-sources-identity-" + System.nanoTime());
+            require(directory.mkdirs(), "Could not create isolated source-cache fixture");
+            try {
+                long now = 1000;
+                JSONObject selection = object("kind", "tv", "id", "42", "season", 2, "episode", 4);
+                String expected = ResolvedSources.key(selection);
+                JSONObject wrongContent = WatchHistory.contentFromCatalog("tv", "42", 2, 3, "Episode 3");
+                JSONObject wrongMedia = object("url", "https://media.example/e3.m3u8", "content", wrongContent);
+                File stored = new File(directory, "resolved-sources.json");
+                try (FileOutputStream output = new FileOutputStream(stored)) {
+                    output.write(new JSONArray().put(object("key", expected, "at", now, "media", wrongMedia)).toString().getBytes(StandardCharsets.UTF_8));
+                }
+                ResolvedSources cache = new ResolvedSources(directory);
+                require(cache.get(expected, now) == null, "Legacy cache entry from another episode was reused");
+                cache.put(expected, wrongMedia, now);
+                require(cache.get(expected, now) == null, "New mismatched episode was admitted to cache");
+
+                JSONObject animeSelection = object("kind", "tv", "id", "42", "season", 2, "episode", 4,
+                        "animeId", "1001", "animeAudio", "sub");
+                JSONObject dubContent = WatchHistory.contentFromCatalog("tv", "42", 2, 4, "Episode 4");
+                dubContent.put("animeId", "1001").put("animeAudio", "dub");
+                cache.put(ResolvedSources.key(animeSelection), object("url", "https://media.example/dub.m3u8", "content", dubContent), now);
+                require(cache.get(ResolvedSources.key(animeSelection), now) == null, "Opposite anime audio edition was reused");
+            } finally {
+                File[] files = directory.listFiles(); if (files != null) for (File file : files) file.delete(); directory.delete();
+            }
+        });
+        names.add("resolved source cache expires media and its subtitle catalog"); checks.add(() -> {
+            File directory = new File(instrumentation.getTargetContext().getCacheDir(), "resolved-sources-expiry-" + System.nanoTime());
+            require(directory.mkdirs(), "Could not create isolated source-cache fixture");
+            try {
+                long storedAt = 5000;
+                JSONObject selection = object("kind", "tv", "id", "42", "season", 2, "episode", 4);
+                String key = ResolvedSources.key(selection);
+                JSONObject content = WatchHistory.contentFromCatalog("tv", "42", 2, 4, "Episode 4");
+                JSONObject media = object("url", "https://media.example/e4.m3u8", "content", content,
+                        "tracks", new JSONArray().put(object("url", "https://subtitles.example/e4.vtt", "language", "en")));
+                ResolvedSources cache = new ResolvedSources(directory);
+                cache.put(key, media, storedAt);
+                require(cache.get(key, storedAt + ResolvedSources.MAX_AGE_MS) != null, "Fresh boundary entry was discarded early");
+                require(cache.get(key, storedAt + ResolvedSources.MAX_AGE_MS + 1) == null, "Expired source/subtitle catalog was reused");
+            } finally {
+                File[] files = directory.listFiles(); if (files != null) for (File file : files) file.delete(); directory.delete();
+            }
         });
         int passed = 0, failed = 0; String failure = "";
         for (int i = 0; i < checks.size(); i++) {

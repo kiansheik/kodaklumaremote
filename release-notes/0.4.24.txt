@@ -1,0 +1,9 @@
+LUMA Remote 0.4.24
+
+Stream local MP4, MKV and WebM files from the phone to LUMA Receiver, with external SRT, WebVTT, ASS, SSA and TTML subtitles. A laptop can also stream original or high-quality compatibility-converted media from a localhost browser remote. Other paired phones can control playback, scrub and reuse the shared thumbnail previews.
+
+Anime playback now retains verified series, season, episode and Sub/Dub identity through Library, Resume, Next and auto-play. Library items can be deleted with synchronized tombstones, and movie sources that positively identify a different title are rejected in favor of another server.
+
+Remote can open the current title's exact watch page without interrupting projector playback, making it easier to choose another stream before casting it.
+
+LUMA Receiver 0.3.7 supports opaque local-media sessions, shared scrub thumbnails and faster, time-prioritized buffering for high-bitrate media. It can be selected as the projector Home app and reports startup/Home-input diagnostics for setup.

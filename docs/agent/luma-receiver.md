@@ -143,6 +143,19 @@ stays 100%). Fixed after their report:
   15 s rolling log across reboots (`app.diagnostics`). Post-fix 1080p check:
   ~356 MB free, 0 dropped frames.
 
+## 2026-10-30 high-bitrate buffer follow-up (unreleased)
+
+The 0.2.3 safety policy made 24 MiB a hard threshold. With a high-bitrate local
+file that can be much less than its nominal 15-second minimum and can cause
+repeated READY/BUFFERING transitions. The new policy starts after 750 ms,
+requires 2 seconds after a rebuffer, keeps an 8-20 second window and prioritizes
+that 8-second time floor over the same 24 MiB target, while Media3's heap-pressure
+guard can still stop loading early. This bounds the old ~70-second prefetch while
+allowing the minimum useful time window to exceed 24 MiB for unusually
+high-bitrate media. Laptop compatibility HLS also uses forced two-second
+keyframes and segments so initial playback and seeks need less media. Unit/source
+and real ffmpeg segment checks pass; physical projector acceptance is pending.
+
 ## 2026-10-23 scrub, auto-next and setup (unreleased 0.4.12 / receiver 0.3.0)
 
 - Scrub crash root cause (phone logcat): `NetworkOnMainThreadException` when

@@ -16,7 +16,8 @@
     "build:mobile": "node scripts/build-mobile.mjs",
     "release:android": "node scripts/build-android-release.mjs",
     "publish:android": "node scripts/publish-android-release.mjs",
-    "receiver": "node scripts/receiver-dev.mjs"
+    "receiver": "node scripts/receiver-dev.mjs",
+    "stream:local": "node scripts/stream-local-media.mjs"
   },
   "devDependencies": {
     "@playwright/test": "1.64.0",

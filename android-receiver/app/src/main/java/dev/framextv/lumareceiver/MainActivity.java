@@ -1,10 +1,12 @@
 package dev.framextv.lumareceiver;
 
 import android.app.Activity;
+import android.content.ActivityNotFoundException;
 import android.content.Context;
 import android.content.Intent;
 import android.os.Bundle;
 import android.os.SystemClock;
+import android.provider.Settings;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.WindowManager;
@@ -193,7 +195,7 @@ public final class MainActivity extends Activity implements PlaybackController.U
             : (clients == 0 ? "Not paired yet. Open LUMA Remote on your phone and add this projector."
                 : "Ready. Choose something to watch on your phone.")
             + "\n" + address() + ":" + ControlServer.PORT + "  ·  " + clients + (clients == 1 ? " paired device" : " paired devices"));
-        String prompt = null;
+        String prompt = null, footerText = "";
         try {
             org.json.JSONObject update = app.updater.status();
             String state = update.optString("state");
@@ -205,11 +207,23 @@ public final class MainActivity extends Activity implements PlaybackController.U
             else if ("downloading".equals(state)) prompt = "Downloading update " + version + "…";
             else if ("awaitingConfirmation".equals(state) || "installing".equals(state)) prompt = "Installing update " + version + "…";
             else if ("failed".equals(state)) prompt = "Update failed (" + update.optString("error") + ").";
-            footer.setText("v" + update.optString("versionName") + "  ·  updates: " + update.optString("policy")
-                + "  ·  library: " + app.library.count("progress") + " items");
+            footerText = "v" + update.optString("versionName") + "  ·  updates: " + update.optString("policy")
+                + "  ·  library: " + app.library.count("progress") + " items";
         } catch (Exception ignored) { }
+        long okPresses = app.okPressCount();
+        footer.setText(footerText + (footerText.isEmpty() ? "" : "\n") + (app.isDefaultHome()
+            ? "Projector Home is LUMA Receiver  ·  OK received: " + okPresses + "  ·  Menu: change Home app"
+            : "Press OK to make LUMA Receiver the projector Home app  ·  OK received: " + okPresses));
         updatePrompt.setVisibility(prompt == null ? View.GONE : View.VISIBLE);
         updatePrompt.setText(prompt == null ? "" : prompt);
+    }
+
+    private void openHomeSettings(String source) {
+        app.noteHomeSettingsOpen(source);
+        try { startActivity(new Intent(Settings.ACTION_HOME_SETTINGS)); }
+        catch (ActivityNotFoundException | SecurityException unavailable) {
+            startActivity(new Intent(Settings.ACTION_SETTINGS));
+        }
     }
 
     private void showNotice(String text) { showNotice(text, 3000); }
@@ -224,6 +238,8 @@ public final class MainActivity extends Activity implements PlaybackController.U
     @Override public boolean dispatchKeyEvent(KeyEvent event) {
         if (event.getAction() != KeyEvent.ACTION_DOWN) return super.dispatchKeyEvent(event);
         int key = event.getKeyCode();
+        boolean initialOk = isInitialOkPress(event.getAction(), key, event.getRepeatCount());
+        long okCount = initialOk ? app.noteOkPress() : -1;
         app.playback.noteInteraction(); // also cancels a pending "Up next"
         boolean media = app.playback.title() != null;
         if (!media) {
@@ -231,6 +247,15 @@ public final class MainActivity extends Activity implements PlaybackController.U
             if (promptShown && (key == KeyEvent.KEYCODE_DPAD_CENTER || key == KeyEvent.KEYCODE_ENTER)) { app.updater.install(); return true; }
             if (promptShown && key == KeyEvent.KEYCODE_BACK) { app.updater.skipAvailable(); return true; }
             if (key == KeyEvent.KEYCODE_BACK && app.pairing.activeCode() != null) { app.pairing.cancel(); return true; }
+            if (key == KeyEvent.KEYCODE_MENU) { openHomeSettings("menu"); return true; }
+            if (app.pairing.activeCode() == null && !app.isDefaultHome() && initialOk) {
+                openHomeSettings("ok"); return true;
+            }
+            if (app.pairing.activeCode() == null && app.isDefaultHome() && initialOk) {
+                showNotice("OK received (" + okCount + "). LUMA Receiver is already the Home app.");
+                render();
+                return true;
+            }
             return super.dispatchKeyEvent(event);
         }
         boolean controls = playerView.isControllerFullyVisible();
@@ -266,6 +291,11 @@ public final class MainActivity extends Activity implements PlaybackController.U
             default: break;
         }
         return playerView.dispatchKeyEvent(event) || super.dispatchKeyEvent(event);
+    }
+
+    static boolean isInitialOkPress(int action, int key, int repeatCount) {
+        return action == KeyEvent.ACTION_DOWN && repeatCount == 0
+            && (key == KeyEvent.KEYCODE_DPAD_CENTER || key == KeyEvent.KEYCODE_ENTER);
     }
 
     private static String address() {

@@ -1054,6 +1054,26 @@ public final class ServiceInstrumentation {
             require(context.getSystemService(KeyguardManager.class).isKeyguardLocked(), "Independent HTTP controls unlocked the device");
             passed("disconnected polling survives a contentless source transition, then locked-screen receiver controls remain available without hardware actions");
 
+            phase = "local_subtitle_adoption";
+            fixture("?source=first&lumaMetadata=0&localMedia=1&position=18"); call("receiver.status");
+            JSONObject localRemote = null;
+            long localTracksBy = SystemClock.elapsedRealtime() + 6000;
+            while (SystemClock.elapsedRealtime() < localTracksBy) {
+                JSONObject candidate = service.snapshot().optJSONObject("remote");
+                if (candidate != null && candidate.optJSONArray("tracks") != null && candidate.optJSONArray("tracks").length() == 1) {
+                    localRemote = candidate; break;
+                }
+                Thread.sleep(40);
+            }
+            require(localRemote != null && ("local:" + "a".repeat(40)).equals(localRemote.getJSONObject("media").getString("mediaId")),
+                    "Laptop-started local playback did not become the phone's active media");
+            JSONObject localTrack = localRemote.getJSONArray("tracks").getJSONObject(0);
+            require(localTrack.getInt("index") == 512 && "pt-BR".equals(localTrack.getString("language"))
+                    && "Português local".equals(localTrack.getString("label"))
+                    && localRemote.getBoolean("subtitlesEnabled") && localRemote.getInt("selectedIndex") == 512,
+                    "A paired phone did not adopt the receiver-owned local subtitle track and selection");
+            passed("paired phones adopt receiver-owned subtitle tracks and selections from laptop-started local playback");
+
             phase = "disconnect";
             int stops = fixture("").getInt("stops");
             PlaybackState.CustomAction disconnect = customAction(controller, "disconnect");

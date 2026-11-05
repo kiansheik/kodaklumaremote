@@ -24,15 +24,15 @@ final class MediaRequest {
         }
     }
 
-    final String url, contentType, title;
+    final String url, contentType, title, mediaId, audioUrl;
     final JSONObject content; // canonical identity or null
     final double resumeSeconds;
     final List<Subtitle> subtitles;
     final Map<String, String> headers;
 
-    private MediaRequest(String url, String contentType, String title, JSONObject content, double resumeSeconds,
+    private MediaRequest(String url, String contentType, String title, String mediaId, String audioUrl, JSONObject content, double resumeSeconds,
             List<Subtitle> subtitles, Map<String, String> headers) {
-        this.url = url; this.contentType = contentType; this.title = title; this.content = content;
+        this.url = url; this.contentType = contentType; this.title = title; this.mediaId = mediaId; this.audioUrl = audioUrl; this.content = content;
         this.resumeSeconds = resumeSeconds; this.subtitles = subtitles; this.headers = headers;
     }
 
@@ -40,6 +40,9 @@ final class MediaRequest {
         if (media == null) throw new ApiException("INVALID_MEDIA");
         String url = httpUrl(media.opt("url"));
         String type = contentType(media.optString("contentType", ""), url);
+        String mediaId = media.has("mediaId") ? localMediaId(media.opt("mediaId")) : "";
+        String audioUrl = media.has("audioUrl") ? httpUrl(media.opt("audioUrl")) : "";
+        if (!audioUrl.isEmpty() && (mediaId.isEmpty() || !sameOrigin(url, audioUrl))) throw new ApiException("INVALID_MEDIA");
         JSONObject content = media.has("content") && !media.isNull("content") ? canonicalContent(media.optJSONObject("content")) : null;
         String title = media.has("title") ? label(media.opt("title"), 200) : "";
         if (title.isEmpty() && content != null) title = content.optString("title");
@@ -52,7 +55,21 @@ final class MediaRequest {
             if (list.length() > MAX_SUBTITLES) throw new ApiException("INVALID_SUBTITLE");
             for (int i = 0; i < list.length(); i++) subtitles.add(subtitle(list.optJSONObject(i)));
         }
-        return new MediaRequest(url, type, title, content, resume, Collections.unmodifiableList(subtitles), headers(media.optJSONObject("headers")));
+        return new MediaRequest(url, type, title, mediaId, audioUrl, content, resume, Collections.unmodifiableList(subtitles), headers(media.optJSONObject("headers")));
+    }
+
+    static String localMediaId(Object value) throws ApiException {
+        if (!(value instanceof String) || !((String) value).matches("local:[a-f0-9]{32,64}")) throw new ApiException("INVALID_MEDIA");
+        return (String) value;
+    }
+
+    static boolean sameOrigin(String first, String second) {
+        try {
+            URI left = URI.create(first), right = URI.create(second);
+            int leftPort = left.getPort() < 0 ? ("https".equals(left.getScheme()) ? 443 : 80) : left.getPort();
+            int rightPort = right.getPort() < 0 ? ("https".equals(right.getScheme()) ? 443 : 80) : right.getPort();
+            return left.getScheme().equals(right.getScheme()) && left.getHost().equalsIgnoreCase(right.getHost()) && leftPort == rightPort;
+        } catch (Exception invalid) { return false; }
     }
 
     static Subtitle subtitle(JSONObject track) throws ApiException {
@@ -90,7 +107,8 @@ final class MediaRequest {
         if (type.isEmpty()) {
             String path = URI.create(url).getPath().toLowerCase(Locale.ROOT);
             type = path.endsWith(".m3u8") ? HLS : path.endsWith(".mpd") ? DASH : path.endsWith(".webm") ? "video/webm"
-                : path.endsWith(".mkv") ? "video/x-matroska" : "video/mp4";
+                : path.endsWith(".mkv") ? "video/x-matroska"
+                : path.endsWith(".mp4") || path.endsWith(".m4v") ? "video/mp4" : "";
         }
         if (!(type.equals(HLS) || type.equals(DASH) || type.equals("video/mp4") || type.equals("video/webm") || type.equals("video/x-matroska")))
             throw new ApiException("INVALID_MEDIA");
@@ -119,6 +137,13 @@ final class MediaRequest {
             canonical.put("key", key).put("kind", kind).put("contentId", id)
                 .put("season", tv ? (Object) s : JSONObject.NULL).put("episode", tv ? (Object) e : JSONObject.NULL)
                 .put("watchUrl", watchUrl).put("title", value.has("title") ? label(value.opt("title"), 200) : "");
+            if (value.has("animeId")) {
+                String animeId = value.opt("animeId") instanceof String ? value.optString("animeId") : "";
+                if (!tv || !animeId.matches("[1-9][0-9]{0,9}") || Long.parseLong(animeId) > Integer.MAX_VALUE) throw new ApiException("INVALID_CONTENT");
+                String audio = value.has("animeAudio") ? value.optString("animeAudio") : "sub";
+                if (!("sub".equals(audio) || "dub".equals(audio))) throw new ApiException("INVALID_CONTENT");
+                canonical.put("animeId", animeId).put("animeAudio", audio);
+            } else if (value.has("animeAudio")) throw new ApiException("INVALID_CONTENT");
             return canonical;
         } catch (Exception invalid) { throw new ApiException("INVALID_CONTENT"); }
     }

@@ -180,8 +180,20 @@ public final class WatchHistory implements AutoCloseable {
             if (!(value.opt("season") instanceof Number) || !(value.opt("episode") instanceof Number)
                     || ((Number) value.opt("season")).doubleValue() != parsed.optInt("season") || ((Number) value.opt("episode")).doubleValue() != parsed.optInt("episode")) return null;
         } else if (value.opt("season") != JSONObject.NULL || value.opt("episode") != JSONObject.NULL) return null;
+        String animeId = animeId(value); if (animeId != null) { put(parsed, "animeId", animeId); put(parsed, "animeAudio", animeAudio(value)); }
         return parsed;
     }
+    /** Optional fixed-provider provenance. It never changes the canonical TMDB key. */
+    static String animeId(JSONObject value) {
+        if (value == null || !"tv".equals(value.optString("kind")) || !value.has("animeId")) return null;
+        Object raw = value.opt("animeId"); String id = raw instanceof String ? (String) raw : "";
+        try { return id.matches("[1-9][0-9]{0,9}") && Long.parseLong(id) <= Integer.MAX_VALUE ? id : null; }
+        catch (Exception invalid) { return null; }
+    }
+    static JSONObject preserveAnime(JSONObject canonical, JSONObject source) {
+        String animeId = animeId(source); if (canonical != null && animeId != null) { put(canonical, "animeId", animeId); put(canonical, "animeAudio", animeAudio(source)); } return canonical;
+    }
+    static String animeAudio(JSONObject value) { return value != null && "dub".equals(value.optString("animeAudio")) ? "dub" : "sub"; }
     private static boolean receiver(String receiver) { return "luma".equals(receiver) || "philips".equals(receiver); }
     private static boolean seconds(Object value) { if (!(value instanceof Number)) return false; double number = ((Number) value).doubleValue(); return Double.isFinite(number) && number >= 0 && number <= MAX_SECONDS; }
     private static boolean timestamp(Object value) {

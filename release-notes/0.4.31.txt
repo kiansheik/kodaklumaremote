@@ -1,0 +1,6 @@
+LUMA Remote 0.4.31
+
+- Keeps Browse on an already loaded HTTPS page when the site falsely classifies Android WebView as inspected.
+- Keeps subtitle buttons stable during receiver status updates.
+- Fetches and normalizes public captions on the phone before confirmed LAN delivery to LUMA Receiver.
+- Removes the redundant Philips status poll that could freeze its remote after one timeout.

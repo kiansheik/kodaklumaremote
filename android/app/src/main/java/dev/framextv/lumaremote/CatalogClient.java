@@ -8,9 +8,13 @@ import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.Proxy;
 import java.net.URI;
+import java.net.URLDecoder;
 import java.net.URLEncoder;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.text.Normalizer;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.HashSet;
 import java.util.Locale;
 import java.util.Set;
@@ -33,6 +37,12 @@ public final class CatalogClient {
         final String base; final JSONObject data;
         Fetched(String base, JSONObject data) { this.base = base; this.data = data; }
     }
+    private static final class Choice {
+        final Fetched fetched; final JSONObject stream; final String url, contentType;
+        Choice(Fetched fetched, JSONObject stream, String url, String contentType) {
+            this.fetched = fetched; this.stream = stream; this.url = url; this.contentType = contentType;
+        }
+    }
     private final Transport transport;
     public CatalogClient() { this(CatalogClient::get); }
     CatalogClient(Transport transport) { this.transport = transport; }
@@ -43,6 +53,7 @@ public final class CatalogClient {
             case "CATALOG_RESPONSE": return "The catalog returned an unsupported response. Try again.";
             case "SOURCE_UNAVAILABLE": return "No playable source is available for this title right now.";
             case "SOURCE_UNSUPPORTED": return "This source needs a playback method that this receiver does not support.";
+            case "SOURCE_MISMATCH": return "A server returned a different title. Try another server.";
             default: return "The catalog could not be reached. Check the phone connection and try again.";
         }
     }
@@ -99,29 +110,34 @@ public final class CatalogClient {
         long deadline = deadline(); String suffix = "?type=" + kind + "&id=" + id + ("tv".equals(kind) ? "&season=" + season + "&episode=" + episode : "");
         try {
             JSONObject meta = detail(read("/api/details?id=" + id + "&type=" + kind, deadline), kind, id);
-            Fetched fetched = readWithBase("/api/stream" + suffix, deadline); JSONObject response = fetched.data;
-            JSONObject stream = response.optJSONObject("detail"); if (stream == null) stream = response;
-            if (!stream.optBoolean("success", false)) throw fail("SOURCE_UNAVAILABLE");
-            JSONArray sources = stream.optJSONArray("sources"); if (sources == null || sources.length() == 0) throw fail("SOURCE_UNAVAILABLE");
-            String selected = null, contentType = null;
-            for (int i = 0; i < Math.min(sources.length(), 50); i++) {
-                JSONObject source = sources.optJSONObject(i); if (source == null || encrypted(source)) continue;
-                String url = sourceUrl(source.opt("url"), fetched.base); if (url == null) continue;
-                // A header-dependent raw source is not silently converted into a new proxy.
-                JSONObject headers = source.optJSONObject("headers");
-                if (headers != null && headers.length() > 0 && !alreadyDelivered(url)) continue;
-                String type = mediaType(source.optString("type", ""), url);
-                if (type != null) { selected = url; contentType = type; break; }
+            String title = meta.getString("title");
+            Fetched fetched = readWithBase("/api/stream" + suffix, deadline);
+            Choice choice = choose(fetched, title); boolean mismatched = choice == null && hasTitleMismatch(fetched, title);
+            String rejectedProvider = provider(fetched.data);
+            if (choice == null && mismatched) {
+                for (String alternate : providers(deadline, rejectedProvider)) {
+                    if (deadline - System.nanoTime() / 1000000L <= 0) break;
+                    try {
+                        Fetched candidate = readWithBase("/api/stream" + suffix + "&provider=" + encode(alternate), deadline);
+                        choice = choose(candidate, title); mismatched |= choice == null && hasTitleMismatch(candidate, title);
+                        if (choice != null) break;
+                    } catch (CatalogException unavailable) { /* Try the next fixed provider within the shared deadline. */ }
+                }
             }
-            if (selected == null) throw fail("SOURCE_UNSUPPORTED");
+            if (choice == null) {
+                JSONObject stream = body(fetched.data); JSONArray sources = stream.optJSONArray("sources");
+                if (!stream.optBoolean("success", false) || sources == null || sources.length() == 0) throw fail("SOURCE_UNAVAILABLE");
+                throw fail(mismatched ? "SOURCE_MISMATCH" : "SOURCE_UNSUPPORTED");
+            }
+            fetched = choice.fetched; JSONObject stream = choice.stream;
             JSONArray tracks = new JSONArray(); Set<String> seen = new HashSet<>(); addTracks(tracks, seen, stream.optJSONArray("subtitles"), fetched.base);
             boolean complete = true;
             try { Fetched subtitles = readWithBase("/api/subtitles" + suffix, deadline); if (subtitles.data.optBoolean("success", false)) addTracks(tracks, seen, subtitles.data.optJSONArray("subtitles"), subtitles.base); else complete = false; }
             catch (CatalogException error) { complete = false; }
-            String title = meta.getString("title"); if ("tv".equals(kind)) title = text(title + " · S" + season + " E" + episode, 200, "Video");
+            if ("tv".equals(kind)) title = text(title + " · S" + season + " E" + episode, 200, "Video");
             JSONObject content = WatchHistory.contentFromCatalog(kind, id, "tv".equals(kind) ? season : null, "tv".equals(kind) ? episode : null, title);
             if (content == null) throw fail("CATALOG_RESPONSE");
-            return object("url", selected, "title", title, "contentType", contentType, "tracks", tracks, "currentTime", 0,
+            return object("url", choice.url, "title", title, "contentType", choice.contentType, "tracks", tracks, "currentTime", 0,
                 "autoSubtitles", false, "content", content, "subtitleCatalogComplete", complete);
         } catch (CatalogException error) { throw error; } catch (Exception error) { throw fail("CATALOG_RESPONSE"); }
     }
@@ -212,6 +228,99 @@ public final class CatalogClient {
     private static boolean alreadyDelivered(String url) {
         try { URI uri = new URI(url); String host = uri.getHost(); return uri.getPath().contains("/proxy") || host.endsWith(".workers.dev"); }
         catch (Exception invalid) { return false; }
+    }
+    private static JSONObject body(JSONObject response) {
+        JSONObject detail = response == null ? null : response.optJSONObject("detail");
+        return detail == null ? response : detail;
+    }
+    private static String provider(JSONObject response) {
+        JSONObject stream = body(response); String value = stream == null ? "" : stream.optString("provider");
+        if (value.isEmpty() && response != null) value = response.optString("provider");
+        return value.toLowerCase(Locale.ROOT);
+    }
+    private static Choice choose(Fetched fetched, String title) {
+        JSONObject stream = body(fetched.data);
+        if (stream == null || !stream.optBoolean("success", false)) return null;
+        JSONArray sources = stream.optJSONArray("sources"); if (sources == null) return null;
+        for (int i = 0; i < Math.min(sources.length(), 50); i++) {
+            JSONObject source = sources.optJSONObject(i); if (source == null || encrypted(source)) continue;
+            String url = sourceUrl(source.opt("url"), fetched.base); if (url == null || !sourceTitleMatches(title, url)) continue;
+            // A header-dependent raw source is not silently converted into a new proxy.
+            JSONObject headers = source.optJSONObject("headers");
+            if (headers != null && headers.length() > 0 && !alreadyDelivered(url)) continue;
+            String type = mediaType(source.optString("type", ""), url);
+            if (type != null) return new Choice(fetched, stream, url, type);
+        }
+        return null;
+    }
+    private static boolean hasTitleMismatch(Fetched fetched, String title) {
+        JSONObject stream = body(fetched.data); JSONArray sources = stream == null ? null : stream.optJSONArray("sources");
+        if (sources == null) return false;
+        for (int i = 0; i < Math.min(sources.length(), 50); i++) {
+            JSONObject source = sources.optJSONObject(i); if (source == null) continue;
+            String url = sourceUrl(source.opt("url"), fetched.base);
+            if (url != null && !sourceTitleMatches(title, url)) return true;
+        }
+        return false;
+    }
+    private List<String> providers(long deadline, String rejected) {
+        List<String> preferred = new ArrayList<>(), rest = new ArrayList<>(); Set<String> seen = new HashSet<>();
+        if (rejected != null) seen.add(rejected);
+        try {
+            JSONArray values = read("/api/providers", deadline).optJSONArray("providers");
+            if (values == null || values.length() > 50) return preferred;
+            for (int i = 0; i < values.length(); i++) {
+                JSONObject value = values.optJSONObject(i); String id = value == null ? "" : value.optString("id").toLowerCase(Locale.ROOT);
+                if (!id.matches("[a-z][a-z0-9_]{0,31}") || !seen.add(id)) continue;
+                ("available".equals(value.optString("status")) ? preferred : rest).add(id);
+            }
+            preferred.addAll(rest);
+            return preferred.size() > 8 ? new ArrayList<>(preferred.subList(0, 8)) : preferred;
+        } catch (CatalogException unavailable) { return preferred; }
+    }
+    /** Most provider URLs are opaque and cannot prove identity. Films365 is a
+     * useful exception: its own canonical path names the movie. A conflicting
+     * path is positive mismatch evidence and must never be cached or opened. */
+    static boolean sourceTitleMatches(String expectedTitle, String sourceUrl) {
+        String exposed = films365Title(sourceUrl);
+        if (exposed == null) return true;
+        String expected = normalizedTitle(expectedTitle), actual = normalizedTitle(exposed);
+        return expected.isEmpty() || actual.isEmpty() || expected.equals(actual);
+    }
+    private static String films365Title(String raw) {
+        for (int depth = 0; depth < 3 && raw != null && raw.length() <= 8192; depth++) try {
+            URI uri = new URI(raw); String host = uri.getHost();
+            if (host != null && (host.equals("films365.org") || host.endsWith(".films365.org"))) {
+                String[] parts = uri.getRawPath().split("/", 6);
+                if (parts.length >= 4 && ("movie".equals(parts[1]) || "tv".equals(parts[1]))) return decode(parts[3]);
+                return null;
+            }
+            raw = query(uri.getRawQuery(), "url");
+        } catch (Exception invalid) { return null; }
+        return null;
+    }
+    private static String query(String raw, String key) {
+        if (raw == null) return null;
+        for (String field : raw.split("&", 64)) {
+            int equals = field.indexOf('=');
+            if (equals > 0 && key.equals(decode(field.substring(0, equals)))) {
+                // Form-style query decoding turns the nested URL's `+` title
+                // separators into spaces. Put those spaces back into URI form
+                // before the next parsing pass so the provider title remains
+                // inspectable instead of failing URI construction.
+                return decode(field.substring(equals + 1)).replace(" ", "%20");
+            }
+        }
+        return null;
+    }
+    private static String decode(String raw) {
+        try { return URLDecoder.decode(raw, StandardCharsets.UTF_8.name()); } catch (Exception invalid) { return ""; }
+    }
+    private static String normalizedTitle(String raw) {
+        String value = raw == null ? "" : raw.replaceFirst("(?i)\\s*[—–-]\\s*framextv\\s*$", "")
+                .replaceFirst("(?i)\\s*·\\s*S[0-9]+\\s*E[0-9]+\\s*$", "");
+        value = Normalizer.normalize(value, Normalizer.Form.NFD).replaceAll("\\p{M}+", "").toLowerCase(Locale.ROOT).replace("&", " and ");
+        return value.replaceAll("[^a-z0-9]+", " ").trim().replaceAll("\\s+", " ");
     }
     private static String mediaType(String type, String url) {
         type = type.toLowerCase(Locale.ROOT).split(";", 2)[0].trim();

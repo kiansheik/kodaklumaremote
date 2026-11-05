@@ -1,0 +1,1 @@
+Backup players can now be cast after they start playing. LUMA observes only short-lived standard media requests from the current Browse page, verifies the selected HLS, DASH, MP4, WebM or MKV source without browser cookies, and carries only safe playback headers to the receiver. Page URLs and unsupported extensionless links are rejected instead of being mistaken for MP4 video.

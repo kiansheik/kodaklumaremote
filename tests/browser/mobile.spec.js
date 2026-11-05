@@ -67,7 +67,25 @@ async function openApp(page, initialSnapshot = null) {
         case 'app.settings.rescan': return receiver.rescanAutoConnect ? { connected: true, name: 'Other LUMA', devices: [{ host: '192.168.1.51', name: 'Other LUMA', port: 8121 }] } : { connection: { connected: false, configured: false }, devices: [{ host: '192.168.1.51', name: 'Other LUMA', port: 8121 }] };
         case 'app.settings.reset': return { connection: { connected: params.scope === 'pairing', configured: false }, settings: { hasReceiver: params.scope === 'pairing', hasPairing: params.scope === 'receiver', autoConnect: true } };
         case 'app.beginHandoff': receiver.activeJob = `job-${++receiver.job}`; return { sourceToken: receiver.activeJob };
+        case 'app.animeAudioAvailability': return window.__animeAudioAvailability || { available: false, audio: params.animeAudio };
         case 'app.chooseCatalog': return window.__catalogMedia || null;
+        case 'app.pickLocalMedia': return window.__localMedia || null;
+        case 'watch.library': return window.__library || {version:1,storageAvailable:true,items:[],offset:0,limit:50,query:'',total:0,hasMore:false};
+        case 'watch.libraryDetails': return window.__libraryDetail || null;
+        case 'watch.libraryDelete': {
+          window.__libraryDeleted = [...(window.__libraryDeleted || []), params];
+          if (params.scope === 'episode' && window.__libraryDetail) {
+            for (const season of window.__libraryDetail.seasons || []) for (const episode of season.episodes || []) {
+              if (season.number === params.season && episode.number === params.episode) episode.progress = null;
+            }
+            if (window.__libraryDetail.latest?.season === params.season && window.__libraryDetail.latest?.episode === params.episode) window.__libraryDetail.latest = null;
+          }
+          if (params.scope === 'title') {
+            if (window.__library?.items) { window.__library.items = window.__library.items.filter(row => row.kind !== params.kind || row.id !== params.id); window.__library.total = window.__library.items.length; }
+            window.__libraryDetail = null;
+          }
+          return {version:1,deleted:true,projectorSyncPending:true,...params};
+        }
         case 'app.cancelHandoff': if (params.sourceToken === receiver.activeJob) receiver.activeJob = null; return { accepted: true };
         case 'app.capture': if (window.__captureMedia) window.LumaApp.onCapturedMedia(window.__captureMedia); return { accepted: true };
         case 'device.discover': return { devices: [{ host: '192.168.1.50', name: 'Test LUMA', port: 8121 }] };
@@ -412,6 +430,135 @@ test('main remote exposes back 30, scrub and a receiver-driven next episode cont
   expect(await page.evaluate(() => window.__calls.some(call => call.method === 'app.chooseCatalog'))).toBe(false);
 });
 
+test('anime Library details keep provenance locally but send only the native details schema', async ({ page }) => {
+  await openApp(page, {connection:{connected:true,configured:true},settings:{hasReceiver:true,hasPairing:true}});
+  await page.evaluate(() => {
+    window.__library = {version:1,storageAvailable:true,offset:0,limit:50,query:'',total:1,hasMore:false,items:[{
+      kind:'tv',id:'321518',title:"The World's Strongest Witch",animeId:'211778',animeAudio:'dub',
+      latest:{season:1,episode:1,positionSeconds:86,durationSeconds:1417,resumeSeconds:86,completed:false,lastReceiver:'luma'},
+    }]};
+    window.__libraryDetail = {version:1,storageAvailable:true,kind:'tv',id:'321518',title:"The World's Strongest Witch",
+      overview:'',year:'2026',metadataAvailable:true,animeId:'211778',animeAudio:'dub',movieProgress:null,
+      latest:{season:1,episode:1,positionSeconds:86,durationSeconds:1417,resumeSeconds:86,completed:false,lastReceiver:'luma'},
+      nextEpisode:{kind:'tv',id:'321518',season:1,episode:2},seasons:[{number:1,name:'Season 1',episodes:[
+        {number:1,title:'I Tried Using the Internet!',progress:{positionSeconds:86,durationSeconds:1417,resumeSeconds:86,completed:false,lastReceiver:'luma'}},
+        {number:2,title:'I Tried Becoming an Adventurer!',progress:null},
+      ]}]};
+  });
+  await page.getByRole('button', {name:'Library',exact:true}).click();
+  await page.getByRole('button', {name:/World's Strongest Witch/}).click();
+  await expect(page.getByRole('button', {name:/S1 E1.*I Tried Using the Internet/})).toBeVisible();
+  const request = await page.evaluate(() => window.__calls.find(call => call.method === 'watch.libraryDetails'));
+  expect(request.params).toEqual({kind:'tv',id:'321518'});
+  await page.getByRole('button', {name:'Open series page',exact:true}).click();
+  await expect.poll(() => page.evaluate(() => window.__calls.filter(call => call.method === 'app.browse').at(-1)?.params)).toEqual({url:'https://framextv.cc/anime/211778'});
+});
+
+test('subtitle menu shows only a verified anime audio alternative and swaps editions at the current position', async ({ page }) => {
+  const content = {key:'framextv:tv:321518:1:1',kind:'tv',contentId:'321518',season:1,episode:1,watchUrl:'https://framextv.cc/watch/321518/1/1',title:"The World's Strongest Witch · S1 E1",animeId:'211778',animeAudio:'sub'};
+  const snapshot = serviceSnapshot();
+  snapshot.playback = {...snapshot.playback,sourceUrl:'https://anime.example/witch-sub.m3u8',content,positionSeconds:86,durationSeconds:1417};
+  snapshot.remote = {...snapshot.remote,media:{url:snapshot.playback.sourceUrl,contentType:media.contentType,title:content.title,content},tracks:[],selectedIndex:null,subtitlesEnabled:false};
+  await openApp(page, snapshot);
+  await page.evaluate(content => {
+    window.__animeAudioAvailability = {available:true,audio:'dub'};
+    window.__catalogMedia = {url:'https://anime.example/witch-dub.m3u8',contentType:'application/vnd.apple.mpegurl',title:content.title,sourceToken:'anime-dub',tracks:[],content};
+    window.__catalogMedia.content = {...content,animeAudio:'dub'};
+  }, content);
+  await page.getByRole('button', {name:'Subtitles',exact:true}).click();
+  await expect(page.locator('#anime-audio')).toBeVisible();
+  await expect(page.getByRole('button', {name:'Sub',exact:true})).toHaveAttribute('aria-pressed','true');
+  const probe = await page.evaluate(() => window.__calls.find(call => call.method === 'app.animeAudioAvailability'));
+  expect(probe.params).toEqual({kind:'tv',id:'321518',season:1,episode:1,animeId:'211778',animeAudio:'dub'});
+
+  await page.getByRole('button', {name:'Dub',exact:true}).click();
+  await expect(page.locator('#message')).toHaveText('Video is playing. Choose a language in Subtitles.');
+  await expect.poll(() => page.evaluate(() => window.__receiver.sourceUrl)).toBe('https://anime.example/witch-dub.m3u8');
+  const calls = await page.evaluate(() => window.__calls);
+  expect(calls.find(call => call.method === 'app.chooseCatalog').params).toEqual({kind:'tv',id:'321518',season:1,episode:1,animeId:'211778',animeAudio:'dub',resume:false});
+  expect(calls.filter(call => call.method === 'receiver.seek').at(-1).params).toEqual({position:86,expectedSourceUrl:'https://anime.example/witch-dub.m3u8',expectedContentKey:content.key});
+  await page.getByRole('button', {name:'Subtitles',exact:true}).click();
+  await expect(page.getByRole('button', {name:'Dub',exact:true})).toHaveAttribute('aria-pressed','true');
+});
+
+test('subtitle menu hides anime audio controls when the alternate edition is unavailable', async ({ page }) => {
+  const content = {key:'framextv:tv:321518:1:2',kind:'tv',contentId:'321518',season:1,episode:2,watchUrl:'https://framextv.cc/watch/321518/1/2',title:"The World's Strongest Witch · S1 E2",animeId:'211778',animeAudio:'sub'};
+  const snapshot = serviceSnapshot();
+  snapshot.playback = {...snapshot.playback,sourceUrl:'https://anime.example/witch-2-sub.m3u8',content,positionSeconds:40,durationSeconds:1417};
+  snapshot.remote = {...snapshot.remote,media:{url:snapshot.playback.sourceUrl,contentType:media.contentType,title:content.title,content},tracks:[],selectedIndex:null,subtitlesEnabled:false};
+  await openApp(page, snapshot);
+  await page.evaluate(() => { window.__animeAudioAvailability = {available:false,audio:'dub'}; });
+  await page.getByRole('button', {name:'Subtitles',exact:true}).click();
+  await expect.poll(() => page.evaluate(() => window.__calls.filter(call => call.method === 'app.animeAudioAvailability').length)).toBe(1);
+  await expect(page.locator('#anime-audio')).toBeHidden();
+  expect(await page.evaluate(() => window.__calls.some(call => call.method === 'app.chooseCatalog'))).toBe(false);
+});
+
+test('current series title opens its exact Library episode and long-press deletes episode or series on both stores', async ({ page }) => {
+  const current = {key:'framextv:tv:321518:1:2',kind:'tv',contentId:'321518',season:1,episode:2,watchUrl:'https://framextv.cc/watch/321518/1/2',title:"The World's Strongest Witch · S1 E2",animeId:'211778',animeAudio:'sub'};
+  await openApp(page, {
+    connection:{connected:true,configured:true,host:'192.168.1.50',name:'Test LUMA'},settings:{hasReceiver:true,hasPairing:true,autoConnect:true},
+    playback:{active:true,playing:true,sourceUrl:'https://media.example.org/witch-2.m3u8',content:current,positionSeconds:40,durationSeconds:1400,canSeek:true},
+    remote:{media:{url:'https://media.example.org/witch-2.m3u8',title:current.title,content:current},tracks:[],catalog:[],selectedIndex:null,subtitlesEnabled:false},
+  });
+  await page.evaluate(() => {
+    const progress = {positionSeconds:40,durationSeconds:1400,resumeSeconds:40,completed:false,lastReceiver:'luma'};
+    window.__library = {version:1,storageAvailable:true,offset:0,limit:50,query:'',total:1,hasMore:false,items:[{kind:'tv',id:'321518',title:"The World's Strongest Witch",animeId:'211778',animeAudio:'sub',latest:{...progress,season:1,episode:2}}]};
+    window.__libraryDetail = {version:1,storageAvailable:true,kind:'tv',id:'321518',title:"The World's Strongest Witch",overview:'',year:'2026',metadataAvailable:true,animeId:'211778',animeAudio:'sub',movieProgress:null,latest:{...progress,season:1,episode:2},nextEpisode:null,seasons:[{number:1,name:'Season 1',episodes:[{number:1,title:'One',progress:null},{number:2,title:'Two',progress}]}]};
+  });
+  await page.getByRole('button', {name:/Open .*World's Strongest Witch.* in Library/}).click();
+  await expect(page.locator('#sheet-title')).toHaveText('Library');
+  await expect(page.getByRole('button', {name:/S1 E2.*Two/})).toHaveAttribute('aria-pressed','true');
+
+  await page.getByRole('button', {name:/S1 E2.*Two/}).dispatchEvent('contextmenu');
+  await expect(page.getByRole('button', {name:'Delete S1 E2'})).toBeVisible();
+  await page.getByRole('button', {name:'Delete S1 E2'}).click();
+  await expect(page.locator('#sheet-message')).toContainText('Saved episode deleted');
+  await page.locator('#close-sheet').click();
+  await page.getByRole('button', {name:'Library',exact:true}).click();
+
+  const row = page.locator('#history-list button').filter({hasText:"The World's Strongest Witch"});
+  await row.dispatchEvent('contextmenu');
+  await expect(page.getByRole('button', {name:/Delete series.*World's Strongest Witch/})).toBeVisible();
+  await page.getByRole('button', {name:/Delete series.*World's Strongest Witch/}).click();
+  await expect(page.locator('#history-status')).toContainText('Movies and series will appear here');
+  expect(await page.evaluate(() => window.__libraryDeleted)).toEqual([
+    {scope:'episode',kind:'tv',id:'321518',season:1,episode:2},
+    {scope:'title',kind:'tv',id:'321518'},
+  ]);
+});
+
+test('current and selected episodes open verified site pages so another server can be cast without stopping playback', async ({ page }) => {
+  const current = {key:'framextv:tv:84:2:1',kind:'tv',contentId:'84',season:2,episode:1,watchUrl:'https://framextv.cc/watch/84/2/1',title:'Household series · S2 E1'};
+  const source = 'https://media.example.org/household-current.m3u8';
+  await openApp(page, {
+    connection:{connected:true,configured:true,host:'192.168.1.50',name:'Test LUMA'},settings:{hasReceiver:true,hasPairing:true,autoConnect:true},
+    playback:{active:true,playing:true,sourceUrl:source,content:current,positionSeconds:40,durationSeconds:1400,canSeek:true},
+    remote:{media:{url:source,title:current.title,content:current},tracks:[],catalog:[],selectedIndex:null,subtitlesEnabled:false},
+  });
+  await page.evaluate(() => {
+    const progress = {positionSeconds:40,durationSeconds:1400,resumeSeconds:40,completed:false,lastReceiver:'luma'};
+    window.__libraryDetail = {version:1,storageAvailable:true,kind:'tv',id:'84',title:'Household series',overview:'',year:'2026',metadataAvailable:true,movieProgress:null,latest:{...progress,season:2,episode:1},nextEpisode:null,seasons:[
+      {number:1,name:'Season 1',episodes:[{number:1,title:'Yesterday',progress:null}]},
+      {number:2,name:'Season 2',episodes:[{number:1,title:'Today',progress}]},
+    ]};
+  });
+
+  await page.getByRole('button', {name:'Change stream',exact:true}).click();
+  await expect.poll(() => page.evaluate(() => window.__calls.filter(call => call.method === 'app.browse').at(-1)?.params)).toEqual({url:'https://framextv.cc/watch/84/2/1'});
+  expect(await page.evaluate(() => window.__calls.some(call => ['receiver.stop','receiver.open'].includes(call.method)))).toBe(false);
+
+  await page.getByRole('button', {name:/Open Household series.* in Library/}).click();
+  await page.getByLabel('Season').selectOption('1');
+  await page.getByRole('button', {name:/S1 E1.*Yesterday/}).click();
+  await page.getByRole('button', {name:'Open S1 E1 page',exact:true}).click();
+  await expect.poll(() => page.evaluate(() => window.__calls.filter(call => call.method === 'app.browse').at(-1)?.params)).toEqual({url:'https://framextv.cc/watch/84/1/1'});
+
+  await page.getByRole('button', {name:/Open Household series.* in Library/}).click();
+  await page.getByRole('button', {name:'Open series page',exact:true}).click();
+  await expect.poll(() => page.evaluate(() => window.__calls.filter(call => call.method === 'app.browse').at(-1)?.params)).toEqual({url:'https://framextv.cc/tv/84?season=2'});
+});
+
 test('a finished episode stays on the remote with Next, and auto-play is a receiver setting', async ({ page }) => {
   const content = {key:'framextv:tv:284833:1:5',kind:'tv',contentId:'284833',season:1,episode:5,watchUrl:'https://framextv.cc/watch/284833/1/5',title:'Household · S1 E5'};
   await openApp(page, {
@@ -735,6 +882,51 @@ test('capturing before setup waits for the receiver and pairing, then starts onc
   expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'luma.launchReceiver').length)).toBe(0);
 });
 
+test('a local file selected on the phone uses the authenticated cast flow with subtitles', async ({ page }) => {
+  await openApp(page, serviceSnapshot());
+  const local = {
+    url: `http://192.168.1.20:54321/local/${'a'.repeat(64)}/video`,
+    contentType: 'video/x-matroska',
+    title: 'Local household movie.mkv',
+    mediaId: `local:${'b'.repeat(40)}`,
+    sourceToken: 'local-capture',
+    tracks: [{
+      url: `http://192.168.1.20:54321/local/${'a'.repeat(64)}/subtitle/0`,
+      language: 'pt-BR',
+      label: 'Portuguese (Brazil)',
+    }],
+  };
+  await page.evaluate(value => { window.__localMedia = value; }, local);
+  await page.getByRole('tab', { name: 'Browse', exact: true }).click();
+  await page.getByRole('button', { name: 'Play local file', exact: true }).click();
+  await expect(page.locator('#message')).toHaveText('Video is playing. Choose a language in Subtitles.');
+  const calls = await page.evaluate(() => window.__calls);
+  expect(calls.find(call => call.method === 'app.pickLocalMedia').params).toEqual({});
+  expect(calls.find(call => call.method === 'app.beginHandoff').params.sourceToken).toBe('local-capture');
+  expect(calls.find(call => call.method === 'receiver.open').params.media).toMatchObject({
+    url: local.url,
+    contentType: 'video/x-matroska',
+    title: local.title,
+    mediaId: local.mediaId,
+  });
+  expect(calls.find(call => call.method === 'app.handoffReady').params.remote.media.mediaId).toBe(local.mediaId);
+  expect(calls.find(call => call.method === 'app.handoffReady').params.remote.catalog).toEqual([
+    { url: local.tracks[0].url, language: 'pt-BR', label: 'Portuguese (Brazil)', index: null },
+  ]);
+  await page.getByLabel('Playback position').evaluate(element => {
+    element.value = '30'; element.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  await expect.poll(() => page.evaluate(() => window.__calls.find(call => call.method === 'preview.frame')?.params)).toEqual({
+    expectedSourceUrl: local.url, contentKey: local.mediaId, position: 30,
+  });
+  await page.getByRole('button', { name: 'Subtitles', exact: true }).click();
+  await page.getByRole('button', { name: 'Portuguese (Brazil)', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Portuguese (Brazil)', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  const subtitleCalls = await page.evaluate(() => window.__calls);
+  expect(subtitleCalls.filter(call => ['receiver.prepareSubtitle', 'receiver.subtitleDelivery'].includes(call.method))).toEqual([]);
+  expect(subtitleCalls.find(call => call.method === 'receiver.addSubtitle').params.preparedId).toBeUndefined();
+});
+
 test('disconnect requires pairing again and Browse resumes unless the address form explicitly navigates', async ({ page }) => {
   await openApp(page);
   await setup(page);
@@ -908,6 +1100,34 @@ function serviceSnapshot() {
   };
 }
 
+test('local playback shows separate RAM and disk progress and clears stale cache status', async ({ page }) => {
+  await page.setViewportSize({ width: 360, height: 640 });
+  const snapshot = serviceSnapshot();
+  Object.assign(snapshot.playback, {
+    mediaId: 'local:0123456789abcdef0123456789abcdef',
+    bufferAheadSeconds: 18.5,
+    diskCacheState: 'filling', diskCacheStorage: 'internal',
+    diskCachedBytes: 128 * 1024 * 1024, diskCacheTargetBytes: 512 * 1024 * 1024,
+    diskCacheAheadSeconds: 300.5,
+  });
+  await openApp(page, snapshot);
+  await expect(page.locator('#buffer-status')).toHaveText('RAM 18s · Disk saving 128 MiB / 512 MiB · 5:00 ahead');
+  await expect(page.locator('#buffer-status')).toBeVisible();
+  await layout(page);
+
+  await page.evaluate(() => window.LumaApp.onConnectionState({ playback: {
+    active: false, playing: false, diskCacheState: 'clearing', diskCacheStorage: 'internal',
+  } }));
+  await expect(page.locator('#playback-status')).toHaveText('No video playing.');
+  await expect(page.locator('#buffer-status')).toHaveText('Disk clearing');
+
+  await page.evaluate(() => window.LumaApp.onConnectionState({ playback: {
+    active: false, playing: false, diskCacheState: 'off', diskCacheStorage: 'internal',
+  } }));
+  await expect(page.locator('#buffer-status')).toBeHidden();
+  await expect(page.locator('#buffer-status')).toHaveText('');
+});
+
 test('service restoration opens the existing remote and language aliases without reconnecting, credentials or replay', async ({ page }) => {
   await page.setViewportSize({ width: 360, height: 640 });
   const snapshot = serviceSnapshot();
@@ -934,6 +1154,21 @@ test('service restoration opens the existing remote and language aliases without
   await expect(page.getByRole('button', { name: 'Portuguese (Brazil)', exact: true })).toHaveAttribute('aria-pressed', 'true');
   expect(await page.evaluate(() => window.__calls.some(call => ['device.connect', 'receiver.pairBegin', 'receiver.pairComplete', 'receiver.connect', 'luma.launchReceiver', 'receiver.open', 'app.beginHandoff'].includes(call.method)))).toBe(false);
   expect(await page.locator('body').innerText()).not.toContain('private-source-token');
+});
+
+test('duplicate LUMA service snapshots preserve subtitle buttons and one tap sends one command', async ({ page }) => {
+  const snapshot = serviceSnapshot();
+  await openApp(page, snapshot);
+  await page.getByRole('button', { name: 'Subtitles', exact: true }).click();
+  await page.evaluate(value => {
+    window.__stableSubtitleButton = [...document.querySelectorAll('#subtitle-list button')].find(button => button.textContent === 'English');
+    for (let index = 0; index < 5; index++) window.LumaApp.onConnectionState(value);
+  }, snapshot);
+  expect(await page.evaluate(() => window.__stableSubtitleButton?.isConnected
+    && window.__stableSubtitleButton === [...document.querySelectorAll('#subtitle-list button')].find(button => button.textContent === 'English'))).toBe(true);
+  await page.getByRole('button', { name: 'English', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'English', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'receiver.setSubtitle').length)).toBe(1);
 });
 
 test('resume events preserve text and browser drafts and cannot replace an in-flight captured handoff', async ({ page }) => {
@@ -1549,15 +1784,16 @@ test('a subtitle file LUMA Receiver cannot read is reported and another language
   expect(calls.filter(call => call.method === 'receiver.open')).toHaveLength(1);
 });
 
-test('LUMA subtitles go straight to the receiver as catalog URLs with no phone download or delivery step', async ({ page }) => {
+test('public LUMA subtitles are normalized on the phone and confirmed delivered before success', async ({ page }) => {
   await openApp(page); await setup(page); await cast(page);
   await page.getByRole('button', { name: 'Subtitles', exact: true }).click();
   await page.getByRole('button', { name: 'Portuguese (Brazil)', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Portuguese (Brazil)', exact: true })).toHaveAttribute('aria-pressed', 'true');
   const calls = await page.evaluate(() => window.__calls);
-  expect(calls.filter(call => ['receiver.prepareSubtitle', 'receiver.subtitleDelivery'].includes(call.method))).toEqual([]);
+  expect(calls.filter(call => call.method === 'receiver.prepareSubtitle')).toHaveLength(1);
+  expect(calls.filter(call => call.method === 'receiver.subtitleDelivery').length).toBeGreaterThanOrEqual(1);
   const add = calls.find(call => call.method === 'receiver.addSubtitle');
   expect(add.params.track.url).toBe(media.tracks.find(track => track.language === 'pt-BR' || track.language === 'pt-br')?.url ?? add.params.track.url);
-  expect(add.params.preparedId).toBeUndefined();
+  expect(add.params.preparedId).toMatch(/^prepared_[A-Za-z0-9_-]{7,}$/u);
   expect(calls.filter(call => call.method === 'receiver.open')).toHaveLength(1);
 });

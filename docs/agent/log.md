@@ -1,5 +1,64 @@
 # Work log
 
+- 2026-10-24 manual stream-source pages and 0.4.28 candidate: Remote can open
+  the exact current frameXTV watch page without stopping projector playback;
+  Library can open the selected player or verified movie/series/anime title
+  page. The existing built-in browser retains the ordinary site UI, so another
+  server can be chosen there and replaces playback only after Cast. Node
+  253/253, complete phone UI 100/100, focused flow 2/2, site and Android
+  debug/release/lint-vital builds pass. Signed phone 0.4.28/code38 and receiver
+  0.3.7/code21 artifacts are prepared locally; neither was installed or
+  published. [Handoff](session-handoffs/2026-10-24-manual-stream-source-pages.md).
+
+- 2026-10-24 Home-input diagnostics and connected-phone check: a physical
+  startup failed with receiver/native ports refused until manual receiver open.
+  The reopened projector reports installed 0.3.6/code 20 and an attached UI.
+  The USB-connected Samsung reports phone 0.4.27/code 37, a foreground
+  ConnectionService, connected=true and a verified active cast handoff. Prepared
+  signed receiver 0.3.7/code 21 now persists discrete OK presses and Home-setting
+  attempts, confirms OK on screen, and exposes counters/timestamps plus current
+  Home/UI state in public `info.startup`. Unit/debug/release/signature checks pass;
+  installation was deferred to avoid interrupting the active session.
+  [Handoff](session-handoffs/2026-10-24-home-input-diagnostics-phone-state.md).
+
+- 2026-10-24 receiver as projector Home: registered receiver 0.3.6/code 20 as
+  an explicit Android Home candidate without removing its ordinary/TV launcher
+  entries. Idle OK opens Home-app settings when setup is pending; Menu always
+  reopens the reversible setting. Existing boot/service startup remains in
+  place for early port 4191. Node 253/253, receiver unit/debug assembly, signed
+  release assembly/lint-vital and packaged-manifest inspection pass. Full debug
+  lint retains 14 unrelated pre-existing min-SDK findings. Built but not
+  installed or published. [Handoff](session-handoffs/2026-10-24-receiver-home-launcher.md).
+
+- 2026-10-23 anime Sub/Dub UI and 0.4.27 candidate: the subtitle sheet now
+  probes the exact episode's opposite anime edition without interrupting current
+  playback and shows a Sub/Dub selector only after a verified source exists.
+  Switching routes through the guarded catalog handoff, keeps the observed
+  position and replaces the subtitle catalog with the selected edition's set.
+  Node 252/252, browser 169/169 and emulator native groups 11/11, 7/7, 9/9,
+  5/5 and 4/4 pass; signed phone 0.4.27/code37 and receiver 0.3.5/code19 APKs
+  build but were not installed or published. Full debug lint retains six
+  independent API-24 findings. [Handoff](session-handoffs/2026-10-23-anime-audio-toggle.md).
+
+- 2026-10-23 self-resolving dual-device install: diagnosed two Bonjour ADB
+  transports for the same Samsung causing bare `adb install` to fail before the
+  projector step. The Make target now groups transports by probed hardware
+  serial, prefers the existing LUMA Remote phone, excludes emulators/projectors
+  and uses explicit `adb -s`; genuine multi-phone ambiguity still fails closed.
+  The live read-only resolver selected one phone from both current aliases.
+  Focused tests pass 5/5 and the full Node suite passes 252/252; no install ran.
+  [Handoff](session-handoffs/2026-10-23-install-latest-apks-device-resolution.md).
+
+- 2026-10-23 Library deletion and wrong-server guard: phone/receiver Library
+  schema v2 adds synchronized episode/title tombstones, long-press delete actions
+  and a current-title shortcut into the exact saved episode. Live state showed a
+  `Buddy` selection playing a Films365 path named `Buddy Games`; the native
+  resolver now rejects that positive title conflict, evicts matching cached
+  media and tries another declared provider within the existing deadline. Opaque
+  URLs remain accepted rather than guessed. Browser 167/167 and emulator native
+  groups 10/10, 7/7, 9/9, 5/5 and 4/4 pass; physical install/recast is pending.
+  [Handoff](session-handoffs/2026-10-23-library-delete-provider-identity.md).
+
 - 2026-10-23 Philips IP-only launcher autofill: corrected the speed-dial handoff
   after the real page rejected a full direct receiver URL as JSON. The TV page
   now starts with a focused blank field and accepts only a private IPv4 address;
@@ -1135,3 +1194,155 @@
   0.4.23/code33 is published but not physically installed because no phone ADB
   endpoint was available. A real projector power cycle and phone Library cast
   after accepting the in-app update remain.
+- 2026-10-23 anime Library/Next repair prepared as 0.4.24 / receiver 0.3.4:
+  live receiver state proved the anime cast lacked canonical content metadata.
+  Trusted AniList routes now map through fixed AniZip data to TMDB Library keys;
+  anime provenance plus the actual iframe-selected sub/dub edition survives
+  history, replay and both phone/receiver Next paths. Anime Next uses the anime
+  stream API, not the ordinary TV resolver, and future episodes are suppressed.
+  Node 247/247, browser 164/164 (including focused capture 5/5), receiver unit,
+  compile, and emulator catalog/history/library groups 7/7 each pass. Prepared
+  but not published or installed; phone wireless ADB was unavailable and active
+  projector playback was left undisturbed.
+- 2026-10-23 dual-device install target: added `make install-latest-apks`, then
+  removed an unwanted generated-manifest prerequisite after the first real use
+  failed before installation. The corrected target is exactly the two direct
+  operations requested: `adb install -r` on the phone Gradle release output,
+  then receiver dev deployment of the projector Gradle release output. Both APKs
+  exist; Make dry run and diff checks pass. No device install was run after the
+  correction.
+- 2026-10-23 stale-output diagnosis: physical reads after the user's install
+  showed phone 0.4.23/code33 and receiver 0.3.3/code17. `aapt2` proved the two
+  Gradle output APKs themselves were those old versions despite source declaring
+  0.4.24/0.3.4; receiver status consequently still had empty title/content and
+  no Next. The target now rebuilds both signed APKs directly from current source
+  before installing, without using release manifests.
+- 2026-10-23 anime multi-title audit and 0.4.25 correction: the failing receiver
+  state claimed *The World's Strongest Witch* S1E2 while the actual ordinary-TV
+  source named *Arifureta*. Audits of *World's Strongest Witch*, *Frieren*,
+  *Solo Leveling* and *Demon Slayer* showed the outer-route/iframe identity race,
+  distinct sub/dub responses and separate AniList IDs for later seasons. Capture
+  now retains iframe AniList/episode/audio identity; native resolution verifies
+  canonical mapping, related seasons and response identity, and cache keys split
+  anime season/audio editions from ordinary TV. Library details now uses its
+  exact native schema. Focused browser 63/63, full browser 166/166 and emulator
+  native groups 9/9, 7/7, 7/7, 5/5 and 4/4 pass. The signed phone 0.4.25/code35
+  APK is built and verified; Samsung
+  wireless ADB advertises but refuses connection, so physical install and anime
+  playback acceptance remain pending.
+- 2026-10-30 local media/browser remote: added phone-selected private-LAN
+  byte-range streaming, laptop direct or ffmpeg compatibility streaming,
+  external sidecars, a localhost browser controller and receiver-owned opaque
+  local media identity. Paired phones can attach to laptop-started playback,
+  control/seek it and reuse laptop-generated receiver-cached thumbnails. Phone
+  compilation, receiver unit tests, Node 259/259, mobile browser 62/62, local UI
+  smoke and site build pass. Nothing was installed or physically played.
+- 2026-10-30 receiver buffer follow-up: replaced the hard-before-time 24 MiB
+  behavior with an 8-20 s time-prioritized window, 750 ms initial start and 2 s
+  rebuffer threshold. Laptop compatibility HLS now has forced two-second
+  keyframes/segments. Receiver unit tests and focused Node tests pass; a real
+  ffmpeg smoke produced independent 2/2/2/1 s segments. No physical install or
+  playback acceptance is claimed.
+- 2026-10-30 local subtitle live hotfix: stopped the pending release before any
+  commit/publication after the user reproduced laptop selection reset and empty
+  post-cast phone tracks. Laptop polling now preserves a dirty choice until Apply;
+  phones poll receiver-owned tracks for `local:` sessions. Focused browser 1/1,
+  local Node 6/6 and phone/AndroidTest compilation pass. The existing phone
+  0.4.28/code38 prevented installing the reconciled code34 build, so signed
+  0.4.29/code39 was installed with data preserved; receiver 0.3.7/code21 was
+  deployed and confirmed. Remaining tests and publication were paused for the
+  user's immediate live movie check.
+- 2026-10-30 exact Never After Dark local-media repair: ffprobe found a
+  6292.832-second H.264/E-AC-3 MKV with full/forced/SDH English SubRip tracks.
+  Auto now direct-streams H.264 AC-3/E-AC-3 sources and extracts supported
+  embedded text subtitles, preferring the full track. Focused Node passes 7/7;
+  real English extraction produced 505 cues. The restarted live stream reports
+  fixed 6292.832 duration, seekable Matroska and full English external index512
+  enabled. User confirmation of arbitrary seek and visible text remains.
+- 2026-10-30 exact-file audio repair: the physical no-sound result matched the
+  source's E-AC-3-only audio. Direct playback now adds a same-origin seekable AAC
+  companion without transcoding the H.264 video; receiver 0.3.8/code22 merges
+  and explicitly selects it. The live session reports ready/playing,
+  `audio/mp4a-latm` stereo, fixed 6292.832 duration, seek enabled and full English
+  external index512 enabled. The exact cached AAC independently probes at 48 kHz,
+  two channels and matching duration. Future launches reuse that cache and make
+  three random-access thumbnails concurrently in whole-timeline-first order.
+  Focused Node passes 9/9. Physical audibility remains user acceptance; feeds
+  remain unpublished and phone stays on installed 0.4.29/code39.
+- 2026-10-31 full local-movie acceptance and disk prefetch: the user watched the
+  entire 6292.832-second *Never After Dark* file and confirmed AAC sound,
+  subtitles and seeking; buffering was substantially better but still bounded
+  by the minimum RAM window. The laptop server was stopped and loopback refused.
+  Receiver 0.3.11/code25 now keeps RAM at 8–20 seconds while a playback-priority,
+  current-title disk worker caches whole local progressive files when they fit
+  or maintains a rolling ahead window otherwise, including while paused. It
+  clears on source/Stop/startup, reserves free storage, and reports progress.
+  Installed status found only internal storage: 1,568,206,848 bytes usable and a
+  1,031,335,936-byte safe cache; no mounted app-writable SD surface was exposed.
+  Standard mounted external cache surfaces will be preferred automatically.
+  Receiver unit/debug passes 29 tests and focused laptop Node passes 9/9. No
+  post-install local stream was started; disk behavior awaits physical playback.
+- 2026-10-31 buffer/DNS/subtitle isolation: phone and laptop remotes now expose
+  separate RAM and actual contiguous disk-ahead progress, including cache
+  lifecycle states without stale post-Stop text. Wi-Fi probes proved selective
+  ISP DNS suppression of the FramexTV `.cc`/`.xyz` names: public DNS works and
+  direct same-Wi-Fi certificate-verified HTTPS succeeds, ruling out an IP/WAF,
+  TLS or routing block. Today's upstream English files match the reported new
+  episode after its intentional recap, so the exact prior mismatch remains
+  unreproduced with the receiver offline. Concrete stale paths were removed:
+  content/header-scoped caption files and canonical resolved-source catalogs now
+  expire after six hours, and slow Next completion is generation/source/content
+  guarded atomically. Signed phone 0.4.30/code40 and receiver 0.3.12/code26 build
+  and verify; receiver unit 33/33, Node 262/262 and browser 174/174 pass. Phone
+  AndroidTest compiles but no runtime device test ran. Phone ADB refused and the
+  receiver endpoint was offline, so installation and public feeds are unchanged.
+- 2026-10-31 live Browse/Philips repair: after public DNS restored name
+  resolution, HTTPS probes returned 200 but clean Chromium reproduced the phone's
+  `net::ERR_FAILED`: the site's shipped anti-debug bundle aborted loaded requests
+  and navigated the top frame to `about:blank`. Phone 0.4.31 narrowly blocks that
+  transition only after an HTTPS page is loaded. Redundant Philips status polling
+  is removed, equal receiver snapshots retain subtitle button nodes, and public
+  captions again use phone normalization plus confirmed LAN delivery; exact
+  phone-hosted local captions remain direct. Signed phone 0.4.31/code41 and
+  receiver 0.3.12/code26 match the release certificate; focused handoff 82/82,
+  browser 4/4 and site build pass. Receiver 0.3.12 is installed and live on the
+  projector. Samsung wireless ADB was subsequently re-paired and signed phone
+  0.4.31/code41 installed with data preserved; package-manager and foreground UI
+  checks pass. Exact Browse and subtitle behavior remain physical acceptance.
+  A broader Node run hung in `luma-controller` teardown and was stopped after
+  four minutes. The public feeds remain unchanged.
+- 2026-10-31 physical iframe-error correction: installed phone 0.4.31 kept the
+  outer watch page but its same-origin player iframe showed `net::ERR_FAILED`.
+  Android ordinary resolution still failed for the previously suppressed apex
+  names despite validated Google DNS, while Google DoH returned records,
+  DoH-forced HTTPS passed TLS, and a fresh `www` name resolved. A DNS-cache-clear
+  broadcast immediately made phone root/embed requests return HTTP 200; one
+  unchanged page reload restored the real player at its saved position and it
+  remained visible after 30 seconds. This causally identifies stale Android
+  negative DNS cache as the live incident, not IP/WAF/TLS/codec failure. Fresh
+  backend probes separately found later-episode `no_streams` and a provider 404
+  without CORS, while automation still reproduces anti-debug blanking; neither
+  erased the recovered physical cached player. No source code changed.
+- 2026-10-31 Backup cast assessment: the deployed Backup branch constructs a
+  cross-origin VidUP web iframe and exposes playback event timing but no media
+  descriptor. A normal mobile-profile run loaded HTML and script/ad-related
+  assets yet no manifest, media file, segment, Cast control or source-bearing
+  message; desktop returned 403/frame blocking. LUMA already supports direct
+  HLS/DASH/MP4/WebM/MKV and correctly cannot enter the cross-origin frame. The
+  observed format complaint is therefore an HTML wrapper/misclassification, not
+  a receiver codec gap. Safe options are direct-server failover, explicit
+  web-only UI and rejecting unknown extensionless URLs; direct Backup cast awaits
+  an authorized media contract. No source code changed.
+- 2026-10-31 live Backup HLS cast: with the user's explicit Cast-time
+  authorization, phone 0.4.32 adds a generation-scoped in-memory media-request
+  observer and bounded stateless verifier behind the existing same-origin capture.
+  It retains no bodies/cookies/auth, rejects main-frame/static/segment candidates,
+  permits only safe Referer/Origin/User-Agent playback headers end to end and no
+  longer lets the receiver infer MP4 from an unknown extensionless page URL.
+  The signed phone 0.4.32/code42 and receiver 0.3.13/code27 builds passed release
+  lint/assembly; focused handoff passed 83/83 and focused receiver media parsing
+  passed. Both APKs were installed. The current Avatar S1E11 Backup page logged
+  verified observed HLS and completed captured -> waiting -> opening -> remote ->
+  ready; authenticated projector state confirmed active/ready canonical episode
+  playback with a 1360.818-second duration, advancing buffer and no error. Public
+  feeds remain unchanged. [Handoff](session-handoffs/2026-10-31-live-backup-hls-cast.md).

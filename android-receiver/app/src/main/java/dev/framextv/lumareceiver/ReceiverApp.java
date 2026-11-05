@@ -4,10 +4,13 @@ import android.app.Application;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.ResolveInfo;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Base64;
+
+import org.json.JSONObject;
 
 import java.security.SecureRandom;
 import java.util.concurrent.Callable;
@@ -18,6 +21,11 @@ import java.util.concurrent.TimeUnit;
 public final class ReceiverApp extends Application {
     private static ReceiverApp instance;
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
+    private static final String HOME_OK_PRESSES = "homeOkPresses";
+    private static final String HOME_SETTINGS_OPENS = "homeSettingsOpens";
+    private static final String HOME_LAST_OK_AT = "homeLastOkAt";
+    private static final String HOME_LAST_SETTINGS_AT = "homeLastSettingsAt";
+    private static final String HOME_LAST_SETTINGS_SOURCE = "homeLastSettingsSource";
     SharedPreferences preferences;
     LibraryStore library;
     PlaybackController playback;
@@ -62,6 +70,40 @@ public final class ReceiverApp extends Application {
     void setSnapshotUi(java.util.function.Supplier<android.graphics.Bitmap> supplier) { snapshotUi = supplier; }
     /** Main thread: the caption overlay exactly as drawn (video surfaces are not included). */
     android.graphics.Bitmap snapshot() { java.util.function.Supplier<android.graphics.Bitmap> target = snapshotUi; return target == null ? null : target.get(); }
+
+    boolean isDefaultHome() {
+        Intent home = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME);
+        ResolveInfo resolved = getPackageManager().resolveActivity(home, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY);
+        return resolved != null && resolved.activityInfo != null
+            && getPackageName().equals(resolved.activityInfo.packageName)
+            && MainActivity.class.getName().equals(resolved.activityInfo.name);
+    }
+
+    synchronized long noteOkPress() {
+        long count = preferences.getLong(HOME_OK_PRESSES, 0) + 1;
+        preferences.edit().putLong(HOME_OK_PRESSES, count).putLong(HOME_LAST_OK_AT, System.currentTimeMillis()).apply();
+        diagnostics.note("key.ok count=" + count + " defaultHome=" + isDefaultHome());
+        return count;
+    }
+
+    synchronized void noteHomeSettingsOpen(String source) {
+        long count = preferences.getLong(HOME_SETTINGS_OPENS, 0) + 1;
+        preferences.edit().putLong(HOME_SETTINGS_OPENS, count)
+            .putLong(HOME_LAST_SETTINGS_AT, System.currentTimeMillis())
+            .putString(HOME_LAST_SETTINGS_SOURCE, source).apply();
+        diagnostics.note("home.settings count=" + count + " source=" + source);
+    }
+
+    long okPressCount() { return preferences.getLong(HOME_OK_PRESSES, 0); }
+
+    JSONObject startupStatus() throws Exception {
+        return new JSONObject().put("defaultHome", isDefaultHome()).put("uiAttached", snapshotUi != null)
+            .put("okPresses", preferences.getLong(HOME_OK_PRESSES, 0))
+            .put("homeSettingsOpens", preferences.getLong(HOME_SETTINGS_OPENS, 0))
+            .put("lastOkAt", preferences.getLong(HOME_LAST_OK_AT, 0))
+            .put("lastHomeSettingsAt", preferences.getLong(HOME_LAST_SETTINGS_AT, 0))
+            .put("lastHomeSettingsSource", preferences.getString(HOME_LAST_SETTINGS_SOURCE, ""));
+    }
 
     interface ScrubUi { void onScrub(boolean active, double position, double duration, android.graphics.Bitmap frame); }
     private volatile ScrubUi scrubUi;

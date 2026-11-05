@@ -1,5 +1,334 @@
 # Current state
 
+## Installed phone 0.4.32 / receiver 0.3.13: live Backup HLS cast accepted
+
+- The user authorized a Cast-time live-media fallback for the already playing
+  cross-origin Backup iframe. The visible Browse WebView now keeps at most 48
+  in-memory GET candidates for five minutes and only for the exact current
+  FrameXTV page generation. It never retains bodies, cookies, authorization,
+  popup/main-frame requests or obvious segments/subtitles/static assets, and it
+  clears the ring on navigation and Activity destruction.
+- Existing same-origin DOM capture still wins. Only `SOURCE_UNAVAILABLE` may use
+  the observed fallback after the explicit Cast gesture; DRM/capture failures do
+  not. The verifier re-fetches at most eight ranked public HTTPS candidates
+  without browser cookies, follows at most four HTTPS redirects, rejects private
+  DNS answers, HTML/JSON, unsupported bodies and obvious HLS/DASH DRM, and
+  requires HLS/DASH/container evidence before returning a normalized MIME.
+- `Referer`, `Origin` and `User-Agent` are the complete optional header allowlist
+  from WebView observation through coordinator, phone native Open, remembered
+  remote metadata and receiver ExoPlayer. Cookie, Authorization,
+  Proxy-Authorization and unknown receiver headers are rejected. Prepared-source
+  identity now includes MIME and these normalized headers.
+- Receiver parsing no longer defaults an undeclared extensionless URL to MP4.
+  Known extensions or an explicit supported MIME are required, so an iframe/page
+  URL fails as `INVALID_MEDIA` rather than surfacing a misleading container error.
+- Physical acceptance used the already reported Avatar S1E11 Backup page. After
+  reinstall/reload, the page resumed visibly, the native Cast attempt logged
+  `verified observed format=hls` and progressed captured -> waiting -> opening ->
+  remote -> ready. Authenticated projector state on receiver 0.3.13/code27 then
+  reported active/ready playback for canonical `framextv:tv:284833:1:11`, duration
+  1360.818 seconds, advancing position/buffer and no error. Phone 0.4.32/code42
+  showed the live remote with the same 22:40 duration. Receiver state also
+  confirmed seekability, stereo AAC and a 20-second RAM lead. It reported zero
+  subtitle tracks for this Backup HLS, so this acceptance is video/audio/control,
+  not Backup-caption support. Raw media URLs and tokens were not retained in
+  documentation or logs.
+- This proves the current standard HLS Backup case, not every provider. The first
+  version does not copy browser cookies, bypass access controls, scrape arbitrary
+  subtitles, pause the cross-origin sender, correlate a manifest to multiple
+  observed segments or probe from the projector before Open. Ambiguous/ad/DRM,
+  service-worker/blob and IP-bound sources may still fail closed or need a later
+  playback witness/projector-side probe. Public update feeds remain unchanged.
+
+## Installed phone 0.4.31 / receiver 0.3.12: live Browse recovery and subtitle-loop repair
+
+- Physical evidence corrects the initial interpretation of the phone's
+  `net::ERR_FAILED`. The cached outer watch page stayed visible while its
+  same-origin player iframe failed. On that same phone, Android's ordinary
+  resolver could no longer resolve the previously failed apex `.cc`/`.xyz`
+  names even though Wi-Fi advertised validated `8.8.8.8`/`8.8.4.4`; Google DoH
+  returned current records, DoH-forced HTTPS reached the site with valid TLS,
+  and the fresh `www` name resolved normally. This isolates stale negative DNS
+  entries retained after the router change, not a current ISP-IP/WAF/TLS block.
+- Sending Android's DNS-cache-clear broadcast made ordinary phone HTTPS return
+  200 for both the site root and exact embed route. Reloading the unchanged
+  watch page immediately restored the real player at its saved position and it
+  remained visible after the anti-debug timer window. This is a causal physical
+  recovery of the reported iframe failure; no APK or router setting changed.
+- Separate clean automated Chromium evidence still shows the shipped
+  `disable-devtool` bundle aborting requests and navigating page contexts to
+  `about:blank`. Phone 0.4.31 keeps an already loaded HTTPS Browse page when JavaScript
+  tries to replace its main frame with exactly `about:blank`. It still permits
+  initial/app-owned and child-frame blank pages, rejects other non-HTTPS Browse
+  navigation and does not inject or spoof page JavaScript. The post-flush
+  physical player did not reproduce child-frame blanking, so automation alone
+  does not establish that as the current phone failure.
+- Fresh unauthenticated API probes expose a secondary upstream reliability risk:
+  all allowed API origins reported `no_streams` for this exact later episode,
+  while an early-episode control returned a source. One provider's direct lookup
+  returned a real 404 without CORS, which Chromium represents as generic
+  `net::ERR_FAILED`. The phone nevertheless resumed its already cached playable
+  source after DNS recovery, so this provider state is not claimed as the cause
+  of the recovered physical incident.
+- The Philips paralysis matched two redundant status loops plus unconditional
+  subtitle-list replacement. Native service state already arrives every 2.5
+  seconds, while the page separately issued a timeout-sensitive three-second
+  poll and rebuilt every subtitle button on each snapshot. The redundant poll
+  is removed and equal subtitle state preserves the actual button nodes, so a
+  touch cannot be detached between press and release.
+- Public subtitle choices again use the phone's bounded fetch/normalization and
+  confirmed LAN delivery before Add. Only a validated subtitle belonging to the
+  exact phone-hosted private local-media origin stays direct. This avoids making
+  the Android 9 projector resolve/fetch public caption providers itself.
+- Production-signed phone 0.4.31/code41 and receiver 0.3.12/code26 APKs build and
+  match the established release certificate. Focused handoff tests pass 82/82,
+  focused browser regressions pass 4/4 and the site build passes. A broader Node
+  run was stopped after hanging for four minutes in `luma-controller` server
+  teardown, so no new full-suite claim is made.
+- Receiver 0.3.12/code26 is installed on the physical Android 9 projector and
+  its live info endpoint confirms the version and attached UI. Wireless ADB was
+  re-paired to the Samsung and phone 0.4.31/code41 installed successfully with
+  existing app data preserved. Package-manager verification confirms the exact
+  version, and a post-install screen capture shows the foreground LUMA Library
+  rendered normally. The exact watch page and embedded player now have physical
+  post-flush acceptance; Cast and caption selection still need user-visible
+  acceptance. Public update feeds are unchanged.
+
+## Prepared 0.4.30 / receiver 0.3.12: truthful disk UI, DNS diagnosis and subtitle isolation
+
+- Phone and laptop remotes now show RAM ahead separately from current-title disk
+  progress. Disk-ahead time is derived from the contiguous bytes actually cached
+  at the current playhead, not the planned rolling-window end. Waiting, filling,
+  complete/window-ready, clearing, low-storage and error states remain visible;
+  Stop clears stale status.
+- The reported Wi-Fi-only watch-page failure is DNS suppression by the two
+  ISP-provided resolvers. They answer ordinary hosts and `api.framextv.tech` but
+  time out for the `.cc`/`.xyz` FramexTV names over UDP and TCP. Public resolvers
+  answer them, and certificate-verified HTTPS to both current Cloudflare IPv4
+  edges succeeds over the same Wi-Fi when only DNS is bypassed. This rules out
+  source-IP/WAF, TLS and routing blocks. Router DNS should be changed to a public
+  resolver; the app must not pin rotating Cloudflare addresses.
+- The current upstream English tracks for the reported episode are distinct from
+  the prior episode and contain episode-specific later dialogue. The first roughly
+  47 seconds are an intentional recap. The installed receiver was offline, so the
+  exact previously rendered cached body could not be recovered and the incident
+  itself is not claimed reproduced.
+- Three real stale-state defects are fixed: receiver caption files are now keyed
+  by canonical content/local-media identity, URL and effective headers with a
+  six-hour TTL; phone resolved media plus tracks expire after six hours and must
+  carry the exact requested canonical episode/anime edition; and asynchronous
+  Next work is generation/source/content guarded before it can open. Next's
+  caller guard and enqueue now occur in one receiver main-thread turn.
+- Production-signed phone 0.4.30/code40 and receiver 0.3.12/code26 APKs build and
+  verify with the established certificate. Receiver unit tests pass 33/33; Node
+  passes 262/262 and browser checks pass 174/174. Phone main/AndroidTest compile,
+  but runtime instrumentation did not run because no emulator/phone was connected.
+  The projector endpoint was offline and wireless ADB discovery found the Samsung
+  service but its endpoint refused connection, so neither APK was installed and
+  public feeds remain unchanged.
+
+## Live 0.4.29 local-subtitle candidate
+
+Public latest remains 0.4.23/code33. The 0.4.24-0.4.28 labels below were local
+planning iterations, never public releases, but the physical phone already had
+0.4.28/code38 installed. After the user reported that the laptop's 1.5-second
+poll erased a pending subtitle choice and post-cast phones saw no receiver-owned
+tracks, the release was stopped before commit/publication. The laptop now keeps
+the user's pending choice until Apply, and phone service polling imports external
+subtitle tracks/selections for opaque `local:` playback only.
+
+Signed phone 0.4.29/code39 was installed over the physical Samsung with data
+preserved and brought to the foreground. Signed receiver 0.3.7/code21 was built,
+deployed through the paired projector channel and confirmed installed at
+2026-10-31T01:12:11.609Z. Focused laptop browser regression and phone compilation
+passed; the broader emulator service test was deliberately skipped at the user's
+request in favor of immediate live movie testing. The public release and both
+auto-update feeds remain unchanged pending that live acceptance.
+
+The user's `Never.After.Dark` MKV then exposed a separate compatibility-mode
+problem. Its real container duration is 6292.832 seconds, video is H.264 High
+1920x800, and it has Japanese plus English E-AC-3 audio and three embedded
+English SubRip tracks (Forced, full, SDH). Auto had rejected E-AC-3, converted
+the file to a growing HLS event playlist, and dropped all embedded subtitles;
+the receiver therefore reported only generated duration and could not retain a
+seek beyond it. Auto now treats H.264 with AC-3/E-AC-3 as direct-compatible and
+extracts supported embedded text tracks for receiver rendering, preferring full
+dialogue over forced/SDH. A real full-English extraction produced 505 cues.
+
+The old laptop process was replaced and the exact file reopened through the new
+browser remote. Live authenticated receiver state reports fixed duration
+6292.832, `canSeek:true`, direct Matroska, full English external track 512 loaded
+and enabled, plus the three embedded and three receiver-rendered English choices.
+The user then watched the entire movie and confirmed working AAC sound,
+subtitles and seeking with substantially improved buffering. This is physical
+full-length acceptance for that exact file. The laptop server was stopped after
+the movie and a loopback refusal confirmed it is no longer listening.
+
+## Prepared 0.4.28: manual stream-source pages
+
+- Remote now shows **Change stream** whenever the active movie/episode has
+  canonical frameXTV identity. It opens the exact `/watch/...` page in the
+  app-owned browsing WebView without sending Stop or Open to either receiver;
+  the current projector video keeps playing until another captured source is
+  deliberately cast.
+- Library detail exposes both the selected movie/episode player page and its
+  title page. Ordinary TV uses the verified `/tv/{id}?season={season}` route,
+  movies use `/movie/{id}`, and anime uses its retained `/anime/{anilistId}`
+  route. The UI directs the user to the episode player's server menu and then
+  the existing Cast action.
+- Phone 0.4.28/code38 and receiver 0.3.7/code21 signed artifacts are prepared
+  under ignored `.local/releases/v0.4.28`; nothing was installed or published.
+  Node passes 253/253, the two complete phone UI suites pass 100/100, the
+  focused new flow passes 2/2, the site build passes, and Android debug plus
+  signed release/lint-vital builds pass.
+
+## Prepared receiver 0.3.7: observable Home setup
+
+- A real hard-start attempt did not launch the receiver. While the projector's
+  saved address was present, receiver port 4191 and native port 8121 both
+  refused connections; no LUMA discovery reply arrived. After the user manually
+  opened the app, unauthenticated `info` confirmed receiver 0.3.6/code 20 and an
+  authenticated snapshot confirmed its Activity UI was attached. This is a
+  failed cold-start acceptance, not proof of a delayed successful boot.
+- The connected Samsung is running phone 0.4.27/code 37. Its foreground
+  `ConnectionService` is active; filtered live logs reported `connected=true`
+  and a 20:45:53 cast handoff advanced through captured/waiting/opening to a
+  verified active session and accepted remote metadata.
+- Receiver 0.3.7/code 21 now counts distinct initial OK/Enter presses (ignoring
+  key-up and held-key repeats), records Home-settings launches and their source,
+  reports current default-Home/UI state plus timestamps and counters in `info`,
+  displays the OK count in the idle footer, and confirms an OK press on screen
+  when it is already the Home app.
+- Receiver unit/debug and signed release builds pass; the packaged APK is
+  0.3.7/code 21 with valid v1/v2 signatures. It was deliberately not installed
+  because the phone reported an active viewing session. Existing 0.3.6 cannot
+  reconstruct earlier key presses, so counters begin after the 0.3.7 upgrade.
+
+## Prepared receiver 0.3.6: projector Home app
+
+- `MainActivity` is now an explicit Android `HOME`/`DEFAULT` candidate while
+  remaining available through the ordinary and TV launchers. Once the user
+  selects **LUMA Receiver** as the projector's default Home app, Android itself
+  opens it in the foreground during startup and returns to it for the Home key.
+- The receiver idle screen says when setup is needed. OK opens Android's Home-app
+  settings; Menu always reopens those settings so the choice is reversible.
+  Android does not allow an ordinary sideloaded app to silently choose itself as
+  default, so this one-time projector confirmation is intentional.
+- The existing `BOOT_COMPLETED` receiver and sticky foreground service still
+  start port 4191 independently, preserving receiver-first casting even before
+  the native LUMA/EShare service is ready.
+- Receiver 0.3.6/code 20 had a signed release APK. The full Node suite passed
+  253/253, receiver unit tests/debug assembly pass, release assembly and
+  lint-vital pass, and the packaged manifest contains the separate launcher and
+  Home filters. Full debug lint still reports 14 pre-existing min-SDK findings
+  in unrelated receiver files. It is now installed and manually opens, but the
+  first reported hard-start acceptance failed; default-Home selection was not
+  remotely observable in this version.
+
+## Prepared 0.4.27: episode-aware anime Sub/Dub switching
+
+- The Subtitles sheet now shows a two-state **Sub / Dub** audio selector only
+  when the alternate edition has been resolved and verified for the exact anime
+  episode. Ordinary movies/TV and anime episodes without an alternate edition
+  keep the existing subtitle-only UI.
+- Availability is a non-mutating native probe. It validates canonical TMDB,
+  AniList episode and requested audio identity, caches the resolved stream, and
+  treats fixed-host 404/410 responses as `SOURCE_UNAVAILABLE` only after trying
+  every fixed anime API origin.
+- Tapping the alternate edition uses the existing guarded catalog/handoff path,
+  replaces the video/audio source and subtitle catalog, and seeks the new stream
+  to the currently observed playback position. Lookup failure leaves the current
+  video playing.
+- Phone 0.4.27/code37 and receiver 0.3.5/code19 signed APKs build and their
+  package metadata/signature were verified. Node 252/252, browser 169/169,
+  Android/AndroidTest compilation and emulator catalog/history/Library/TV
+  catalog/web groups 11/11, 7/7, 9/9, 5/5 and 4/4 pass. No real device was
+  installed or controlled. Full debug lint still reports six independent API-24
+  findings in `ResolvedSources`/`ThumbnailStrip`; release lint-vital passes.
+
+## Prepared 0.4.26: Library deletion, title shortcut and wrong-server guard
+
+- Long-pressing a saved episode or title now reveals an explicit delete action.
+  Deletions create synchronized tombstones on the phone and receiver so stale
+  multi-phone progress cannot immediately restore a removed episode or series.
+- Tapping the current title in Remote opens that exact Library title; for TV it
+  selects the episode currently playing. Existing version-one Library databases
+  upgrade in place before tombstones are written.
+- A live `Buddy` cast exposed a Films365 source path naming the distinct movie
+  `Buddy Games`; changing the site's server supplied the correct movie. The
+  native resolver now treats that conflicting provider-owned title slug as
+  positive mismatch evidence, refuses to cache/open it and tries up to eight
+  declared providers within the existing shared deadline, preferring available
+  providers and skipping the rejected one. Recasting also discards an older
+  cached source with the same provable mismatch.
+- The embedded-site capture path rejects the same mismatch with a specific
+  `SOURCE_MISMATCH` result. Opaque provider URLs remain accepted: their contents
+  cannot be identified safely before playback, so the app does not guess from
+  filename, runtime or subtitles.
+- Phone 0.4.26/code36 and receiver 0.3.5/code19 signed release APKs build and
+  their package metadata was verified, but they are not installed or published.
+  Browser 167/167 and emulator catalog/history/Library/TV catalog/web groups
+  10/10, 7/7, 9/9, 5/5 and 4/4 pass. Real-device recast/provider fallback and
+  synchronized deletion remain physical acceptance checks.
+
+## Local dual-device install target
+
+- `make install-latest-apks` now resolves duplicate ADB transports itself. It
+  probes each authorized transport's hardware serial and installed LUMA package,
+  groups Bonjour aliases for the same physical Samsung, excludes emulators and
+  receiver-only devices, and installs through the preferred stable transport.
+  It still fails closed for two genuinely different eligible phones unless
+  `ANDROID_SERIAL` names one explicitly. The live resolver collapsed the current
+  two Samsung entries to one phone without installing anything; focused 5/5 and
+  full Node 252/252 tests pass.
+- The first real `make install-latest-apks` run exposed that the existing Gradle
+  outputs were stale: their metadata was phone 0.4.23/code33 and receiver
+  0.3.3/code17, exactly matching the unchanged physical installs. The source
+  declares 0.4.24/code34 and 0.3.4/code18.
+- The target now rebuilds both signed release APKs from current source before
+  running `adb install -r` for the phone and the existing receiver dev deployment
+  command for the projector. It has no update-manifest or `.local/releases/`
+  dependency and does not publish, bump versions or clear phone data.
+
+## Prepared 0.4.25: audited anime identity, sub/dub and correct Next
+
+- The failing physical state labeled *The World's Strongest Witch* S1E2 but its
+  source URL named *Arifureta* and it had neither `animeId` nor `animeAudio`.
+  This was not merely stale display data: capture had lost anime provenance and
+  Next therefore called the ordinary TV resolver, which returned that unrelated
+  stream and subtitle catalog.
+- Public site code and live fixed APIs were audited across *The World's
+  Strongest Witch*, *Frieren*, *Solo Leveling* and *Demon Slayer*, with sub and
+  dub responses. The outer `/watch/{tmdb}/{season}/{episode}` route can still be
+  visible while its same-origin `/embed/anime` iframe is already playing. Anime
+  seasons can also use distinct AniList IDs, and sub/dub availability, provider
+  and subtitle catalogs genuinely differ by title and episode.
+- Capture now retains the iframe's exact AniList ID, anime episode and audio
+  edition during that redirect race. Native mapping verifies the AniZip TMDB,
+  canonical season/episode and related-season relationship before using them.
+  The stream response must repeat the requested AniList ID and audio edition;
+  a mismatch is rejected instead of being labeled as the requested episode.
+- The chosen `sub`/`dub` edition is read from the selected same-origin player
+  iframe (the top-level URL does not change), persisted per series, and carried
+  through Resume, Library replay, notification/lock-screen Next, phone-side
+  Next, receiver-side Next and auto-play. Live API checks confirmed both the
+  episode-3 subtitle and dub sources for this title.
+- Anime resolution uses `/anime/api/stream`; it never falls through to the
+  ordinary TV stream endpoint. Resolved-source cache keys now separate ordinary
+  TV, each AniList season, sub and dub. Cross-season Next first resolves the
+  related AniList season ID. Future air-dated episodes remain unavailable.
+- Library details now sends the native store's exact `{kind,id}` schema; local
+  anime provenance is retained for replay rather than sent as rejected extra
+  fields. This fixes the observed `LIBRARY_INVALID_INPUT` and empty episode view.
+- Phone 0.4.25/code35 is prepared with `release-notes/0.4.25.txt`; receiver
+  0.3.4/code18 was already installed and needs no additional change for this
+  correction. The Samsung advertises wireless ADB but refuses the connection,
+  so 0.4.25 is not yet installed. No real anime playback claim is made.
+- Validation passed after the final change: focused browser 63/63 and complete
+  browser 166/166; Android/AndroidTest compilation; emulator catalog 9/9, watch
+  history 7/7, Library 7/7, TV catalog 5/5 and Web content 4/4. The signed
+  release build passed and APK metadata confirms phone 0.4.25/code35.
+
 ## Released 0.4.23: receiver-first cold start and disconnected casting
 
 - A physical check showed LUMA Receiver 0.3.2 already answering authenticated
@@ -1510,3 +1839,108 @@ observed around19:39/103:24 with generic recovered metadata and no captured
 catalog after the service restart. Closed its empty subtitle sheet and left
 playback untouched; no fresh cast/receiver mutation was issued. A new cast is
 needed to supply the catalog and physically verify normalized subtitle rendering.
+
+## 2026-10-30 local media and laptop browser remote (unreleased)
+
+The phone Browse screen can now select a local MP4/MKV/WebM document plus up to
+16 external SRT/WebVTT/ASS/SSA/TTML files. A service-owned server binds only the
+active private Wi-Fi/Ethernet IPv4 address, uses random per-selection
+capabilities, admits private peers, and implements GET/HEAD plus single byte
+ranges. Generic private URLs remain rejected: only exact server-owned URLs and
+the exact source reported by an authenticated LUMA Receiver are usable by
+native playback controls.
+
+`npm run stream:local -- --root /path/to/media` now opens a localhost-only
+browser remote with receiver pairing, root-scoped source selection, direct/auto/
+compatibility modes, subtitles, volume, transport and scrub controls. Auto mode
+preserves conservative H.264/AAC inputs; compatibility mode uses ffmpeg H.264
+High/yuv420p/CRF16 and 320 kb/s AAC in 1080p HLS. The laptop uploads 30-second
+JPEG thumbnails to the receiver under an opaque `local:` ID. The receiver owns
+playback, so other paired phones adopt the session, guard writes against its
+exact observed source, and download the shared preview cache.
+
+Validation: phone Java compilation and receiver unit tests pass with cached
+offline Gradle; Node 259/259 and the mobile browser suite 62/62 pass; the local
+browser page/API was smoke-tested on loopback; `npm run build` passes. No APK was
+installed, no physical projector/phone media playback was attempted, and no
+arbitrary codec/subtitle matrix is physically accepted yet. The Wi-Fi-only
+public watch-page failure remains unproven as an IP/ISP block; DNS/router/CDN or
+site browser-policy differences remain live alternatives.
+
+## 2026-10-30 receiver buffer follow-up (unreleased)
+
+The receiver's earlier 24 MiB target was treated as a hard stop even before its
+15-second minimum was reached. That protects the low-memory projector, but for a
+high-bitrate local MP4/MKV it can represent only a few seconds and produce a
+READY/BUFFERING loop. Media3 now starts at 750 ms, requires 2 seconds after a
+rebuffer, keeps an 8-20 second window, and treats 24 MiB as soft until the
+8-second time floor is present, subject to Media3's heap-pressure guard. This
+still prevents the old ~70-second prefetch while making high-bitrate media obey
+a useful time buffer.
+
+Laptop compatibility HLS now forces keyframes every two seconds and emits
+two-second independent segments instead of nominal four-second segments, reducing
+initial and post-seek latency. Receiver unit tests and the focused local-media
+Node suite pass. A real ffmpeg smoke produced four independent segments of
+2/2/2/1 seconds. This RAM policy was physically accepted through the complete
+high-bitrate *Never After Dark* playback; the user described buffering as much
+improved but still near the minimum window.
+
+## 2026-10-30 direct local audio companion (live candidate, unreleased)
+
+The exact *Never After Dark* MKV carries only E-AC-3 audio, which the physical
+projector accepted as a direct container but did not render. Direct H.264 local
+playback now retains the original video and, when no receiver-safe AAC/MP3 track
+exists, prepares only the preferred audio stream as a seekable 320 kb/s stereo
+AAC M4A. The same-origin companion URL is accepted only for opaque `local:`
+media. The receiver merges it with the original video and explicitly selects the
+supported AAC group. Generated audio is cached under ignored `.local/` storage,
+keyed by source path/size/mtime identity, so repeat playback avoids encoding.
+
+Receiver 0.3.8/code22 was physically installed for the movie. The live exact-file session
+reports ready/playing, fixed 6292.832-second duration, `canSeek:true`, 20.917
+seconds buffered, `audio/mp4a-latm` stereo selected, and full English external
+subtitle index512 enabled. The cached M4A independently probes as AAC, 48 kHz,
+two channels and the same 6292.832-second duration. The subsequent full-movie
+view physically confirmed audible output, captions and seeking.
+
+Future laptop launches generate three random-access scrub previews concurrently
+and distribute the first previews across the whole timeline before filling
+30-second gaps. This replaces sequential full-film decoding; the current live
+process predates that in-process change and retains its existing thumbnail job.
+Focused local-media Node tests pass 9/9. Phone remains the installed
+0.4.29/code39 candidate; neither auto-update feed was published.
+
+## 2026-10-31 current-title disk prefetch (receiver 0.3.11 installed, unreleased)
+
+Progressive opaque `local:` playback keeps the accepted 8–20 second/24 MiB RAM
+window and now has a separate Media3 disk cache. A background `CacheWriter` uses
+download priority while ExoPlayer registers playback priority only during RAM
+loading, so playback preempts prefetch. Prefetch continues after the RAM window
+fills, including while paused. The AAC companion is cached completely when it
+fits; a whole video is cached when safe storage permits. Larger videos keep a
+rolling byte window around/ahead of playback, trim fully consumed fragments and
+refill freed space. A seek cancels and repositions only that rolling worker.
+
+Stop/source replacement cancels the writer, clears media sources, deletes the
+old session's opaque video/audio keys on one executor and reports `clearing`
+until done. Process start sweeps crash residue. Playback reads cache without
+writing, so the explicit budget cannot be exceeded; disk failures fall back to
+ordinary upstream playback. The policy reserves at least 512 MiB and 10% of
+currently free space, disables below 128 MiB, and caps at 8 GiB. HLS/DASH and
+non-local provider streams are deliberately excluded from whole-item prefetch.
+
+Receiver 0.3.11/code25 is signed, installed and healthy. Android exposes only
+internal app cache: 1,568,206,848 bytes usable at the observed restart, yielding
+a 1,031,335,936-byte safe limit. No mounted app-writable removable/SD cache
+directory was visible. The receiver now enumerates standard external cache
+surfaces and automatically prefers a roomier mounted SD card on a later restart.
+With current internal space, the exact 6.9 GB movie would use a rolling window,
+not a whole-file cache. Status/Diagnostics expose storage, state, bytes, target,
+window and estimated seconds ahead; the laptop remote renders progress.
+
+Receiver unit/debug build passes with 29 tests, including four cache policy
+tests; focused laptop media Node tests pass 9/9. The server remains off and no
+new local playback was started, so paused growth, rolling refill, seek
+repositioning and cleanup are implemented/compiled but not physically accepted.
+The phone remains 0.4.29/code39 and public auto-update feeds remain unchanged.

@@ -593,6 +593,15 @@ test('Philips subtitles load only on selection with a full native deadline and O
   expect(await page.evaluate(() => window.__calls.some(call => call.method === 'msx.subtitle'))).toBe(false);
   await page.locator('#show-subtitles').click();
   await expect(page.locator('#subtitles-off')).toHaveAttribute('aria-pressed', 'true');
+  const statusReads = await page.evaluate(() => window.__calls.filter(call => call.method === 'msx.status').length);
+  await page.clock.runFor(10000);
+  expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'msx.status').length)).toBe(statusReads);
+  await page.evaluate(() => {
+    window.__stableSubtitleButton = [...document.querySelectorAll('#subtitle-list button')].find(button => button.textContent === 'English');
+    for (let index = 0; index < 5; index++) window.LumaApp.onConnectionState({ receivers: { philips: window.__tv } });
+  });
+  expect(await page.evaluate(() => window.__stableSubtitleButton?.isConnected
+    && window.__stableSubtitleButton === [...document.querySelectorAll('#subtitle-list button')].find(button => button.textContent === 'English'))).toBe(true);
   await page.evaluate(() => { window.__holdMethod = 'msx.subtitle'; });
   await page.getByRole('button', { name: 'English', exact: true }).click();
   await page.clock.runFor(15000);

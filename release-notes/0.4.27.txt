@@ -1,0 +1,9 @@
+LUMA Remote 0.4.27
+
+Anime episodes now show an Audio selector in the Subtitles menu when the alternate Sub or Dub edition is actually available for that episode.
+
+Changing editions resolves and verifies the matching anime stream before replacing playback. The current video keeps playing if that lookup fails, and a successful switch resumes at the current playback position with the new edition's own subtitle catalog.
+
+LUMA Receiver 0.3.6 can now be selected as the projector's Android Home app, making its ready screen the default foreground screen after startup. Press OK on its idle screen once to open the Home-app settings; Menu reopens that setting if you need to switch back.
+
+LUMA Receiver 0.3.7 adds visible and remotely readable startup diagnostics: it reports whether Android currently recognizes it as the Home app, counts distinct OK presses, counts Home-settings launches, and confirms each received OK press on screen.

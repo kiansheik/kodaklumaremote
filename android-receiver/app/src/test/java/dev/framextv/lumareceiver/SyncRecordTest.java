@@ -68,4 +68,16 @@ public class SyncRecordTest {
         }
         assertTrue(SyncRecord.parse(new JSONObject("{\"key\":\"k\",\"type\":\"title\",\"updatedAt\":5,\"origin\":\"luma-abcdefgh\",\"deleted\":true}"), now).deleted);
     }
+
+    @Test public void titleTombstoneScopesOnlyMatchingProgress() {
+        SyncRecord title = new SyncRecord("title:tv:42", "title", 20, "phone-abcdefgh", true, "{}");
+        String[] scope = SyncRecord.deletedTitleScope(title);
+        assertEquals("tv", scope[0]); assertEquals("42", scope[1]);
+        assertTrue(SyncRecord.belongsToTitle(record("framextv:tv:42:1:2", 10, "luma-abcdefgh", "{\"kind\":\"tv\",\"contentId\":\"42\"}"), scope));
+        assertFalse(SyncRecord.belongsToTitle(record("framextv:tv:43:1:2", 10, "luma-abcdefgh", "{\"kind\":\"tv\",\"contentId\":\"43\"}"), scope));
+        assertTrue(SyncRecord.blockedByTitle(record("framextv:tv:42:2:1", 19, "luma-abcdefgh", "{\"kind\":\"tv\",\"contentId\":\"42\"}"), title));
+        assertFalse(SyncRecord.blockedByTitle(record("framextv:tv:42:2:1", 21, "luma-abcdefgh", "{\"kind\":\"tv\",\"contentId\":\"42\"}"), title));
+        assertFalse(SyncRecord.blockedByTitle(record("framextv:tv:43:2:1", 19, "luma-abcdefgh", "{\"kind\":\"tv\",\"contentId\":\"43\"}"), title));
+        assertEquals(null, SyncRecord.deletedTitleScope(new SyncRecord("title:tv:42", "title", 20, "phone-abcdefgh", false, "{}")));
+    }
 }

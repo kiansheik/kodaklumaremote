@@ -137,6 +137,27 @@ the verified APK. If Android requires permission to install from LUMA, the app
 opens that setting and asks to Continue after returning. Android always owns
 the final installation confirmation. No silent installation or forced update.
 
+## Install a prepared release on both devices
+
+Build and install the current phone and projector release APKs with:
+
+```sh
+make install-latest-apks
+```
+
+The target loads the ignored local signing configuration and rebuilds both APKs
+from current source without generating or reading update manifests. Before the
+phone install it groups ADB transports by the device's hardware serial, so
+Bonjour aliases such as an additional `(2)` entry for the same Samsung resolve
+to one physical phone. It prefers the device that already has LUMA Remote,
+excludes emulators and receiver-only devices, then runs `adb -s … install -r` on
+`android/app/build/outputs/apk/release/app-release.apk`, preserving phone app
+data, and sends
+`android-receiver/app/build/outputs/apk/release/app-release.apk` through the
+paired receiver dev channel. It does not publish or increment a version. If two
+genuinely different phones remain eligible, it refuses to guess; set
+`ANDROID_SERIAL` to choose one explicitly.
+
 The original local debug install uses another certificate. Its owner's API36
 phone can use a privately generated signing-lineage bootstrap, validated on an
 emulator without uninstalling or resetting app data. That bootstrap/test APK

@@ -1,0 +1,5 @@
+LUMA Remote 0.4.30
+
+- Shows real RAM and disk-buffer progress on phone and laptop remotes.
+- Prevents stale subtitle files and slow Next requests from crossing episodes.
+- Keeps resolved media and subtitle catalogs scoped to the requested episode and refreshes them after six hours.

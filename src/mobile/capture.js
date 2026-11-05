@@ -34,7 +34,7 @@ function videos() {
     for (const video of doc.querySelectorAll('video')) {
       const visible = visibleRect(video, clip, view);
       const area = visible ? (visible.right - visible.left) * (visible.bottom - visible.top) * scaleX * scaleY : 0;
-      found.push({ video, area });
+      found.push({ video, area, pageUrl: view.location.href });
     }
     if (depth === MAX_DEPTH) return;
     for (const frame of doc.querySelectorAll('iframe')) {
@@ -70,7 +70,26 @@ export function capture() {
   try {
     const candidates = videos().filter(candidate => candidate.area > 0).sort((a, b) => b.area - a.area);
     if (!candidates.length) return { ok: false, code: 'SOURCE_UNAVAILABLE' };
-    return { ok: true, media: extractMedia(candidates[0].video, { title: document.title, allowTextSubtitles: true }) };
+    const selected = candidates[0];
+    const media = extractMedia(selected.video, { title: document.title, allowTextSubtitles: true });
+    try {
+      const playerPage = new URL(selected.pageUrl);
+      const audio = playerPage.searchParams.get('sub_type');
+      if (audio === 'sub' || audio === 'dub') media.animeAudio = audio;
+      // The outer SPA briefly remains on /watch/:tmdbId while it looks up and
+      // replaces the route with /watch/anime/:anilistId. The same-origin anime
+      // embed already has the authoritative AniList id, so carry that hint to
+      // native code. Native still verifies its TMDB/episode mapping before use.
+      const animeId = playerPage.pathname.replace(/\/+$/, '') === '/embed/anime'
+        && playerPage.searchParams.get('type') === 'anime'
+        ? playerPage.searchParams.get('id') : null;
+      const animeEpisode = playerPage.searchParams.get('episode');
+      if (animeId && /^[1-9][0-9]{0,9}$/.test(animeId) && animeEpisode && /^[1-9][0-9]{0,3}$/.test(animeEpisode)) {
+        media.animeId = animeId;
+        media.animeEpisode = Number(animeEpisode);
+      }
+    } catch { /* The native layer defaults trusted anime routes to subtitles. */ }
+    return { ok: true, media };
   } catch (error) {
     return { ok: false, code: CODES.has(error?.code) ? error.code : 'CAPTURE_FAILED' };
   }

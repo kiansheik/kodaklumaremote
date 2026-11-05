@@ -47,11 +47,18 @@ public final class NativeBackend {
     public interface PreparedSubtitleResolver {
         String resolve(String id, String sourceUrl, String subtitleUrl, String receiverHost) throws BackendException;
     }
+    public interface LocalMediaResolver {
+        String resolve(String url, String receiverHost) throws BackendException;
+    }
     public static final class BackendException extends Exception {
         public final String code;
         private BackendException(String code, String message) { super(message); this.code = code; }
     }
     private static final int TCP_TIMEOUT = 2500, RECEIVER_CALL_TIMEOUT = 5000, RECEIVER_PORT = 4191, MAX_RECEIVER_REPLY = 1024 * 1024, MAX_APPS_BYTES = 16 * 1024 * 1024;
+    private static final long MAX_DISK_CACHE_BYTES = 8L * 1024 * 1024 * 1024;
+    private static final double MAX_STATUS_SECONDS = 17_280_000d;
+    private static final Pattern DISK_CACHE_STATE = Pattern.compile("^(?:off|waiting|filling|complete|limited|clearing|low-storage|error)$");
+    private static final Pattern DISK_CACHE_STORAGE = Pattern.compile("^(?:none|internal|external|sd-card)$");
     static final String RECEIVER_PACKAGE = "dev.framextv.lumareceiver";
     private static final Pattern PACKAGE = Pattern.compile("[A-Za-z][A-Za-z0-9_]*(?:\\.[A-Za-z][A-Za-z0-9_]*)+");
     private static final Pattern LUMA_MOVIE_ID = Pattern.compile("^v1:(framextv:movie:([1-9][0-9]{0,9}))$");
@@ -66,10 +73,12 @@ public final class NativeBackend {
     private final ScheduledExecutorService deadlines = Executors.newSingleThreadScheduledExecutor();
     private volatile SourceGuard sourceGuard;
     private volatile PreparedSubtitleResolver subtitleResolver;
+    private volatile LocalMediaResolver localMediaResolver;
     private volatile boolean closed;
     private volatile Socket luma;
     private volatile DatagramSocket discovering;
     private volatile HttpURLConnection activeHttp;
+    private volatile String observedSourceUrl = "";
     private String host, deviceName, token, activeToken;
     /** True only after the paired receiver answered directly on port 4191. */
     private boolean receiverConnected;
@@ -80,6 +89,7 @@ public final class NativeBackend {
     public NativeBackend(Context context) { this.context = context.getApplicationContext(); }
     public void setSourceGuard(SourceGuard guard) { sourceGuard = guard; }
     public void setPreparedSubtitleResolver(PreparedSubtitleResolver resolver) { subtitleResolver = resolver; }
+    public void setLocalMediaResolver(LocalMediaResolver resolver) { localMediaResolver = resolver; }
     /** Service worker only: forgetting the receiver pairing does not close projector controls. */
     public synchronized void clearReceiverConfiguration() { token = null; receiverConnected = false; }
 
@@ -146,6 +156,19 @@ public final class NativeBackend {
         if (Double.isNaN(number) || Double.isInfinite(number) || number != Math.floor(number) || number < min || number > max) throw fail("INVALID_INPUT");
         return (int) number;
     }
+    private static Long optionalStatusInteger(Object value, long max) {
+        if (!(value instanceof Number)) return null;
+        double number = ((Number) value).doubleValue();
+        if (Double.isNaN(number) || Double.isInfinite(number) || number != Math.floor(number)
+                || number < 0 || number > max) return null;
+        return ((Number) value).longValue();
+    }
+    private static Double optionalStatusSeconds(Object value) {
+        if (!(value instanceof Number)) return null;
+        double number = ((Number) value).doubleValue();
+        if (Double.isNaN(number) || Double.isInfinite(number) || number < 0 || number > MAX_STATUS_SECONDS) return null;
+        return number;
+    }
     private static byte[] addressBytes(String value) throws BackendException {
         if (value == null || !value.matches("(?:0|[1-9][0-9]{0,2})(?:\\.(?:0|[1-9][0-9]{0,2})){3}")) throw fail("INVALID_HOST");
         String[] parts = value.split("\\."); byte[] bytes = new byte[4];
@@ -184,7 +207,7 @@ public final class NativeBackend {
             if ("device.discover".equals(method)) return object("devices", discover());
             if ("device.connect".equals(method)) return connectDevice(text(params, "host", 64));
             if ("device.disconnect".equals(method)) {
-                closeLuma(); host = null; token = null; receiverConnected = false; return object("connected", false);
+                closeLuma(); host = null; token = null; observedSourceUrl = ""; receiverConnected = false; return object("connected", false);
             }
             if (method != null && method.startsWith("luma.")) return lumaAction(method.substring(5), params);
             if (method != null && method.startsWith("receiver.")) return receiverAction(method.substring(9), params);
@@ -205,7 +228,7 @@ public final class NativeBackend {
     private JSONObject connectDevice(String selected) throws Exception {
         if (!privateAddress(selected)) throw fail("INVALID_HOST");
         closeLuma();
-        if (!selected.equals(host)) { token = null; receiverPort = RECEIVER_PORT; receiverConnected = false; deviceName = null; }
+        if (!selected.equals(host)) { token = null; observedSourceUrl = ""; receiverPort = RECEIVER_PORT; receiverConnected = false; deviceName = null; }
         host = selected;
         try {
             Socket socket = new Socket(); luma = socket;
@@ -398,6 +421,39 @@ public final class NativeBackend {
             return uri.toASCIIString();
         } catch (Exception ignored) { throw fail("INVALID_MEDIA"); }
     }
+
+    private String mediaUrl(Object value) throws BackendException {
+        try { return publicUrl(value); }
+        catch (BackendException publicFailure) {
+            if (value instanceof String && localMediaResolver != null && host != null) {
+                try { return localMediaResolver.resolve((String) value, host); }
+                catch (BackendException notOwned) { /* An authenticated receiver observation may own it instead. */ }
+            }
+            if (value instanceof String && value.equals(observedSourceUrl)) return (String) value;
+            throw publicFailure;
+        }
+    }
+    synchronized String observedMediaUrl(Object value) throws BackendException {
+        if (!(value instanceof String) || observedSourceUrl.isEmpty() || !observedSourceUrl.equals(value)) throw fail("INVALID_MEDIA");
+        return observedSourceUrl;
+    }
+
+    private static String receiverUrl(Object value) throws BackendException {
+        if (!(value instanceof String) || ((String) value).length() > 8192) throw fail("RECEIVER_RESPONSE");
+        String text = (String) value;
+        try {
+            URI uri = new URI(text);
+            if (!("http".equals(uri.getScheme()) || "https".equals(uri.getScheme())) || uri.getHost() == null
+                    || uri.getRawUserInfo() != null || uri.getRawFragment() != null || uri.getPort() > 65535) throw fail("RECEIVER_RESPONSE");
+            return text;
+        } catch (BackendException rethrow) { throw rethrow; }
+        catch (Exception invalid) { throw fail("RECEIVER_RESPONSE"); }
+    }
+
+    private static String localMediaId(Object value) throws BackendException {
+        if (!(value instanceof String) || !((String) value).matches("local:[a-f0-9]{32,64}")) throw fail("INVALID_MEDIA");
+        return (String) value;
+    }
     /** Host, port and token for side-channel calls that must not wait behind {@link #handle}. */
     public static final class Endpoint {
         final String host, token; final int port;
@@ -515,7 +571,9 @@ public final class NativeBackend {
             if (safe == null || !safe.optString("key").equals(value.getString("key"))
                     || !safe.optString("watchUrl").equals(value.getString("watchUrl"))
                     || !safe.optString("title").equals(title)) return null;
-            return safe;
+            if (value.has("animeId") && WatchHistory.animeId(value) == null
+                    || value.has("animeAudio") && !("sub".equals(value.opt("animeAudio")) || "dub".equals(value.opt("animeAudio")))) return null;
+            return WatchHistory.preserveAnime(safe, value);
         } catch (Exception invalid) { return null; }
     }
     /** Canonical identity reported by the receiver, re-derived exactly like a fresh catalog item. */
@@ -528,7 +586,10 @@ public final class NativeBackend {
             String title = value.optString("title", "");
             if (!title.equals(label(title, 200))) return null;
             JSONObject safe = WatchHistory.contentFromCatalog(kind, value.getString("contentId"), season, episode, title);
-            return safe != null && safe.optString("key").equals(value.optString("key")) ? safe : null;
+            if (safe == null || !safe.optString("key").equals(value.optString("key"))
+                    || value.has("animeId") && WatchHistory.animeId(value) == null
+                    || value.has("animeAudio") && !("sub".equals(value.opt("animeAudio")) || "dub".equals(value.opt("animeAudio")))) return null;
+            return WatchHistory.preserveAnime(safe, value);
         } catch (Exception invalid) { return null; }
     }
     private static String contentKey(Object raw) throws BackendException {
@@ -536,8 +597,8 @@ public final class NativeBackend {
         return (String) raw;
     }
     /** Copies validated source guards; the receiver applies them atomically with the write. */
-    private static JSONObject guarded(JSONObject params, JSONObject command) throws Exception {
-        if (params.has("expectedSourceUrl")) command.put("expectedSourceUrl", publicUrl(params.opt("expectedSourceUrl")));
+    private JSONObject guarded(JSONObject params, JSONObject command) throws Exception {
+        if (params.has("expectedSourceUrl")) command.put("expectedSourceUrl", mediaUrl(params.opt("expectedSourceUrl")));
         if (params.has("expectedContentKey")) command.put("expectedContentKey", contentKey(params.opt("expectedContentKey")));
         return command;
     }
@@ -545,6 +606,7 @@ public final class NativeBackend {
         JSONObject data = call("player.status", new JSONObject(), false);
         if (!(data.opt("active") instanceof Boolean)) throw fail("RECEIVER_RESPONSE");
         if (!data.getBoolean("active")) {
+            observedSourceUrl = "";
             JSONObject idle = object("active", false, "playing", false);
             if (data.opt("error") instanceof String) idle.put("error", label(data.getString("error"), 64));
             // A finished episode stays known so a phone that connects later can offer Next.
@@ -555,10 +617,15 @@ public final class NativeBackend {
         }
         Object position = data.opt("positionSeconds"), duration = data.opt("durationSeconds");
         if (!(position instanceof Number) || !(duration instanceof Number) || !(data.opt("canSeek") instanceof Boolean) || !(data.opt("sourceUrl") instanceof String)) throw fail("RECEIVER_RESPONSE");
+        String sourceUrl = receiverUrl(data.opt("sourceUrl"));
+        observedSourceUrl = sourceUrl;
         JSONObject result = object("active", true, "playing", data.optBoolean("playing"), "paused", data.optBoolean("paused"),
             "positionSeconds", Math.max(0, ((Number) position).doubleValue()), "durationSeconds", Math.max(0, ((Number) duration).doubleValue()),
-            "canSeek", data.getBoolean("canSeek"), "sourceUrl", data.getString("sourceUrl"),
+            "canSeek", data.getBoolean("canSeek"), "sourceUrl", sourceUrl,
             "state", label(data.optString("state", ""), 16), "revision", data.optLong("revision"));
+        if (data.has("mediaId")) result.put("mediaId", localMediaId(data.opt("mediaId")))
+            .put("contentType", label(data.optString("contentType", ""), 100))
+            .put("title", label(data.optString("title", "Projector video"), 200));
         JSONObject content = receiverContent(data.optJSONObject("content"));
         if (content != null) result.put("content", content);
         return receiverExtras(data, result);
@@ -566,6 +633,33 @@ public final class NativeBackend {
     /** Auto-next setting/state and the last episode a person actually interacted with. */
     private static JSONObject receiverExtras(JSONObject data, JSONObject result) throws Exception {
         result.put("autoNext", data.optBoolean("autoNext")).put("autoplayed", data.optBoolean("autoplayed")).put("upNext", data.optBoolean("upNext"));
+        Double ramAhead = optionalStatusSeconds(data.opt("bufferAheadSeconds"));
+        if (ramAhead == null) {
+            Double buffered = optionalStatusSeconds(data.opt("bufferedSeconds"));
+            Double position = optionalStatusSeconds(result.opt("positionSeconds"));
+            if (buffered != null && position != null) ramAhead = Math.max(0, buffered - position);
+        }
+        if (ramAhead != null) {
+            double duration = result.optDouble("durationSeconds", 0);
+            result.put("bufferAheadSeconds", duration > 0 ? Math.min(duration, ramAhead) : ramAhead);
+        }
+        String cacheState = data.opt("diskCacheState") instanceof String ? data.optString("diskCacheState") : "";
+        if (DISK_CACHE_STATE.matcher(cacheState).matches()) {
+            result.put("diskCacheState", cacheState).put("diskCacheComplete", "complete".equals(cacheState));
+            String storage = data.opt("diskCacheStorage") instanceof String ? data.optString("diskCacheStorage") : "";
+            if (DISK_CACHE_STORAGE.matcher(storage).matches()) result.put("diskCacheStorage", storage);
+            Long target = optionalStatusInteger(data.opt("diskCacheTargetBytes"), MAX_DISK_CACHE_BYTES);
+            Long cached = optionalStatusInteger(data.opt("diskCachedBytes"), MAX_DISK_CACHE_BYTES);
+            if (target != null) {
+                result.put("diskCacheTargetBytes", target);
+                if (cached != null && cached <= target) result.put("diskCachedBytes", cached);
+            }
+            Double diskAhead = optionalStatusSeconds(data.opt("diskCacheAheadSeconds"));
+            if (diskAhead != null) {
+                double duration = result.optDouble("durationSeconds", 0);
+                result.put("diskCacheAheadSeconds", duration > 0 ? Math.min(duration, diskAhead) : diskAhead);
+            }
+        }
         JSONObject last = data.optJSONObject("lastInteraction");
         JSONObject lastContent = last == null ? null : receiverContent(last.optJSONObject("content"));
         if (lastContent != null) result.put("lastInteraction", object("content", lastContent,
@@ -575,7 +669,7 @@ public final class NativeBackend {
     private void requireCurrent(JSONObject params) throws Exception {
         JSONObject current = playback();
         if (!current.getBoolean("active")) throw fail("NO_VIDEO");
-        if (params.has("expectedSourceUrl") && !publicUrl(params.opt("expectedSourceUrl")).equals(current.getString("sourceUrl"))) throw fail("SOURCE_CHANGED");
+        if (params.has("expectedSourceUrl") && !mediaUrl(params.opt("expectedSourceUrl")).equals(current.getString("sourceUrl"))) throw fail("SOURCE_CHANGED");
         if (params.has("expectedContentKey") && !contentKey(params.opt("expectedContentKey")).equals(current.optJSONObject("content") == null ? "" : current.getJSONObject("content").optString("key"))) throw fail("SOURCE_CHANGED");
     }
     private JSONObject subtitles(JSONObject params) throws Exception {
@@ -643,20 +737,27 @@ public final class NativeBackend {
         }
         if ("open".equals(action)) {
             JSONObject media = params.optJSONObject("media"); if (media == null) throw fail("INVALID_MEDIA");
-            String url = publicUrl(media.opt("url")), type = media.optString("contentType", "").split(";", 2)[0].trim().toLowerCase(Locale.ROOT);
-            if (!(type.equals("video/mp4") || type.equals("video/webm") || type.equals("application/vnd.apple.mpegurl") || type.equals("application/x-mpegurl") || type.equals("application/dash+xml"))) throw fail("INVALID_MEDIA");
-            if (params.has("expectedSourceUrl") && !url.equals(publicUrl(params.opt("expectedSourceUrl")))) throw fail("SOURCE_CHANGED");
+            String url = mediaUrl(media.opt("url")), type = media.optString("contentType", "").split(";", 2)[0].trim().toLowerCase(Locale.ROOT);
+            if (!(type.equals("video/mp4") || type.equals("video/webm") || type.equals("video/x-matroska") || type.equals("application/vnd.apple.mpegurl") || type.equals("application/x-mpegurl") || type.equals("application/dash+xml"))) throw fail("INVALID_MEDIA");
+            if (params.has("expectedSourceUrl") && !url.equals(mediaUrl(params.opt("expectedSourceUrl")))) throw fail("SOURCE_CHANGED");
             JSONObject content = validatedLumaContent(media);
             if (params.has("expectedContentKey") && (content == null || !contentKey(params.opt("expectedContentKey")).equals(content.optString("key")))) throw fail("SOURCE_CHANGED");
             if (params.has("onlyIfInactive") && !(params.opt("onlyIfInactive") instanceof Boolean)) throw fail("INVALID_INPUT");
             boolean hasCurrentSource = params.has("expectedCurrentSourceUrl"), hasCurrentKey = params.has("expectedCurrentContentKey");
             if (hasCurrentSource != hasCurrentKey || params.optBoolean("onlyIfInactive") && hasCurrentSource) throw fail("INVALID_INPUT");
             JSONObject request = object("url", url, "contentType", type);
+            JSONObject headers = MediaHeaders.validated(media.opt("headers"));
+            if (headers.length() > 0) request.put("headers", headers);
             if (content != null) request.put("content", content).put("title", label(content.optString("title"), 200));
+            else {
+                String title = label(media.optString("title", ""), 200);
+                if (!title.isEmpty()) request.put("title", title);
+                if (media.has("mediaId")) request.put("mediaId", localMediaId(media.opt("mediaId")));
+            }
             if (media.opt("resumeSeconds") instanceof Number && ((Number) media.opt("resumeSeconds")).doubleValue() > 0)
                 request.put("resumeSeconds", Math.min(17280000, ((Number) media.opt("resumeSeconds")).doubleValue()));
             JSONObject command = object("media", request, "onlyIfInactive", params.optBoolean("onlyIfInactive"));
-            if (hasCurrentSource) command.put("expectedCurrentSourceUrl", publicUrl(params.opt("expectedCurrentSourceUrl")))
+            if (hasCurrentSource) command.put("expectedCurrentSourceUrl", mediaUrl(params.opt("expectedCurrentSourceUrl")))
                 .put("expectedCurrentContentKey", contentKey(params.opt("expectedCurrentContentKey")));
             call("player.open", command, true);
             return object("accepted", true);
@@ -667,7 +768,7 @@ public final class NativeBackend {
         if ("getSubtitles".equals(action)) return subtitles(params);
         if ("addSubtitle".equals(action)) {
             JSONObject track = params.optJSONObject("track"); if (track == null) throw fail("INVALID_SUBTITLE");
-            String url = publicUrl(track.opt("url"));
+            String url = mediaUrl(track.opt("url"));
             if (params.has("preparedId")) {
                 String id = text(params, "preparedId", 128);
                 if (!id.matches("[A-Za-z0-9_-]{16,128}") || subtitleResolver == null || !params.has("expectedSourceUrl")) throw fail("INVALID_SUBTITLE");
@@ -757,6 +858,6 @@ public final class NativeBackend {
     public void close() {
         closed = true; closeLuma(); DatagramSocket udp = discovering; if (udp != null) udp.close();
         HttpURLConnection http = activeHttp; if (http != null) http.disconnect(); deadlines.shutdownNow();
-        token = null; receiverConnected = false;
+        token = null; observedSourceUrl = ""; receiverConnected = false;
     }
 }

@@ -1,0 +1,7 @@
+LUMA Remote 0.4.28
+
+The Remote screen now has a Change stream button for the current movie or episode. It opens the exact frameXTV watch page in LUMA Remote's built-in browser without stopping the video already playing on the projector.
+
+Library details now also open either the selected episode/player page or the movie/series page. Use the server menu on the episode page to choose another stream, then tap Cast to replace the current playback only when the new source is ready.
+
+Anime series open their verified anime page, while ordinary TV series retain the selected season in the page link.

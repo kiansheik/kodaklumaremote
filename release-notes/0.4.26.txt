@@ -1,0 +1,9 @@
+LUMA Remote 0.4.26
+
+Long-press a saved episode or title in Library to reveal its delete action. Episode and whole-series deletions use synchronized tombstones so stale progress cannot immediately return and the projector clears its matching Library copy when connected.
+
+Tap the current movie or series name in Remote to open that title directly in Library. For a series, the episode currently playing is selected automatically.
+
+When a movie server exposes a different title in its own source URL, the app now rejects that source, clears an older matching cache entry, and tries another available server automatically. Providers whose URLs do not expose identity remain accepted because the app cannot safely infer their contents before playback.
+
+This release also includes the verified anime identity, sub/dub separation, correct Next routing and Library episode-list fixes prepared in 0.4.25.

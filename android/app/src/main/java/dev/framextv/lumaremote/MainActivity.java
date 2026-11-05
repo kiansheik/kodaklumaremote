@@ -1,6 +1,8 @@
 package dev.framextv.lumaremote;
 
 import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.ClipData;
 import android.content.Intent;
 import android.content.ComponentName;
 import android.content.ServiceConnection;
@@ -10,6 +12,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
 import android.graphics.Color;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.view.View;
@@ -33,14 +36,18 @@ import java.io.InputStream;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
 
 /** Separate WebViews keep the native bridge entirely outside untrusted sites. */
 public final class MainActivity extends Activity {
     private static final String LOCAL_ORIGIN = "https://luma.invalid";
     private static final String START_URL = "https://framextv.cc/watch/284833/1/1";
-    private static final int SCAN_MATTER = 6031;
+    private static final int SCAN_MATTER = 6031, PICK_LOCAL_VIDEO = 6032, PICK_LOCAL_SUBTITLES = 6033;
     private String pendingMatterScan;
+    private String pendingLocalMedia;
+    private Uri pendingLocalVideo;
     private WebView controls, browser;
     private EditText address;
     private String displayedBrowserUrl = "";
@@ -77,11 +84,13 @@ public final class MainActivity extends Activity {
     };
     private final AtomicLong pageGeneration = new AtomicLong();
     private final AtomicLong captureSequence = new AtomicLong();
+    private final LiveMediaObserver liveMediaObserver = new LiveMediaObserver();
+    private final LiveMediaVerifier liveMediaVerifier = new LiveMediaVerifier();
     private volatile long catalogAttempt;
     private final String captureSession = java.util.UUID.randomUUID().toString();
     private volatile String capturedToken;
     private volatile long capturedGeneration = -1;
-    private String lastNavigationUrl;
+    private volatile String lastNavigationUrl;
     private JSONObject capturedMedia;
     private boolean localReady;
     private boolean pendingPlayNext;
@@ -270,11 +279,18 @@ public final class MainActivity extends Activity {
         browser.setTag("luma-browser");
         browser.getSettings().setDomStorageEnabled(true);
         browser.getSettings().setMediaPlaybackRequiresUserGesture(true);
-        // No JavaScript interface, file access, network interception or copied cookies.
+        // No JavaScript interface, file access, response rewriting or copied
+        // cookies. Request metadata is retained only for the short-lived,
+        // user-initiated live-media fallback.
         browser.setWebViewClient(new WebViewClient() {
             @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 String url = request.getUrl().toString();
-                return !url.equals("about:blank") && !isHttps(url);
+                return shouldBlockBrowserNavigation(view.getUrl(), url, request.isForMainFrame());
+            }
+            @Override public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                liveMediaObserver.observe(lastNavigationUrl, pageGeneration.get(), request.getMethod(), request.isForMainFrame(),
+                        request.getUrl().toString(), request.getRequestHeaders(), SystemClock.elapsedRealtime());
+                return null;
             }
             @Override public void onPageStarted(WebView view, String url, android.graphics.Bitmap icon) {
                 invalidateSource(url);
@@ -306,7 +322,9 @@ public final class MainActivity extends Activity {
 
     private void invalidateSource(String url) {
         lastNavigationUrl = url;
-        pageGeneration.incrementAndGet();
+        long generation = pageGeneration.incrementAndGet();
+        liveMediaVerifier.cancel();
+        liveMediaObserver.reset(url, generation);
         if (connectionService != null) connectionService.revokeToken(capturedToken);
         capturedToken = null;
         capturedGeneration = -1;
@@ -314,12 +332,20 @@ public final class MainActivity extends Activity {
         event("onSourceChanged", null);
     }
 
-    private boolean isHttps(String value) {
+    private static boolean isHttps(String value) {
         try {
             URI uri = new URI(value);
             return "https".equalsIgnoreCase(uri.getScheme()) && uri.getHost() != null
                 && uri.getUserInfo() == null;
         } catch (Exception ignored) { return false; }
+    }
+
+    /** Keep a successfully loaded HTTPS page when its own diagnostics falsely
+     * classify Android WebView as inspected and try to replace it with blank.
+     * Initial/app-owned blank loads and blank child frames remain available. */
+    static boolean shouldBlockBrowserNavigation(String current, String target, boolean mainFrame) {
+        if ("about:blank".equals(target)) return mainFrame && current != null && isHttps(current);
+        return !isHttps(target);
     }
 
     private String sharedUrl(Intent intent) {
@@ -405,26 +431,97 @@ public final class MainActivity extends Activity {
                     if (value == null || value.length() > 256 * 1024) throw new Exception();
                     JSONObject data = new JSONObject(value);
                     if (!data.optBoolean("ok")) {
-                        captureFailure(requestId, "Open a playable episode, then tap Cast again."); return;
+                        if ("SOURCE_UNAVAILABLE".equals(data.optString("code"))) captureObservedMedia(requestId, generation, attempt, url);
+                        else captureFailure(requestId, "This player did not expose a supported unprotected video stream.");
+                        return;
                     }
                     JSONObject media = data.getJSONObject("media");
-                    if (connectionService != null) media = connectionService.attachWatchMetadata(media, url);
-                    int trackCount = media.optJSONArray("tracks") == null ? 0 : media.optJSONArray("tracks").length();
-                    String kind = media.optString("contentType", "").toLowerCase(java.util.Locale.ROOT);
-                    android.util.Log.i("LumaHandoff", "captured tracks=" + trackCount + " format="
-                        + (kind.contains("mpegurl") ? "hls" : kind.contains("dash") ? "dash" : kind.startsWith("video/") ? "video" : "unknown"));
-                    capturedToken = captureSession + ":" + generation + ":" + attempt;
-                    capturedGeneration = generation;
-                    media.put("sourceToken", capturedToken);
-                    capturedMedia = media;
-                    showBrowser(false);
-                    if (requestId != null) reply(requestId, media, null, null);
-                    else event("onCapturedMedia", media);
+                    if (connectionService == null) { completeCapture(requestId, generation, attempt, url, media); return; }
+                    connectionService.attachWatchMetadata(media, url, new ConnectionService.Callback() {
+                        @Override public void success(JSONObject result) { completeCapture(requestId, generation, attempt, url, result); }
+                        @Override public void failure(String code, String message) {
+                            if (generation == pageGeneration.get() && attempt == captureSequence.get()) captureFailure(requestId, message);
+                        }
+                    });
                 } catch (Exception ignored) { captureFailure(requestId, "This player did not expose a supported video link."); }
             });
         } catch (Exception ignored) {
             captureFailure(requestId, "Video capture could not start. Reopen the video and try again.");
         }
+    }
+
+    private void captureObservedMedia(String requestId, long generation, long attempt, String pageUrl) {
+        List<LiveMediaObserver.Candidate> candidates = liveMediaObserver.snapshot(pageUrl, generation, SystemClock.elapsedRealtime());
+        if (candidates.isEmpty()) {
+            captureFailure(requestId, "Let the backup video play for a few seconds, then tap Cast again.");
+            return;
+        }
+        if (requestId == null) Toast.makeText(this, "Checking the live video stream…", Toast.LENGTH_SHORT).show();
+        liveMediaVerifier.verify(candidates,
+                () -> !destroyed && generation == pageGeneration.get() && attempt == captureSequence.get()
+                        && pageUrl.equals(lastNavigationUrl),
+                new LiveMediaVerifier.Callback() {
+                    @Override public void success(LiveMediaVerifier.Result verified) {
+                        main.post(() -> {
+                            if (destroyed || generation != pageGeneration.get() || attempt != captureSequence.get()
+                                    || !pageUrl.equals(browser.getUrl())) return;
+                            try {
+                                JSONObject media = new JSONObject()
+                                        .put("url", verified.url)
+                                        .put("contentType", verified.contentType)
+                                        .put("title", safePageTitle(browser.getTitle()))
+                                        .put("tracks", new org.json.JSONArray());
+                                if (!verified.headers.isEmpty()) media.put("headers", MediaHeaders.json(verified.headers));
+                                android.util.Log.i("LumaHandoff", "verified observed format="
+                                        + (verified.contentType.contains("mpegurl") ? "hls"
+                                        : verified.contentType.contains("dash") ? "dash" : "video"));
+                                if (connectionService == null) { completeCapture(requestId, generation, attempt, pageUrl, media); return; }
+                                connectionService.attachWatchMetadata(media, pageUrl, new ConnectionService.Callback() {
+                                    @Override public void success(JSONObject result) { completeCapture(requestId, generation, attempt, pageUrl, result); }
+                                    @Override public void failure(String code, String message) {
+                                        if (generation == pageGeneration.get() && attempt == captureSequence.get()) captureFailure(requestId, message);
+                                    }
+                                });
+                            } catch (Exception invalid) {
+                                captureFailure(requestId, "The live video stream could not be prepared.");
+                            }
+                        });
+                    }
+                    @Override public void failure() {
+                        main.post(() -> {
+                            if (!destroyed && generation == pageGeneration.get() && attempt == captureSequence.get())
+                                captureFailure(requestId, "The backup did not expose a direct playable stream. Let it play, then try Cast again.");
+                        });
+                    }
+                });
+    }
+
+    private static String safePageTitle(String value) {
+        if (value == null) return "";
+        StringBuilder clean = new StringBuilder();
+        for (int index = 0; index < value.length() && clean.length() < 200; index++) {
+            char character = value.charAt(index);
+            if (character >= 32 && !(character >= 127 && character <= 159)
+                    && !(character >= 0x202A && character <= 0x202E)
+                    && !(character >= 0x2066 && character <= 0x2069)) clean.append(character);
+        }
+        return clean.toString().trim();
+    }
+
+    private void completeCapture(String requestId, long generation, long attempt, String url, JSONObject media) {
+        if (destroyed || generation != pageGeneration.get() || attempt != captureSequence.get() || !url.equals(browser.getUrl())) {
+            captureFailure(requestId, "The page changed. Choose the video again."); return;
+        }
+        try {
+            int trackCount = media.optJSONArray("tracks") == null ? 0 : media.optJSONArray("tracks").length();
+            String kind = media.optString("contentType", "").toLowerCase(java.util.Locale.ROOT);
+            android.util.Log.i("LumaHandoff", "captured tracks=" + trackCount + " format="
+                + (kind.contains("mpegurl") ? "hls" : kind.contains("dash") ? "dash" : kind.startsWith("video/") ? "video" : "unknown"));
+            capturedToken = captureSession + ":" + generation + ":" + attempt;
+            capturedGeneration = generation; media.put("sourceToken", capturedToken); capturedMedia = media;
+            showBrowser(false);
+            if (requestId != null) reply(requestId, media, null, null); else event("onCapturedMedia", media);
+        } catch (Exception invalid) { captureFailure(requestId, "This player did not expose a supported video link."); }
     }
 
     static boolean supportsCapturePage(String value) {
@@ -493,6 +590,22 @@ public final class MainActivity extends Activity {
                 if (capturedMedia != null) result.put("source", capturedMedia);
                 reply(id, result, null, null);
                 main.post(this::deliverPendingNext);
+            } else if (method.equals("app.pickLocalMedia")) {
+                if (params.length() != 0) { reply(id, null, "INVALID_REQUEST", "Choose a local file without extra fields."); return; }
+                if (pendingLocalMedia != null) { reply(id, null, "BUSY", "Finish choosing the current local file first."); return; }
+                if (connectionService == null) { reply(id, null, "BUSY", "The local media server is starting. Try again in a moment."); return; }
+                if (capturedToken != null) connectionService.revokeToken(capturedToken);
+                capturedToken = null;
+                pendingLocalMedia = id;
+                try {
+                    Intent picker = new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
+                        .setType("video/*").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+                    picker.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{"video/mp4", "video/webm", "video/x-matroska", "video/quicktime", "application/octet-stream"});
+                    startActivityForResult(picker, PICK_LOCAL_VIDEO);
+                } catch (RuntimeException unavailable) {
+                    pendingLocalMedia = null;
+                    reply(id, null, "LOCAL_MEDIA_UNAVAILABLE", "This phone could not open its file picker.");
+                }
             } else if (method.equals("app.scanMatterCode")) {
                 if (pendingMatterScan != null) { reply(id, null, "MATTER_BUSY", "A scan is already open."); return; }
                 pendingMatterScan = id;
@@ -542,6 +655,16 @@ public final class MainActivity extends Activity {
                 if (catalogAttempt != 0 && catalogAttempt == captureSequence.get()) captureSequence.incrementAndGet();
                 catalogAttempt = 0;
                 reply(id, new JSONObject().put("accepted", true), null, null);
+            }
+            else if (method.equals("app.animeAudioAvailability")) {
+                if (connectionService == null) { reply(id, null, "BUSY", "The remote is starting. Try again in a moment."); return; }
+                final long generation = pageGeneration.get();
+                connectionService.animeAudioAvailability(params,
+                        () -> !destroyed && generation == pageGeneration.get(),
+                        new ConnectionService.Callback() {
+                            @Override public void success(JSONObject result) { reply(id, result, null, null); }
+                            @Override public void failure(String code, String message) { requestFailure(id, code, message); }
+                        });
             }
             else if (method.equals("app.chooseCatalog")) {
                 if (connectionService == null) { reply(id, null, "BUSY", "The remote is starting. Try again in a moment."); return; }
@@ -629,6 +752,32 @@ public final class MainActivity extends Activity {
 
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == PICK_LOCAL_VIDEO) {
+            String id = pendingLocalMedia;
+            Uri video = resultCode == RESULT_OK && data != null ? data.getData() : null;
+            if (id == null || destroyed) return;
+            if (video == null) { clearLocalSelection(); reply(id, null, "LOCAL_MEDIA_CANCELLED", "Local file selection cancelled."); return; }
+            retainReadPermission(video);
+            pendingLocalVideo = video;
+            new AlertDialog.Builder(this).setTitle("Local video")
+                .setMessage("Add external subtitles from this phone?")
+                .setPositiveButton("Add subtitles", (dialog, which) -> chooseLocalSubtitles())
+                .setNegativeButton("Play without subtitles", (dialog, which) -> finishLocalSelection(new ArrayList<>()))
+                .setOnCancelListener(dialog -> finishLocalSelection(new ArrayList<>())).show();
+            return;
+        }
+        if (requestCode == PICK_LOCAL_SUBTITLES) {
+            if (pendingLocalMedia == null || destroyed) return;
+            List<Uri> subtitles = new ArrayList<>();
+            if (resultCode == RESULT_OK && data != null) {
+                ClipData clips = data.getClipData();
+                if (clips != null) for (int i = 0; i < Math.min(16, clips.getItemCount()); i++) subtitles.add(clips.getItemAt(i).getUri());
+                else if (data.getData() != null) subtitles.add(data.getData());
+                for (Uri subtitle : subtitles) retainReadPermission(subtitle);
+            }
+            finishLocalSelection(subtitles);
+            return;
+        }
         if (requestCode != SCAN_MATTER) return;
         String id = pendingMatterScan; pendingMatterScan = null;
         if (id == null || destroyed) return;
@@ -640,6 +789,54 @@ public final class MainActivity extends Activity {
             reply(id, new JSONObject(), null, null);
         } else reply(id, null, "MATTER_SCAN_CANCELLED", "Scanning cancelled.");
     }
+
+    private void chooseLocalSubtitles() {
+        try {
+            Intent picker = new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
+                .setType("*/*").putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+            picker.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{"application/x-subrip", "text/vtt", "text/plain", "text/x-ssa", "application/ttml+xml", "application/octet-stream"});
+            startActivityForResult(picker, PICK_LOCAL_SUBTITLES);
+        } catch (RuntimeException unavailable) { finishLocalSelection(new ArrayList<>()); }
+    }
+
+    private void finishLocalSelection(List<Uri> subtitles) {
+        String id = pendingLocalMedia;
+        Uri video = pendingLocalVideo;
+        if (id == null || video == null || destroyed) { clearLocalSelection(); return; }
+        if (connectionService == null) {
+            clearLocalSelection();
+            reply(id, null, "BUSY", "The local media server is starting. Try again in a moment.");
+            return;
+        }
+        connectionService.prepareLocalMedia(video, subtitles, new ConnectionService.Callback() {
+            @Override public void success(JSONObject result) {
+                if (!id.equals(pendingLocalMedia) || destroyed) return;
+                clearLocalSelection();
+                try {
+                    long generation = pageGeneration.get(), attempt = captureSequence.incrementAndGet();
+                    capturedToken = captureSession + ":local:" + generation + ":" + attempt;
+                    capturedGeneration = generation;
+                    result.put("sourceToken", capturedToken);
+                    capturedMedia = result;
+                    showBrowser(false);
+                    reply(id, result, null, null);
+                } catch (Exception invalid) { reply(id, null, "LOCAL_MEDIA_INVALID", "This local file could not be prepared."); }
+            }
+            @Override public void failure(String code, String message) {
+                if (!id.equals(pendingLocalMedia) || destroyed) return;
+                clearLocalSelection();
+                reply(id, null, code, message);
+            }
+        });
+    }
+
+    private void retainReadPermission(Uri uri) {
+        try { getContentResolver().takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION); }
+        catch (SecurityException ignored) { /* The transient grant remains valid while this Activity owns the selection. */ }
+    }
+
+    private void clearLocalSelection() { pendingLocalMedia = null; pendingLocalVideo = null; }
 
     private void reply(String id, JSONObject result, String code, String message) {
         try {
@@ -692,6 +889,8 @@ public final class MainActivity extends Activity {
     @Override protected void onDestroy() {
         if (updateManager != null) updateManager.close();
         destroyed = true;
+        liveMediaVerifier.close();
+        liveMediaObserver.clear();
         main.removeCallbacksAndMessages(null);
         if (connectionService != null) {
             connectionService.revokeToken(capturedToken);

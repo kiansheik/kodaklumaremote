@@ -26,20 +26,30 @@ const html = content => `<!doctype html><html><head><title>Episode fixture</titl
 const capture = page => page.evaluate(bundle);
 
 test('mobile capture picks the largest visible same-origin video, ignores hidden/cross-origin frames and includes every declared track', async ({ page }) => {
-  pages.set('/', html('<video style="width:100px;height:60px" src="/small.mp4"></video><iframe src="/child" style="width:500px;height:300px"></iframe><iframe src="/hidden" style="display:none;width:1000px;height:600px"></iframe><iframe id="cross" style="width:1000px;height:600px"></iframe>'));
+  pages.set('/', html('<video style="width:100px;height:60px" src="/small.mp4"></video><iframe src="/child?sub_type=dub" style="width:500px;height:300px"></iframe><iframe src="/hidden" style="display:none;width:1000px;height:600px"></iframe><iframe id="cross" style="width:1000px;height:600px"></iframe>'));
   pages.set('/child', html('<video style="width:480px;height:270px" src="/episode.mp4"><track kind="subtitles" src="/en.vtt" srclang="en" label="English"><track kind="subtitles" src="/pt.vtt" srclang="pt-BR" label="Português (Brasil)"></video>'));
   pages.set('/hidden', html('<video style="width:990px;height:580px" src="/hidden.mp4"></video>'));
   pages.set('/cross', html('<video style="width:990px;height:580px" src="/cross.mp4"></video>'));
   await page.goto(origin);
   await page.locator('#cross').evaluate((frame, cross) => { frame.src = cross; }, origin.replace('127.0.0.1', 'localhost') + '/cross');
   await expect.poll(() => page.frames().length).toBe(4);
-  await page.frame({ url: origin + '/child' }).evaluate(() => {
+  await page.frame({ url: origin + '/child?sub_type=dub' }).evaluate(() => {
     const tracks = document.querySelectorAll('track'); tracks[0].track.mode = 'hidden'; tracks[1].track.mode = 'disabled';
   });
   const result = await capture(page);
-  expect(result).toMatchObject({ ok: true, media: { url: origin + '/episode.mp4', title: 'Episode fixture' } });
+  expect(result).toMatchObject({ ok: true, media: { url: origin + '/episode.mp4', title: 'Episode fixture', animeAudio: 'dub' } });
   expect(result.media.tracks.map(track => track.language)).toEqual(['en', 'pt-BR']);
   expect(result.media.tracks.every(track => track.active === false)).toBe(true);
+});
+
+test('mobile capture carries the same-origin anime embed identity across the outer-page redirect race', async ({ page }) => {
+  pages.set('/', html('<iframe src="/embed/anime?id=211778&type=anime&season=1&episode=1&sub_type=dub" style="width:640px;height:360px"></iframe>'));
+  pages.set('/embed/anime', html('<video style="width:620px;height:340px" src="/witch-episode-1.m3u8"></video>'));
+  await page.goto(origin);
+  await expect.poll(() => page.frames().length).toBe(2);
+  expect(await capture(page)).toMatchObject({ ok: true, media: {
+    url: origin + '/witch-episode-1.m3u8', animeId: '211778', animeEpisode: 1, animeAudio: 'dub',
+  } });
 });
 
 test('mobile capture preserves the shared DRM and bare-blob guards while reading declared HLS behind MSE', async ({ page }) => {

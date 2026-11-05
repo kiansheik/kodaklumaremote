@@ -7,9 +7,10 @@
 // player.getSubtitles(options) -> {tracks:[{index,url?}], enabled, currentIndex};
 // player.addSubtitle(track, options); player.setSubtitle(index|'off', options);
 // Optional native preparation: player.prepareSubtitle(track, options) returns an
-// opaque preparedId; player.subtitleDelivery(preparedId, track, options) reports
-// {downloaded:boolean} only after its complete response body reached the receiver.
-// addSubtitle receives options.preparedId while track.url stays the original URL.
+// opaque preparedId, or {direct:true} for a trusted adapter-owned LAN track;
+// player.subtitleDelivery(preparedId, track, options) reports {downloaded:boolean}
+// only after its complete response body reached the receiver. addSubtitle receives
+// options.preparedId while track.url stays the original URL.
 // remote.ready(result, options). Every options object includes AbortSignal.
 // addSubtitle options.onNotSent() may report explicit proof that this request
 // was never applied or queued, including a verified receiver rejection or a late
@@ -67,6 +68,30 @@ function sourceUrl(value) {
   } catch { throw fail('INVALID_MEDIA'); }
 }
 
+function requestHeaders(value) {
+  if (value === undefined || value === null) return null;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw fail('INVALID_MEDIA');
+  const allowed = new Set(['Referer', 'Origin', 'User-Agent']);
+  const result = {};
+  for (const [name, raw] of Object.entries(value)) {
+    if (!allowed.has(name) || typeof raw !== 'string' || !raw || raw.length > 1024 || safeText(raw, 1024) !== raw || /[^\x20-\x7e]/u.test(raw)) throw fail('INVALID_MEDIA');
+    if (name === 'User-Agent') result[name] = raw;
+    else if (name === 'Referer') {
+      const referer = sourceUrl(raw);
+      if (!referer.startsWith('https://')) throw fail('INVALID_MEDIA');
+      result[name] = referer;
+    } else {
+      try {
+        const origin = new URL(raw);
+        if (origin.protocol !== 'https:' || origin.username || origin.password || origin.search || origin.hash
+            || !['', '/'].includes(origin.pathname)) throw fail('INVALID_MEDIA');
+        result[name] = origin.origin;
+      } catch (error) { throw error instanceof HandoffError ? error : fail('INVALID_MEDIA'); }
+    }
+  }
+  return Object.keys(result).length ? result : null;
+}
+
 function canonicalContent(value) {
   if (value === undefined || value === null) return null;
   if (typeof value !== 'object' || !['movie', 'tv'].includes(value.kind)
@@ -104,11 +129,13 @@ function mediaSnapshot(input, maxTracks) {
     tracks.push({ url, contentType: 'text/vtt', language: safeText(track.language, 64), label: safeText(track.label, 200), active: track.active === true });
   }
   const content = canonicalContent(input.content);
+  const mediaId = typeof input.mediaId === 'string' && /^local:[a-f0-9]{32,64}$/u.test(input.mediaId) ? input.mediaId : null;
   // Passed through to Open so the receiver starts at the saved position instead of
   // starting at zero and relying on a seek that may arrive before the media is seekable.
   const resume = Number.isFinite(input.resumeSeconds) && input.resumeSeconds >= 1 && input.resumeSeconds <= 17280000 ? input.resumeSeconds : 0;
+  const headers = requestHeaders(input.headers);
   return { url: sourceUrl(input.url), contentType: input.contentType.toLowerCase(), title: safeText(input.title, 200), tracks,
-    ...(content ? { content } : {}), ...(resume ? { resumeSeconds: resume } : {}) };
+    ...(content ? { content } : {}), ...(mediaId ? { mediaId } : {}), ...(resume ? { resumeSeconds: resume } : {}), ...(headers ? { headers } : {}) };
 }
 
 function language(track) {
@@ -405,9 +432,12 @@ export function createHandoffCoordinator({
       let prepared;
       try { prepared = await call(ctx, options => player.prepareSubtitle(track, options), preparation); }
       catch (error) { if (error.adapterCode === 'SOURCE_CHANGED') throw fail('SOURCE_CHANGED'); throw error; }
-      if (!preparedTicket(prepared?.preparedId)) throw fail('SUBTITLE_INVALID');
-      preparedId = prepared.preparedId;
-      cache.prepared.set(track.url, preparedId);
+      if (prepared?.direct === true && Object.keys(prepared).length === 1) preparedId = null;
+      else {
+        if (!preparedTicket(prepared?.preparedId)) throw fail('SUBTITLE_INVALID');
+        preparedId = prepared.preparedId;
+        cache.prepared.set(track.url, preparedId);
+      }
     }
     // Preparation is read-only. A failed/cancelled download must not create an
     // uncertain Add that blocks a later explicit retry.

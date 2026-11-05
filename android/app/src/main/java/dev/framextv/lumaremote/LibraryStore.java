@@ -50,14 +50,21 @@ public final class LibraryStore implements AutoCloseable {
     }
     LibraryStore(Context context, String name, Metadata metadata, LongSupplier clock) {
         this.metadata = metadata; this.clock = clock;
-        helper = new SQLiteOpenHelper(context.getApplicationContext(), name, null, 1) {
+        helper = new SQLiteOpenHelper(context.getApplicationContext(), name, null, 2) {
             @Override public void onCreate(SQLiteDatabase db) {
                 db.execSQL("CREATE TABLE titles(kind TEXT NOT NULL,id TEXT NOT NULL,title TEXT NOT NULL,metadata_title TEXT NOT NULL DEFAULT '',metadata TEXT,metadata_at INTEGER NOT NULL DEFAULT 0,metadata_due INTEGER NOT NULL DEFAULT 0,revision INTEGER NOT NULL DEFAULT 0,last_started_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,PRIMARY KEY(kind,id))");
                 db.execSQL("CREATE TABLE progress(content_key TEXT PRIMARY KEY,kind TEXT NOT NULL,id TEXT NOT NULL,season INTEGER,episode INTEGER,record TEXT NOT NULL,last_started_at INTEGER NOT NULL,updated_at INTEGER NOT NULL)");
                 db.execSQL("CREATE INDEX progress_title ON progress(kind,id,last_started_at DESC,updated_at DESC)");
                 db.execSQL("CREATE TABLE seasons(id TEXT NOT NULL,number INTEGER NOT NULL,metadata TEXT NOT NULL,metadata_at INTEGER NOT NULL,PRIMARY KEY(id,number))");
+                db.execSQL("CREATE TABLE tombstones(key TEXT PRIMARY KEY,type TEXT NOT NULL,updated_at INTEGER NOT NULL)");
             }
-            @Override public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) { throw new SQLiteException("Unsupported library schema"); }
+            @Override public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
+                if (oldVersion == 1 && newVersion == 2) {
+                    db.execSQL("CREATE TABLE tombstones(key TEXT PRIMARY KEY,type TEXT NOT NULL,updated_at INTEGER NOT NULL)");
+                    return;
+                }
+                throw new SQLiteException("Unsupported library schema");
+            }
         };
         helper.setWriteAheadLoggingEnabled(true);
         try { database = helper.getWritableDatabase(); } catch (RuntimeException failure) { available = false; }
@@ -83,6 +90,12 @@ public final class LibraryStore implements AutoCloseable {
                 String key = row.optString("key"), kind = row.optString("kind"), id = row.optString("contentId");
                 JSONObject previous = oneProgress("content_key=?", new String[] {key});
                 long started = row.optLong("lastStartedAt"), updated = row.optLong("updatedAt");
+                // A whole-title deletion must also reject an old episode that
+                // arrives later from another peer and was not present locally
+                // when the deletion was created.
+                long deletedAt = Math.max(tombstoneAt(key), tombstoneAt(titleKey(kind, id)));
+                if (deletedAt >= updated) { database.setTransactionSuccessful(); return; }
+                if (deletedAt >= 0) database.delete("tombstones", "key=?", new String[] {key});
                 if (previous != null && (started < previous.optLong("lastStartedAt") || started == previous.optLong("lastStartedAt") && updated < previous.optLong("updatedAt"))) {
                     database.setTransactionSuccessful(); return;
                 }
@@ -108,17 +121,107 @@ public final class LibraryStore implements AutoCloseable {
         }
         schedule();
     }
-    /** Progress rows changed after {@code updatedAfter}, oldest first, for receiver sync. Read-only. */
+    /** Progress rows and deletion tombstones changed after {@code updatedAfter}, oldest first, for receiver sync. Read-only. */
     public JSONArray progressSince(long updatedAfter, int limit) {
         JSONArray result = new JSONArray();
         synchronized (lock) {
             if (closed || database == null) return result;
-            try (Cursor rows = database.rawQuery("SELECT record FROM progress WHERE updated_at>? ORDER BY updated_at LIMIT ?",
-                    new String[] {Long.toString(updatedAfter), Integer.toString(Math.max(1, Math.min(limit, 500)))})) {
-                while (rows.moveToNext()) { JSONObject record = json(rows.getString(0)); if (record != null) result.put(record); }
+            try (Cursor rows = database.rawQuery(
+                    "SELECT updated_at,deleted_marker,record,key,type FROM ("
+                    + "SELECT updated_at,0 AS deleted_marker,record,'' AS key,'progress' AS type FROM progress WHERE updated_at>? "
+                    + "UNION ALL SELECT updated_at,1 AS deleted_marker,NULL AS record,key,type FROM tombstones WHERE updated_at>?) "
+                    + "ORDER BY updated_at,deleted_marker,key LIMIT ?",
+                    new String[] {Long.toString(updatedAfter), Long.toString(updatedAfter), Integer.toString(Math.max(1, Math.min(limit, 500)))})) {
+                while (rows.moveToNext()) {
+                    if (rows.getInt(1) != 0) result.put(object("key", rows.getString(3), "type", rows.getString(4), "updatedAt", rows.getLong(0), "deleted", true));
+                    else { JSONObject record = json(rows.getString(2)); if (record != null) result.put(record); }
+                }
             } catch (RuntimeException failed) { available = false; }
         }
         return result;
+    }
+    /** Deletes one saved episode or an entire title and leaves durable sync tombstones. Playback is untouched. */
+    public JSONObject delete(JSONObject params) throws LibraryException {
+        if (params == null) throw fail("LIBRARY_INVALID_INPUT");
+        String scope = string(params.opt("scope"), 16);
+        if ("episode".equals(scope)) fields(params, "scope", "kind", "id", "season", "episode");
+        else if ("title".equals(scope)) fields(params, "scope", "kind", "id");
+        else throw fail("LIBRARY_INVALID_INPUT");
+        String kind = kind(params.opt("kind")), id = id(params.opt("id"));
+        if ("episode".equals(scope) && !"tv".equals(kind)) throw fail("LIBRARY_INVALID_INPUT");
+        int season = "episode".equals(scope) ? integer(params, "season", 0, 9999, -1) : -1;
+        int episode = "episode".equals(scope) ? integer(params, "episode", 1, 9999, -1) : -1;
+        synchronized (lock) {
+            if (closed || database == null) throw fail("LIBRARY_UNAVAILABLE");
+            try {
+                database.beginTransaction();
+                long stamp = nextDeletionTime(); int removed = 0;
+                if ("episode".equals(scope)) {
+                    JSONObject content = WatchHistory.contentFromCatalog("tv", id, season, episode, "");
+                    if (content == null) throw fail("LIBRARY_INVALID_INPUT");
+                    String key = content.optString("key");
+                    removed = database.delete("progress", "content_key=?", new String[] {key});
+                    putTombstone(key, "progress", stamp);
+                } else {
+                    List<String> keys = new ArrayList<>();
+                    try (Cursor rows = database.rawQuery("SELECT content_key FROM progress WHERE kind=? AND id=? ORDER BY content_key", new String[] {kind, id})) {
+                        while (rows.moveToNext()) keys.add(rows.getString(0));
+                    }
+                    for (String key : keys) putTombstone(key, "progress", stamp++);
+                    removed = database.delete("progress", "kind=? AND id=?", new String[] {kind, id});
+                    putTombstone(titleKey(kind, id), "title", stamp);
+                    database.delete("titles", "kind=? AND id=?", new String[] {kind, id});
+                    if ("tv".equals(kind)) database.delete("seasons", "id=?", new String[] {id});
+                }
+                database.setTransactionSuccessful(); available = true;
+                return object("version", 1, "deleted", true, "scope", scope, "kind", kind, "id", id,
+                        "season", "episode".equals(scope) ? season : JSONObject.NULL,
+                        "episode", "episode".equals(scope) ? episode : JSONObject.NULL, "removed", removed);
+            } catch (LibraryException failed) { throw failed; }
+            catch (RuntimeException failed) { available = false; throw fail("LIBRARY_UNAVAILABLE"); }
+            finally {
+                try { if (database.inTransaction()) database.endTransaction(); }
+                catch (RuntimeException failed) { available = false; }
+            }
+        }
+    }
+    /** Applies a deletion already validated by the receiver's sync envelope. */
+    public void applyDeletion(JSONObject record) {
+        if (record == null || !record.optBoolean("deleted")) return;
+        try {
+            String type = string(record.opt("type"), 16), key = string(record.opt("key"), 200);
+            long updated = time(record.opt("updatedAt"));
+            synchronized (lock) {
+                if (closed || database == null) return;
+                database.beginTransaction();
+                if ("progress".equals(type)) {
+                    if (progressKey(key) == null) throw new Exception();
+                    long existing = progressUpdatedAt(key);
+                    if (existing <= updated) { database.delete("progress", "content_key=?", new String[] {key}); putTombstone(key, type, updated); }
+                } else if ("title".equals(type)) {
+                    String[] title = titleScope(key); if (title == null) throw new Exception();
+                    List<String> removed = new ArrayList<>();
+                    try (Cursor rows = database.rawQuery("SELECT content_key,updated_at FROM progress WHERE kind=? AND id=?", title)) {
+                        while (rows.moveToNext()) if (rows.getLong(1) <= updated) removed.add(rows.getString(0));
+                    }
+                    for (String progress : removed) { database.delete("progress", "content_key=?", new String[] {progress}); putTombstone(progress, "progress", updated); }
+                    putTombstone(key, type, updated);
+                    try (Cursor remaining = database.rawQuery("SELECT 1 FROM progress WHERE kind=? AND id=? LIMIT 1", title)) {
+                        if (!remaining.moveToFirst()) {
+                            database.delete("titles", "kind=? AND id=?", title);
+                            if ("tv".equals(title[0])) database.delete("seasons", "id=?", new String[] {title[1]});
+                        }
+                    }
+                } else throw new Exception();
+                database.setTransactionSuccessful(); available = true;
+            }
+        } catch (Exception invalid) { /* Ignore malformed remote deletion without changing Library state. */ }
+        finally {
+            synchronized (lock) {
+                try { if (database != null && database.inTransaction()) database.endTransaction(); }
+                catch (RuntimeException failed) { available = false; }
+            }
+        }
     }
     /** Offline, read-only and paginated; this method never schedules enrichment. */
     public JSONObject list(JSONObject params) throws LibraryException {
@@ -242,12 +345,42 @@ public final class LibraryStore implements AutoCloseable {
         String kind = row.getString(0), id = row.getString(1); JSONObject meta = json(row.getString(3));
         JSONObject latest = oneProgress("kind=? AND id=?", new String[] {kind, id}), summary = progress(latest);
         if (latest != null && summary != null) { put(summary, "season", latest.opt("season")); put(summary, "episode", latest.opt("episode")); }
-        return object("kind", kind, "id", id, "title", meta == null ? clean(row.getString(2), 200) : meta.optString("title"), "overview", meta == null ? "" : meta.optString("overview"),
+        JSONObject result = object("kind", kind, "id", id, "title", meta == null ? clean(row.getString(2), 200) : meta.optString("title"), "overview", meta == null ? "" : meta.optString("overview"),
                 "year", meta == null ? "" : meta.optString("year"), "poster", meta == null ? JSONObject.NULL : meta.opt("poster"), "metadataAvailable", meta != null,
                 "lastStartedAt", row.getLong(4), "updatedAt", row.getLong(5), "latest", summary == null ? JSONObject.NULL : summary);
+        String animeId = WatchHistory.animeId(latest); if (animeId != null) { put(result, "animeId", animeId); put(result, "animeAudio", WatchHistory.animeAudio(latest)); } return result;
     }
     private JSONObject oneProgress(String where, String[] args) {
         try (Cursor row = database.rawQuery("SELECT record FROM progress WHERE " + where + " ORDER BY " + ORDER + " LIMIT 1", args)) { return row.moveToFirst() ? json(row.getString(0)) : null; }
+    }
+    private long tombstoneAt(String key) {
+        try (Cursor row = database.rawQuery("SELECT updated_at FROM tombstones WHERE key=?", new String[] {key})) { return row.moveToFirst() ? row.getLong(0) : -1; }
+    }
+    private long progressUpdatedAt(String key) {
+        try (Cursor row = database.rawQuery("SELECT updated_at FROM progress WHERE content_key=?", new String[] {key})) { return row.moveToFirst() ? row.getLong(0) : -1; }
+    }
+    private long nextDeletionTime() {
+        long latest = -1;
+        try (Cursor row = database.rawQuery("SELECT MAX(value) FROM (SELECT MAX(updated_at) AS value FROM progress UNION ALL SELECT MAX(updated_at) AS value FROM tombstones)", null)) {
+            if (row.moveToFirst() && !row.isNull(0)) latest = row.getLong(0);
+        }
+        return Math.max(Math.max(0, clock.getAsLong()), latest + 1);
+    }
+    private void putTombstone(String key, String type, long updated) {
+        if (tombstoneAt(key) > updated) return;
+        ContentValues value = new ContentValues(); value.put("key", key); value.put("type", type); value.put("updated_at", updated);
+        database.insertWithOnConflict("tombstones", null, value, SQLiteDatabase.CONFLICT_REPLACE);
+    }
+    private static String titleKey(String kind, String id) { return "title:" + kind + ":" + id; }
+    private static String[] titleScope(String key) {
+        java.util.regex.Matcher match = java.util.regex.Pattern.compile("^title:(movie|tv):([1-9][0-9]{0,9})$").matcher(key);
+        return match.matches() ? new String[] {match.group(1), match.group(2)} : null;
+    }
+    private static String[] progressKey(String key) {
+        java.util.regex.Matcher movie = java.util.regex.Pattern.compile("^framextv:(movie):([1-9][0-9]{0,9})$").matcher(key);
+        if (movie.matches()) return new String[] {movie.group(1), movie.group(2)};
+        java.util.regex.Matcher tv = java.util.regex.Pattern.compile("^framextv:(tv):([1-9][0-9]{0,9}):([0-9]{1,4}):([1-9][0-9]{0,3})$").matcher(key);
+        return tv.matches() ? new String[] {tv.group(1), tv.group(2), tv.group(3), tv.group(4)} : null;
     }
     private void schedule() {
         synchronized (lock) {
@@ -337,17 +470,25 @@ public final class LibraryStore implements AutoCloseable {
     private JSONObject seasonCache(String id, int season) {
         try (Cursor rows = database.rawQuery("SELECT metadata FROM seasons WHERE id=? AND number=?", new String[] {id, Integer.toString(season)})) { return rows.moveToFirst() ? json(rows.getString(0)) : null; }
     }
-    private static JSONObject knownNext(String id, int currentSeason, int currentEpisode, TreeMap<Integer, JSONObject> declared,
-                                        Map<Integer, TreeMap<Integer, JSONObject>> episodes, Set<Integer> complete) {
+    private JSONObject knownNext(String id, int currentSeason, int currentEpisode, TreeMap<Integer, JSONObject> declared,
+                                 Map<Integer, TreeMap<Integer, JSONObject>> episodes, Set<Integer> complete) {
         if (!complete.contains(currentSeason)) return null;
         TreeMap<Integer, JSONObject> current = episodes.get(currentSeason);
         if (current == null || !current.containsKey(currentEpisode)) return null;
-        Integer number = current.higherKey(currentEpisode);
-        if (number != null) return object("kind", "tv", "id", id, "season", currentSeason, "episode", number);
+        for (Map.Entry<Integer, JSONObject> candidate : current.tailMap(currentEpisode, false).entrySet())
+            if (released(candidate.getValue())) return object("kind", "tv", "id", id, "season", currentSeason, "episode", candidate.getKey());
         Integer following = declared.containsKey(currentSeason) ? declared.higherKey(currentSeason) : null;
         TreeMap<Integer, JSONObject> values = following == null ? null : episodes.get(following);
-        return following != null && complete.contains(following) && values != null && !values.isEmpty()
-                ? object("kind", "tv", "id", id, "season", following, "episode", values.firstKey()) : null;
+        if (following != null && complete.contains(following) && values != null)
+            for (Map.Entry<Integer, JSONObject> candidate : values.entrySet()) if (released(candidate.getValue()))
+                return object("kind", "tv", "id", id, "season", following, "episode", candidate.getKey());
+        return null;
+    }
+    private boolean released(JSONObject episode) {
+        String airDate = episode == null ? "" : episode.optString("airDate");
+        if (!airDate.matches("[0-9]{4}-[0-9]{2}-[0-9]{2}")) return true;
+        String today = new java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(new java.util.Date(Math.max(0, clock.getAsLong())));
+        return airDate.compareTo(today) <= 0;
     }
     private static JSONObject progressRecord(JSONObject row) {
         if (row == null) return null;
@@ -356,6 +497,9 @@ public final class LibraryStore implements AutoCloseable {
             Integer season = "tv".equals(kind) ? integer(row, "season", 0, 9999, -1) : null, episode = "tv".equals(kind) ? integer(row, "episode", 1, 9999, -1) : null;
             JSONObject safe = WatchHistory.contentFromCatalog(kind, id, season, episode, row.optString("title"));
             if (safe == null || !safe.optString("key").equals(row.optString("key")) || !safe.optString("watchUrl").equals(row.optString("watchUrl"))) return null;
+            if (row.has("animeId") && WatchHistory.animeId(row) == null
+                    || row.has("animeAudio") && !("sub".equals(row.opt("animeAudio")) || "dub".equals(row.opt("animeAudio")))) return null;
+            WatchHistory.preserveAnime(safe, row);
             double position = seconds(row.opt("positionSeconds")), duration = seconds(row.opt("durationSeconds")); if (duration > 0) position = Math.min(position, duration);
             long updated = time(row.opt("updatedAt")), started = row.has("lastStartedAt") ? time(row.opt("lastStartedAt")) : updated;
             String receiver = row.optString("lastReceiver"); if (!("philips".equals(receiver) || "luma".equals(receiver))) return null;
@@ -366,8 +510,9 @@ public final class LibraryStore implements AutoCloseable {
     }
     private static JSONObject progress(JSONObject record) {
         if (record == null) return null;
-        return object("positionSeconds", record.opt("positionSeconds"), "durationSeconds", record.opt("durationSeconds"), "resumeSeconds", record.opt("resumeSeconds"),
+        JSONObject result = object("positionSeconds", record.opt("positionSeconds"), "durationSeconds", record.opt("durationSeconds"), "resumeSeconds", record.opt("resumeSeconds"),
                 "completed", record.opt("completed"), "lastStartedAt", record.opt("lastStartedAt"), "updatedAt", record.opt("updatedAt"), "lastReceiver", record.opt("lastReceiver"));
+        String animeId = WatchHistory.animeId(record); if (animeId != null) { put(result, "animeId", animeId); put(result, "animeAudio", WatchHistory.animeAudio(record)); } return result;
     }
     private static JSONObject metadataDetails(JSONObject raw, String kind, String id) throws Exception {
         if (raw == null || !kind.equals(raw.optString("kind")) || !id.equals(raw.optString("id"))) throw new Exception();

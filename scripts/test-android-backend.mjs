@@ -86,7 +86,11 @@ const receiver = http.createServer(async (request, response) => {
     const accept = result => { mutations.push({ method, params }); reply(response, 200, { ok: true, result: result || { accepted: true } }); };
     if (method === 'player.status') {
       reply(response, 200, { ok: true, result: currentSource
-        ? { revision: mutations.length, active: true, playing, paused: !playing, state: playing ? 'playing' : 'paused', positionSeconds: position, durationSeconds: 1355, bufferedSeconds: 1355, canSeek: true, sourceUrl: currentSource, title: currentContent?.title || 'Fixture', ...(currentContent ? { content: currentContent } : {}) }
+        ? { revision: mutations.length, active: true, playing, paused: !playing, state: playing ? 'playing' : 'paused', positionSeconds: position, durationSeconds: 1355,
+          bufferedSeconds: position + 18.5, bufferAheadSeconds: 18.5, canSeek: true, sourceUrl: currentSource, title: currentContent?.title || 'Fixture',
+          diskCacheState: 'filling', diskCacheStorage: 'internal', diskCachedBytes: 128 * 1024 * 1024,
+          diskCacheTargetBytes: 512 * 1024 * 1024, diskCacheAheadSeconds: 300.5,
+          ...(currentContent ? { content: currentContent } : {}) }
         : { revision: mutations.length, active: false, playing: false, paused: false, state: 'idle', positionSeconds: 0, durationSeconds: 0, bufferedSeconds: 0, canSeek: false, sourceUrl: '' } });
       return;
     }
@@ -179,7 +183,9 @@ const malformed = http.createServer(async (request, response) => {
       { active: true, playing: true, positionSeconds: 1, durationSeconds: 2, canSeek: true },
       { active: 'true', playing: true, positionSeconds: 1, durationSeconds: 2, canSeek: true, sourceUrl: FIRST },
       { active: true, playing: true, positionSeconds: 1, durationSeconds: 2, canSeek: true, sourceUrl: FIRST,
-        content: { key: 'framextv:tv:42:2:4', kind: 'tv', contentId: '42', season: 2, episode: 3, title: 'Spoofed' } },
+        content: { key: 'framextv:tv:42:2:4', kind: 'tv', contentId: '42', season: 2, episode: 3, title: 'Spoofed' },
+        bufferAheadSeconds: -1, diskCacheState: '../../private', diskCacheStorage: '/storage/private',
+        diskCachedBytes: -1, diskCacheTargetBytes: Number.MAX_SAFE_INTEGER + 1, diskCacheAheadSeconds: Infinity },
     ];
     reply(response, 200, { ok: true, result: snapshots[malformedStatus++] });
   } catch { failure(response, 500, 'INTERNAL'); }

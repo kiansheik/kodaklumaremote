@@ -1,0 +1,5 @@
+LUMA Remote 0.4.25
+
+Anime playback now keeps one verified identity from capture through Next: AniList series, canonical season and episode, and sub or dub edition. The phone no longer resolves an anime Next through the ordinary TV source or reuses a cached stream from the other audio edition.
+
+Library series details now load their saved episode list instead of being rejected for extra anime fields. Anime streamed while frameXTV is still changing from its TV URL to its anime URL is also recognized and saved correctly.

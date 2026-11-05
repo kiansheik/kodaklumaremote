@@ -102,6 +102,34 @@ test('Open carries the saved resume position so playback starts there', async ()
   assert.equal((await opened(0.4)).resumeSeconds, undefined);
 });
 
+test('Open preserves only the bounded safe media header allowlist', async () => {
+  const f = fixture();
+  let received;
+  const original = f.adapters.player.open;
+  f.adapters.player.open = async (value, opts) => { received = value; return original(value, opts); };
+  await createHandoffCoordinator(f.adapters).start({ ...media([]), headers: {
+    Referer: 'https://player.example.org/embed/episode',
+    Origin: 'https://player.example.org/',
+    'User-Agent': 'Fixture WebView/1',
+  } });
+  assert.deepEqual(received.headers, {
+    Referer: 'https://player.example.org/embed/episode',
+    Origin: 'https://player.example.org',
+    'User-Agent': 'Fixture WebView/1',
+  });
+
+  for (const headers of [
+    { Cookie: 'session=private' },
+    { Authorization: 'Bearer private' },
+    { Origin: 'https://player.example.org/path' },
+    { Referer: 'http://player.example.org/embed' },
+  ]) {
+    const invalid = fixture();
+    await assert.rejects(invalid.coordinator.start({ ...media([]), headers }), { code: 'INVALID_MEDIA' });
+    assert.equal(invalid.state.opened, 0);
+  }
+});
+
 test('an unreachable receiver is launched once while an authentication failure stops without launching', async () => {
   let failures = 1;
   const unreachable = fixture();
@@ -1185,6 +1213,16 @@ test('preparation accepts only opaque bounded tickets and requires a delivery ob
   const missing = fixture({ playback: preparedPlayback, prepare: () => ({ preparedId: preparedId('missing') }) });
   await assert.rejects(missing.coordinator.selectSubtitle(media([track('pt-BR')]), track('pt-BR').url), { code: 'SUBTITLE_DELIVERY' });
   assert.equal(missing.state.preparations.length, 0); assert.equal(missing.state.adds.length, 0);
+});
+
+test('a trusted adapter can keep an owned LAN subtitle direct without inventing a delivery ticket', async () => {
+  const f = fixture({ playback: preparedPlayback, prepare: () => ({ direct: true }), delivery: () => ({ downloaded: true }) });
+  const result = await f.coordinator.selectSubtitle(media([track('pt-BR')]), track('pt-BR').url);
+  assert.equal(result.selectedIndex, 0);
+  assert.equal(result.catalog[0].preparedId, undefined);
+  assert.equal(f.state.preparations.length, 1);
+  assert.equal(f.state.deliveries.length, 0);
+  assert.equal(f.state.addOptions[0].preparedId, undefined);
 });
 
 test('cancelled or changed-source preparation cannot send Add, and an explicit retry can prepare again', async () => {

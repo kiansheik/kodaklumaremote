@@ -9,6 +9,7 @@ import android.database.sqlite.SQLiteOpenHelper;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -50,18 +51,41 @@ final class LibraryStore extends SQLiteOpenHelper {
         try {
             long seq = cursor();
             for (SyncRecord incoming : records) {
+                String titleKey = null;
+                if (!incoming.deleted && "progress".equals(incoming.type)) try {
+                    JSONObject data = new JSONObject(incoming.data);
+                    String kind = data.optString("kind"), id = data.optString("contentId");
+                    if (("movie".equals(kind) || "tv".equals(kind)) && id.matches("[1-9][0-9]{0,9}")) titleKey = "title:" + kind + ":" + id;
+                } catch (Exception ignored) { }
+                if (titleKey != null && SyncRecord.blockedByTitle(incoming, read(db, titleKey))) continue;
                 if (!SyncRecord.wins(incoming, read(db, incoming.key))) continue;
-                ContentValues row = new ContentValues();
-                row.put("key", incoming.key); row.put("type", incoming.type); row.put("updated_at", incoming.updatedAt);
-                row.put("origin", incoming.origin); row.put("deleted", incoming.deleted ? 1 : 0); row.put("data", incoming.data);
-                row.put("seq", ++seq);
-                db.insertWithOnConflict("records", null, row, SQLiteDatabase.CONFLICT_REPLACE);
+                write(db, incoming, ++seq);
                 applied++;
+                String[] scope = SyncRecord.deletedTitleScope(incoming);
+                if (scope == null) continue;
+                List<SyncRecord> cascade = new ArrayList<>();
+                try (Cursor rows = db.rawQuery("SELECT key,type,updated_at,origin,deleted,data FROM records WHERE type='progress' AND deleted=0", null)) {
+                    while (rows.moveToNext()) {
+                        SyncRecord existing = new SyncRecord(rows.getString(0), rows.getString(1), rows.getLong(2), rows.getString(3), rows.getInt(4) != 0, rows.getString(5));
+                        if (SyncRecord.belongsToTitle(existing, scope)) cascade.add(new SyncRecord(existing.key, "progress", incoming.updatedAt, incoming.origin, true, "{}"));
+                    }
+                }
+                for (SyncRecord deletion : cascade) {
+                    if (!SyncRecord.wins(deletion, read(db, deletion.key))) continue;
+                    write(db, deletion, ++seq); applied++;
+                }
             }
             db.execSQL("UPDATE meta SET value=? WHERE name='seq'", new Object[] {seq});
             db.setTransactionSuccessful();
         } finally { db.endTransaction(); }
         return applied;
+    }
+
+    private static void write(SQLiteDatabase db, SyncRecord record, long seq) {
+        ContentValues row = new ContentValues();
+        row.put("key", record.key); row.put("type", record.type); row.put("updated_at", record.updatedAt);
+        row.put("origin", record.origin); row.put("deleted", record.deleted ? 1 : 0); row.put("data", record.data); row.put("seq", seq);
+        db.insertWithOnConflict("records", null, row, SQLiteDatabase.CONFLICT_REPLACE);
     }
 
     private static SyncRecord read(SQLiteDatabase db, String key) {
