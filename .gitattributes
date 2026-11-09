@@ -1,0 +1,2 @@
+# Preserve the checksum-pinned upstream emulator sources byte for byte.
+android-receiver/app/src/main/cpp/third_party/quicknes/nes_emu/** -whitespace

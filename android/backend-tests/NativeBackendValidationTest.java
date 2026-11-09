@@ -1,5 +1,6 @@
 package dev.framextv.lumaremote;
 
+import org.json.JSONObject;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.nio.ByteBuffer;
@@ -41,6 +42,29 @@ public final class NativeBackendValidationTest {
         }
         String clean = (String) call("label", new Class<?>[] { String.class, int.class }, "Português\nhttps://media.example/private \u202eBrasil", 100);
         if (clean.contains("https") || clean.contains("\n") || clean.contains("\u202e")) throw new AssertionError("Display metadata was not sanitized");
+        Class<?>[] air = { int.class, int.class, int.class };
+        String hover = (String) call("airMouseCommand", air, 640, 360, -1);
+        if (!"GYROSCOPEEVENT\r\n640.0\r\n360.0\r\n-1\r\n\r\n".equals(hover)) throw new AssertionError("Air-mouse frame changed");
+        String click = (String) call("airMouseClickCommand", new Class<?>[] { int.class, int.class }, 640, 360);
+        if (!("GYROSCOPEEVENT\r\n640.0\r\n360.0\r\n0\r\n\r\n"
+                + "GYROSCOPEEVENT\r\n640.0\r\n360.0\r\n1\r\n\r\n").equals(click)) throw new AssertionError("Air-mouse click frame changed");
+        for (Object[] invalid : new Object[][] { {-1, 360, -1}, {640, -1, -1}, {8193, 360, -1}, {640, 8193, -1}, {640, 360, -2}, {640, 360, 2} }) {
+            rejects("airMouseCommand", air, "INVALID_INPUT", invalid);
+        }
+        Class<?>[] cat = { JSONObject.class };
+        JSONObject validCat = new JSONObject().put("active", true).put("manual", false)
+                .put("sound", true).put("remainingSeconds", 720);
+        JSONObject copiedCat = (JSONObject) call("catStatus", cat, validCat);
+        if (!copiedCat.getBoolean("active") || copiedCat.getBoolean("manual")
+                || !copiedCat.getBoolean("sound") || copiedCat.getInt("remainingSeconds") != 720) {
+            throw new AssertionError("Valid Cat Mode status changed");
+        }
+        for (JSONObject invalid : new JSONObject[] {
+                new JSONObject().put("active", "true").put("manual", false).put("sound", true).put("remainingSeconds", 720),
+                new JSONObject().put("active", true).put("manual", false).put("remainingSeconds", 720),
+                new JSONObject().put("active", true).put("manual", false).put("sound", true).put("remainingSeconds", 901),
+                new JSONObject().put("active", true).put("manual", false).put("sound", true).put("remainingSeconds", 1.5),
+        }) rejects("catStatus", cat, "RECEIVER_RESPONSE", invalid);
         System.out.println("Native backend validation boundaries passed.");
     }
 }

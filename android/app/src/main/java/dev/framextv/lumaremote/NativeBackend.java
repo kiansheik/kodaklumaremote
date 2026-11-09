@@ -81,7 +81,7 @@ public final class NativeBackend {
     private volatile String observedSourceUrl = "";
     private String host, deviceName, token, activeToken;
     /** True only after the paired receiver answered directly on port 4191. */
-    private boolean receiverConnected;
+    private boolean receiverConnected, receiverRemote;
     private long receiverDeadline;
     private int receiverPort = RECEIVER_PORT;
     private Map<String, String> apps;
@@ -91,7 +91,7 @@ public final class NativeBackend {
     public void setPreparedSubtitleResolver(PreparedSubtitleResolver resolver) { subtitleResolver = resolver; }
     public void setLocalMediaResolver(LocalMediaResolver resolver) { localMediaResolver = resolver; }
     /** Service worker only: forgetting the receiver pairing does not close projector controls. */
-    public synchronized void clearReceiverConfiguration() { token = null; receiverConnected = false; }
+    public synchronized void clearReceiverConfiguration() { token = null; receiverConnected = false; receiverRemote = false; }
 
     /** Read on the service's network queue; never includes credentials. */
     public synchronized JSONObject connectionSnapshot() {
@@ -100,6 +100,7 @@ public final class NativeBackend {
             boolean directConnected = !closed && receiverConnected;
             return object("connected", nativeConnected || directConnected,
                 "nativeConnected", nativeConnected, "receiverConnected", directConnected,
+                "remoteConnected", nativeConnected || directConnected && receiverRemote,
                 "configured", !closed && token != null,
                 "host", host == null ? "" : host, "name", deviceName == null ? "" : deviceName);
         }
@@ -156,6 +157,17 @@ public final class NativeBackend {
         if (Double.isNaN(number) || Double.isInfinite(number) || number != Math.floor(number) || number < min || number > max) throw fail("INVALID_INPUT");
         return (int) number;
     }
+    static String airMouseCommand(int x, int y, int action) throws BackendException {
+        if (x < 0 || x > 8192 || y < 0 || y > 8192 || action < -1 || action > 1) throw fail("INVALID_INPUT");
+        // Exact EShare frame used by Kodak's own AirMouseActivity. Action -1 is
+        // hover/move; 0 and 1 are pointer down/up at the current cursor point.
+        return "GYROSCOPEEVENT\r\n" + x + ".0\r\n" + y + ".0\r\n" + action + "\r\n\r\n";
+    }
+    static String airMouseClickCommand(int x, int y) throws BackendException {
+        // Keep down/up in one socket write so lifecycle changes cannot strand a
+        // pressed pointer between two independently queued requests.
+        return airMouseCommand(x, y, 0) + airMouseCommand(x, y, 1);
+    }
     private static Long optionalStatusInteger(Object value, long max) {
         if (!(value instanceof Number)) return null;
         double number = ((Number) value).doubleValue();
@@ -207,14 +219,13 @@ public final class NativeBackend {
             if ("device.discover".equals(method)) return object("devices", discover());
             if ("device.connect".equals(method)) return connectDevice(text(params, "host", 64));
             if ("device.disconnect".equals(method)) {
-                closeLuma(); host = null; token = null; observedSourceUrl = ""; receiverConnected = false; return object("connected", false);
+                closeLuma(); host = null; token = null; observedSourceUrl = ""; receiverConnected = false; receiverRemote = false; return object("connected", false);
             }
             if (method != null && method.startsWith("luma.")) return lumaAction(method.substring(5), params);
             if (method != null && method.startsWith("receiver.")) return receiverAction(method.substring(9), params);
             throw fail("INVALID_INPUT");
         } catch (BackendException failure) {
-            if (method != null && method.startsWith("receiver.")
-                    && ("RECEIVER_AUTH".equals(failure.code) || "RECEIVER_UNAVAILABLE".equals(failure.code))) receiverConnected = false;
+            if ("RECEIVER_AUTH".equals(failure.code) || "RECEIVER_UNAVAILABLE".equals(failure.code)) { receiverConnected = false; receiverRemote = false; }
             if ("RECEIVER_AUTH".equals(failure.code)) token = null;
             throw failure;
         }
@@ -228,7 +239,7 @@ public final class NativeBackend {
     private JSONObject connectDevice(String selected) throws Exception {
         if (!privateAddress(selected)) throw fail("INVALID_HOST");
         closeLuma();
-        if (!selected.equals(host)) { token = null; observedSourceUrl = ""; receiverPort = RECEIVER_PORT; receiverConnected = false; deviceName = null; }
+        if (!selected.equals(host)) { token = null; observedSourceUrl = ""; receiverPort = RECEIVER_PORT; receiverConnected = false; receiverRemote = false; deviceName = null; }
         host = selected;
         try {
             Socket socket = new Socket(); luma = socket;
@@ -321,8 +332,39 @@ public final class NativeBackend {
         if (size < 0 || size > frame.remaining()) throw fail("INVALID_RESPONSE"); frame.position(frame.position() + size);
     }
     private JSONObject lumaAction(String action, JSONObject params) throws Exception {
+        if (receiverConnected && receiverRemote) {
+            if ("key".equals(action)) {
+                String named = text(params, "key", 32);
+                if (!KEYS.containsKey(named)) throw fail("INVALID_INPUT");
+                if (params.has("expectedSourceUrl") && (named.equals("volume-up") || named.equals("volume-down") || named.equals("mute"))) requireCurrent(params);
+                return call("input.key", object("key", named), true);
+            }
+            if ("status".equals(action)) return object("connected", true, "device", object("name", deviceName), "volume", call("volume.get", new JSONObject(), false));
+            if ("setVolume".equals(action)) {
+                JSONObject volume = call("volume.get", new JSONObject(), false);
+                int level = integer(params.opt("value"), 0, volume.getInt("max"));
+                if (params.has("expectedSourceUrl")) requireCurrent(params);
+                return object("connected", true, "volume", call("volume.set", object("level", level), true));
+            }
+            if ("apps".equals(action)) return call("apps.list", new JSONObject(), false);
+            if ("launchReceiver".equals(action)) return call("app.show", new JSONObject(), true);
+            if ("launchApp".equals(action)) {
+                String packageName = text(params, "packageName", 255);
+                if (!PACKAGE.matcher(packageName).matches()) throw fail("INVALID_INPUT");
+                return call("apps.launch", object("packageName", packageName), true);
+            }
+            // Vendor-only functions connect on demand; they never delay direct readiness.
+            if (luma == null || luma.isClosed()) connectDevice(host);
+        }
         requireLuma();
         if ("apps".equals(action)) return object("apps", getApps());
+        if ("airMouseInfo".equals(action)) {
+            String[] fields = tcpText("GETFBINFO\r\n1\r\n\r\n").split("\\r?\\n");
+            if (fields.length < 2 || !fields[0].matches("[0-9]{1,4}") || !fields[1].matches("[0-9]{1,4}")) throw fail("INVALID_RESPONSE");
+            int width = Integer.parseInt(fields[0]), height = Integer.parseInt(fields[1]);
+            if (width < 160 || width > 8192 || height < 90 || height > 8192) throw fail("INVALID_RESPONSE");
+            return object("width", width, "height", height);
+        }
         if ("status".equals(action)) {
             JSONObject result = object("connected", true, "device", object("name", deviceName));
             String reply = tcpText("MediaControl\r\ngetVolume\r\n\r\n");
@@ -354,6 +396,14 @@ public final class NativeBackend {
                 requireCurrent(params);
             }
             tcpWrite("KEYEVENT\r\n" + key + "\r\n\r\n", true);
+        } else if ("airMouse".equals(action)) {
+            int x = integer(params.opt("x"), 0, 8192), y = integer(params.opt("y"), 0, 8192);
+            int eventAction = integer(params.opt("action"), -1, 1);
+            tcpWrite(airMouseCommand(x, y, eventAction), true);
+        } else if ("airMouseClick".equals(action)) {
+            int x = integer(params.opt("x"), 0, 8192), y = integer(params.opt("y"), 0, 8192);
+            if (params.has("action") && integer(params.opt("action"), 0, 0) != 0) throw fail("INVALID_INPUT");
+            tcpWrite(airMouseClickCommand(x, y), true);
         } else if ("text".equals(action)) {
             Object value = params.opt("text");
             if (!(value instanceof String) || ((String) value).isEmpty() || ((String) value).length() > 1000 || ((String) value).getBytes(StandardCharsets.UTF_8).length > 4096 || ((String) value).matches("(?s).*[\\x00-\\x1f\\x7f].*")) throw fail("INVALID_TEXT");
@@ -630,9 +680,19 @@ public final class NativeBackend {
         if (content != null) result.put("content", content);
         return receiverExtras(data, result);
     }
+    static JSONObject streamRecovery(JSONObject raw) throws Exception {
+        if(raw==null)return new JSONObject();
+        String id=raw.optString("id");JSONObject content=receiverContent(raw.optJSONObject("content"));
+        if(!id.matches("[a-f0-9-]{36}")||content==null)return new JSONObject();
+        Double resume=optionalStatusSeconds(raw.opt("resumeSeconds"));
+        return object("id",id,"content",content,"resumeSeconds",resume==null?0:resume);
+    }
     /** Auto-next setting/state and the last episode a person actually interacted with. */
     private static JSONObject receiverExtras(JSONObject data, JSONObject result) throws Exception {
+        result.put("streamRecovery", streamRecovery(data.optJSONObject("streamRecovery")));
+        result.put("recoveringSource",data.optBoolean("recoveringSource"));
         result.put("autoNext", data.optBoolean("autoNext")).put("autoplayed", data.optBoolean("autoplayed")).put("upNext", data.optBoolean("upNext"));
+        if (data.has("catMode")) result.put("catMode", catStatus(data.optJSONObject("catMode")));
         Double ramAhead = optionalStatusSeconds(data.opt("bufferAheadSeconds"));
         if (ramAhead == null) {
             Double buffered = optionalStatusSeconds(data.opt("bufferedSeconds"));
@@ -666,6 +726,17 @@ public final class NativeBackend {
             "positionSeconds", Math.max(0, last.optDouble("positionSeconds", 0)), "at", Math.max(0, last.optLong("at", 0))));
         return result;
     }
+    private static JSONObject catStatus(JSONObject data) throws Exception {
+        if (data == null || !(data.opt("active") instanceof Boolean)
+                || !(data.opt("manual") instanceof Boolean) || !(data.opt("sound") instanceof Boolean)) {
+            throw fail("RECEIVER_RESPONSE");
+        }
+        int remaining;
+        try { remaining = integer(data.opt("remainingSeconds"), 0, 15 * 60); }
+        catch (BackendException invalid) { throw fail("RECEIVER_RESPONSE"); }
+        return object("active", data.optBoolean("active"), "manual", data.optBoolean("manual"),
+                "sound", data.optBoolean("sound"), "remainingSeconds", remaining);
+    }
     private void requireCurrent(JSONObject params) throws Exception {
         JSONObject current = playback();
         if (!current.getBoolean("active")) throw fail("NO_VIDEO");
@@ -689,25 +760,26 @@ public final class NativeBackend {
     private void receiverPort(JSONObject params) throws BackendException {
         if (params.has("port")) {
             int selected = integer(params.opt("port"), 1024, 65535);
-            if (selected != receiverPort) receiverConnected = false;
+            if (selected != receiverPort) { receiverConnected = false; receiverRemote = false; }
             receiverPort = selected;
         }
     }
     private JSONObject receiverAction(String action, JSONObject params) throws Exception {
+        if("recoveryStatus".equals(action))return streamRecovery(call("recovery.status",new JSONObject(),false));
         if ("configure".equals(action) || "pairBegin".equals(action) || "pairComplete".equals(action)) receiverPort(params);
         if ("configure".equals(action)) {
             if (params.has("host")) {
                 String selected = text(params, "host", 64);
                 if (!privateAddress(selected)) throw fail("INVALID_HOST");
                 if (!selected.equals(host)) {
-                    closeLuma(); token = null; receiverConnected = false; deviceName = null;
+                    closeLuma(); token = null; receiverConnected = false; receiverRemote = false; deviceName = null;
                     host = selected;
                 }
             }
             requireHost();
             String saved = text(params, "token", 200);
             if (!saved.matches("[A-Za-z0-9_-]{20,200}")) throw fail("RECEIVER_CONFIG");
-            if (!saved.equals(token)) receiverConnected = false;
+            if (!saved.equals(token)) { receiverConnected = false; receiverRemote = false; }
             token = saved; return object("configured", true);
         }
         if ("pairBegin".equals(action)) {
@@ -731,8 +803,12 @@ public final class NativeBackend {
             if (!"lumareceiver".equals(info.optString("app"))) throw fail("RECEIVER_RESPONSE");
             playback(); // proves the saved token
             receiverConnected = true;
+            receiverRemote = false;
+            JSONArray capabilities = info.optJSONArray("capabilities");
+            if (capabilities != null) for (int i = 0; i < capabilities.length(); i++)
+                if ("input.remote".equals(capabilities.optString(i))) receiverRemote = true;
             if (deviceName == null || deviceName.isEmpty()) deviceName = "LUMA Receiver";
-            return object("ready", true, "name", "LUMA Receiver", "version", label(info.optString("versionName"), 32),
+            return object("ready", true, "remoteConnected", receiverRemote, "name", "LUMA Receiver", "version", label(info.optString("versionName"), 32),
                 "receiverId", label(info.optString("receiverId"), 64));
         }
         if ("open".equals(action)) {
@@ -838,6 +914,15 @@ public final class NativeBackend {
             if (params.opt("autoNext") instanceof Boolean) return call("settings.set", object("autoNext", params.getBoolean("autoNext")), true);
             return call("settings.get", new JSONObject(), false);
         }
+        if ("catStart".equals(action)) return catStatus(call("cat.start", new JSONObject(), true));
+        if ("catStatus".equals(action)) return catStatus(call("cat.status", new JSONObject(), false));
+        if ("catStop".equals(action)) return catStatus(call("cat.stop", new JSONObject(), true));
+        if ("catRelease".equals(action)) return catStatus(call("cat.release", new JSONObject(), true));
+        if ("catPointer".equals(action) || "catPounce".equals(action)) {
+            JSONObject command = object("x", integer(params.opt("x"), 0, 1000),
+                    "y", integer(params.opt("y"), 0, 1000));
+            return catStatus(call("cat" + ("catPounce".equals(action) ? ".pounce" : ".pointer"), command, true));
+        }
         if ("thumbsList".equals(action)) return call("thumbs.list", object("contentKey", contentKey(params.opt("contentKey"))), false);
         if ("thumbsGet".equals(action) || "thumbsPut".equals(action)) {
             boolean put = "thumbsPut".equals(action);
@@ -858,6 +943,6 @@ public final class NativeBackend {
     public void close() {
         closed = true; closeLuma(); DatagramSocket udp = discovering; if (udp != null) udp.close();
         HttpURLConnection http = activeHttp; if (http != null) http.disconnect(); deadlines.shutdownNow();
-        token = null; observedSourceUrl = ""; receiverConnected = false;
+        token = null; observedSourceUrl = ""; receiverConnected = false; receiverRemote = false;
     }
 }

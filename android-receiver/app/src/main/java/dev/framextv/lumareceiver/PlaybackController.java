@@ -79,7 +79,13 @@ final class PlaybackController implements Player.Listener {
     private Ui ui;
     private long revision, lastStartedAt, sourceGeneration;
     private String error;
+    private boolean recoveringSource, recoveredSource;
+    private long recoveryGeneration;
     private boolean seenPlaying;
+    private final Runnable startupCheck = () -> {
+        if(current!=null&&!seenPlaying&&player!=null&&player.getPlayWhenReady()
+            &&player.getAudioFormat()==null&&player.getVideoFormat()==null) recoverSource();
+    };
 
     private final Runnable progressTick = new Runnable() {
         @Override public void run() {
@@ -95,6 +101,7 @@ final class PlaybackController implements Player.Listener {
         settings = this.context.getSharedPreferences("receiver", Context.MODE_PRIVATE);
     }
 
+    long sourceGeneration() { return sourceGeneration; }
     boolean autoNext() { return settings.getBoolean("autoNext", false); }
     void setAutoNext(boolean enabled) { settings.edit().putBoolean("autoNext", enabled).apply(); if (!enabled) cancelUpNext(); bump(); }
 
@@ -216,6 +223,7 @@ final class PlaybackController implements Player.Listener {
                 .setAudioAttributes(new AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(), true)
                 .setWakeMode(C.WAKE_MODE_NETWORK)
                 .build();
+            player.setTrackSelectionParameters(PlaybackDiskCache.qualityParameters(context));
             player.addListener(this);
             player.addAnalyticsListener(new androidx.media3.exoplayer.analytics.AnalyticsListener() {
                 @Override public void onDroppedVideoFrames(EventTime time, int count, long elapsedMs) { droppedFrames += count; }
@@ -261,6 +269,9 @@ final class PlaybackController implements Player.Listener {
         ExoPlayer exo = player();
         exo.stop(); exo.clearMediaItems();
         diskCache.begin(request);
+        main.removeCallbacks(startupCheck);
+        ReceiverApp.get(context).streamRecovery.clear();
+        recoveringSource=false;recoveredSource=false;recoveryGeneration++;
         sourceGeneration++;
         current = request; error = null; seenPlaying = false;
         externals.clear(); selectedExternal = -1; fallbackCaptions.clear();
@@ -271,6 +282,7 @@ final class PlaybackController implements Player.Listener {
         prepare((long) (request.resumeSeconds * 1000));
         for (MediaRequest.Subtitle subtitle : request.subtitles) addExternal(subtitle);
         exo.setPlayWhenReady(true);
+        main.postDelayed(startupCheck,25000);
         // Casting must surface the receiver even after its screen was closed with Back.
         if (ui != null) ui.bringToFront(); else MainActivity.bringToFront(context);
         bump();
@@ -313,7 +325,11 @@ final class PlaybackController implements Player.Listener {
         }
     }
 
-    void setPlaying(boolean playing) { player().setPlayWhenReady(playing); }
+    void setPlaying(boolean playing) {
+        if(!playing){recoveryGeneration++;recoveringSource=false;main.removeCallbacks(startupCheck);}
+        player().setPlayWhenReady(playing);
+        if(playing&&!seenPlaying){main.removeCallbacks(startupCheck);main.postDelayed(startupCheck,25000);}
+    }
 
     /** For player.next: the current item may be ended, so only the canonical key is checked. */
     void expectContent(Object key) throws ApiException {
@@ -349,6 +365,9 @@ final class PlaybackController implements Player.Listener {
         cancelUpNext();
         if (player != null) { player.stop(); player.clearMediaItems(); }
         diskCache.end();
+        main.removeCallbacks(startupCheck);
+        ReceiverApp.get(context).streamRecovery.clear();
+        recoveringSource=false;recoveredSource=false;
         sourceGeneration++;
         current = null; error = null; externals.clear(); selectedExternal = -1; fallbackCaptions.clear();
         bump();
@@ -502,6 +521,8 @@ final class PlaybackController implements Player.Listener {
             .put("sourceUrl", current.url).put("title", current.title)
             .put("sampledAt", System.currentTimeMillis());
         if (!current.mediaId.isEmpty()) result.put("mediaId", current.mediaId).put("contentType", current.contentType);
+        Format video = player.getVideoFormat();
+        if(video!=null)result.put("videoWidth",video.width).put("videoHeight",video.height).put("videoBitrate",video.bitrate);
         Format audio = player.getAudioFormat();
         if (audio != null && audio.sampleMimeType != null) result.put("audioMime", audio.sampleMimeType)
             .put("audioChannels", audio.channelCount);
@@ -514,7 +535,8 @@ final class PlaybackController implements Player.Listener {
     private JSONObject withSettings(JSONObject result) throws Exception {
         JSONObject last = lastInteraction();
         if (last.has("content")) result.put("lastInteraction", last);
-        return result.put("autoNext", autoNext());
+        result.put("streamRecovery", ReceiverApp.get(context).streamRecovery.snapshot());
+        return result.put("autoNext", autoNext()).put("recoveringSource",recoveringSource);
     }
 
     String title() { return current == null ? null : current.title; }
@@ -554,7 +576,7 @@ final class PlaybackController implements Player.Listener {
     @Override public void onIsPlayingChanged(boolean isPlaying) {
         main.removeCallbacks(progressTick);
         if (player != null) diskCache.updatePosition(player.getCurrentPosition(), player.getDuration(), false);
-        if (isPlaying) { seenPlaying = true; main.postDelayed(progressTick, PROGRESS_INTERVAL_MS); }
+        if (isPlaying) { main.removeCallbacks(startupCheck); seenPlaying = true; main.postDelayed(progressTick, PROGRESS_INTERVAL_MS); }
         else recordProgress();
         bump();
     }
@@ -599,10 +621,49 @@ final class PlaybackController implements Player.Listener {
 
     @Override public void onTracksChanged(Tracks tracks) { selectCompanionAudio(tracks); bump(); }
 
+    /** A zero duration alone is valid while loading; retry only a failed/stalled startup. */
+    private void recoverSource() {
+        if(current==null||current.content==null||recoveringSource)return;
+        main.removeCallbacks(startupCheck);
+        final MediaRequest failed=current;
+        final long expected=sourceGeneration, recovery=++recoveryGeneration;
+        if(recoveredSource) { requestPhone(failed);return; }
+        recoveredSource=true;recoveringSource=true;
+        player.setPlayWhenReady(false);
+        if(ui!=null)ui.onNotice("This stream isn't responding. Trying another source…");
+        String language=settings.getString("captionLanguage","");
+        captionLoader.execute(()->{
+            MediaRequest replacement=null;
+            try {
+                JSONObject media=new Catalog(java.util.Collections.singleton(failed.url)).resolveContent(failed.content);
+                media.put("resumeSeconds",failed.resumeSeconds);
+                JSONArray subtitles=captionCandidates(media.optJSONArray("tracks"),language);
+                if(subtitles.length()>0)media.put("subtitles",subtitles);
+                replacement=MediaRequest.parse(media);
+            }catch(Exception unavailable){ }
+            final MediaRequest fresh=replacement;
+            main.post(()->{
+                if(expected!=sourceGeneration||recovery!=recoveryGeneration||current!=failed)return;
+                recoveringSource=false;
+                if(fresh==null){requestPhone(failed);return;}
+                try {open(fresh,false,failed.url,failed.content.optString("key"));recoveredSource=true;}
+                catch(Exception unavailable){requestPhone(failed);}
+            });
+        });
+    }
+    private void requestPhone(MediaRequest failed) {
+        if(current!=failed)return;
+        player.setPlayWhenReady(false);error="SOURCE_UNAVAILABLE";
+        ReceiverApp.get(context).streamRecovery.request(failed.content,failed.resumeSeconds);
+        if(ui!=null)ui.onNotice("No working source found. Open LUMA on your phone, choose Open episode, then Cast a working video.");
+        bump();
+    }
+
     @Override public void onPlayerError(PlaybackException failure) {
         error = failure.getErrorCodeName();
         diskCache.playbackFailed();
         android.util.Log.w("LumaPlayer", "PLAYER_ERROR " + error);
+        if(!seenPlaying)recoverSource();
         recordProgress();
         bump();
     }

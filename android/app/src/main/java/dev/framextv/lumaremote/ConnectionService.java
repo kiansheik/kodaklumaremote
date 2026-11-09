@@ -92,6 +92,7 @@ public final class ConnectionService extends Service {
     private volatile String subtitleSource = "";
     private final java.util.concurrent.atomic.AtomicLong subtitleGeneration = new java.util.concurrent.atomic.AtomicLong();
     private NativeBackend backend;
+    private GamesManager games;
     private MsxServer television;
     private PhilipsTextController televisionText;
     private volatile boolean textRequestPending;
@@ -110,7 +111,9 @@ public final class ConnectionService extends Service {
      * receiver.status describes playback, so its failures are observed; it is only exempt from the re-poll. */
     private static final java.util.Set<String> SIDE_CHANNEL = new java.util.HashSet<>(java.util.Arrays.asList(
         "receiver.configure", "receiver.pairBegin", "receiver.pairComplete", "receiver.scrub", "receiver.display", "receiver.libraryPull", "receiver.libraryPush",
-        "receiver.thumbsList", "receiver.thumbsGet", "receiver.thumbsPut", "receiver.settings", "receiver.rate"));
+        "receiver.thumbsList", "receiver.thumbsGet", "receiver.thumbsPut", "receiver.settings", "receiver.rate",
+        "receiver.catStart", "receiver.catStatus", "receiver.catPointer", "receiver.catRelease", "receiver.catPounce", "receiver.catStop",
+        "luma.airMouseInfo", "luma.airMouse", "luma.airMouseClick"));
     private static final long LIBRARY_SYNC_MS = 60_000;
     private volatile long generation;
     private volatile boolean destroyed;
@@ -178,6 +181,9 @@ public final class ConnectionService extends Service {
         subtitleDelivery = new SubtitleDelivery(NativeBackend::publicUrl);
         localMedia = new LocalMediaServer(getApplicationContext());
         backend = newBackend();
+        games = new GamesManager(this,
+            () -> destroyed || !"luma".equals(selectedTarget) || backend == null ? null : backend.receiverEndpoint(),
+            value -> { synchronized (stateLock) { put(state, "games", value); } publish(); });
         settings = new SettingsStore(getApplicationContext());
         television = new MsxServer(getApplicationContext());
         television.setLibrary(new MsxServer.Library() {
@@ -310,6 +316,10 @@ public final class ConnectionService extends Service {
     public void addListener(Listener listener) { if (listener != null) { listeners.add(listener); main.post(() -> { if (listeners.contains(listener)) listener.onStateChanged(snapshot()); }); } }
     public void removeListener(Listener listener) { listeners.remove(listener); }
     public JSONObject snapshot() { synchronized (stateLock) { return copy(state); } }
+    public void importGame(Uri uri, Callback callback) {
+        if (games == null || destroyed) { reject(callback, "BUSY", "The games library is starting. Try again."); return; }
+        games.importRom(uri, callback);
+    }
     public void prepareLocalMedia(Uri video, java.util.List<Uri> subtitles, Callback callback) {
         try {
             localMediaIo.execute(() -> {
@@ -988,6 +998,14 @@ public final class ConnectionService extends Service {
         JSONObject args = params == null ? new JSONObject() : copy(params);
         main.post(() -> {
             if (destroyed) { reject(callback, "NOT_CONNECTED", "Connect to the projector first."); return; }
+            if (method != null && method.startsWith("games.")) {
+                String action = method.substring(6);
+                if (!java.util.Arrays.asList("list", "sync", "play", "show", "stop", "controllers").contains(action)
+                        || ("play".equals(action) ? args.length() != 1 || !(args.opt("id") instanceof String) : args.length() != 0)) {
+                    reject(callback, "INVALID_REQUEST", "Choose an available games action."); return;
+                }
+                games.request(action, args, callback); return;
+            }
             if ("app.selectTarget".equals(method)) {
                 String target = args.optString("target");
                 if (!"luma".equals(target) && !"philips".equals(target)) { reject(callback, "INVALID_REQUEST", "Choose a receiver."); return; }
@@ -1047,8 +1065,57 @@ public final class ConnectionService extends Service {
                 }
                 publish();
             }
+            if ("luma.airMouse".equals(method) || "luma.airMouseClick".equals(method)
+                    || "receiver.catPointer".equals(method)) {
+                requestPointer(method, args, callback); return;
+            }
             if (!enqueue(work -> perform(work, method, args), callback) && "device.connect".equals(method) && !connected()) demote();
         });
+    }
+    /**
+     * System-pointer samples share the native control socket and Cat Mode samples use the
+     * paired receiver API, but neither mutates playback state. Keep both on the serialized
+     * network executor while avoiding
+     * a full WebView state publication and follow-up playback poll for every sensor frame.
+     * AirMouseController permits only one sample in flight, so this cannot build a stale
+     * motion backlog behind a slow projector write.
+     */
+    private void requestPointer(String method, JSONObject args, Callback callback) {
+        if (!"luma".equals(selectedTarget)) {
+            reject(callback, "NOT_CONNECTED", "Connect to the projector before using the air mouse.");
+            return;
+        }
+        enqueue(work -> {
+            if (!"luma".equals(selectedTarget)) {
+                work.post(() -> work.complete(null, "NOT_CONNECTED", "The selected receiver changed."));
+                return;
+            }
+            try {
+                JSONObject result = work.transport.handle(method, args);
+                work.post(() -> work.complete(result, null, null));
+            } catch (NativeBackend.BackendException failure) {
+                JSONObject failedConnection = work.transport.connectionSnapshot();
+                boolean nativeLost = !failedConnection.optBoolean("nativeConnected");
+                synchronized (stateLock) {
+                    if (!work.current()) return;
+                    if (nativeLost) { confirmedVolume = null; state.remove("volume"); }
+                    put(state, "connection", failedConnection);
+                    put(state, "settings", settings.metadata());
+                }
+                work.post(() -> {
+                    notice = failure.getMessage();
+                    if (!connected()) demote();
+                    publish();
+                    work.complete(null, failure.code, failure.getMessage());
+                });
+            } catch (RuntimeException ignored) {
+                work.post(() -> {
+                    notice = "Could not complete the pointer control. Try again.";
+                    publish();
+                    work.complete(null, "CONNECTION_FAILED", notice);
+                });
+            }
+        }, callback);
     }
     private void disconnect(Callback callback) {
         cancelSystemNext();
@@ -1270,7 +1337,7 @@ public final class ConnectionService extends Service {
                 result = rememberRemote(work, args);
             } else if ("app.settings.rescan".equals(method) || "app.settings.autoConnect".equals(method)) {
                 result = autoConnect(work, "app.settings.rescan".equals(method));
-            } else if ("device.connect".equals(method)) result = connectNative(work, args.optString("host"), settings.readPairing());
+            } else if ("device.connect".equals(method)) result = connectReceiver(work, args.optString("host"));
             else if ("receiver.connect".equals(method)) result = connectSavedReceiver(work, args);
             else result = work.transport.handle(method, args);
             if ("receiver.pairComplete".equals(method)) {
@@ -1675,7 +1742,7 @@ public final class ConnectionService extends Service {
         String name = ready.optString("name", "LUMA Receiver");
         settings.saveReceiver(host, name);
         return object("connected", true, "nativeConnected", false, "receiverConnected", true,
-                "name", name, "device", object("name", name));
+                "remoteConnected", ready.optBoolean("remoteConnected"), "name", name, "device", object("name", name));
     }
     /** A cast may begin while the boot receiver is still offline and before the
      * foreground auto-connect loop has hydrated this process's backend. Restore
@@ -1714,6 +1781,8 @@ public final class ConnectionService extends Service {
             // A failed attempt (projector booting, Wi-Fi rejoining, the old socket
             // after a crash) must not forget the projector: keep it and retry.
             if (current.optBoolean("receiverConnected") && saved.optString("host").equals(current.optString("host"))) {
+                if (current.optBoolean("remoteConnected")) return object("connected", true, "nativeConnected", current.optBoolean("nativeConnected"),
+                    "remoteConnected", true, "receiverConnected", true, "name", current.optString("name"), "devices", new JSONArray());
                 try { return connectNative(work, saved.optString("host"), settings.readPairing()); }
                 catch (NativeBackend.BackendException nativeUnavailable) {
                     if (!work.current()) throw nativeUnavailable;
@@ -2596,6 +2665,9 @@ public final class ConnectionService extends Service {
         if (destroyed) return;
         updatePresentation();
         JSONObject observed = snapshot();
+        JSONObject connection = observed.optJSONObject("connection");
+        if (games != null) games.connectionChanged("luma".equals(selectedTarget) && connection != null && connection.optBoolean("receiverConnected"),
+            selectedTarget + ":" + generation + ":" + (connection == null ? "" : connection.optString("host")));
         for (Listener listener : listeners) listener.onStateChanged(copy(observed));
     }
     private void updatePresentation() {
@@ -2651,7 +2723,7 @@ public final class ConnectionService extends Service {
         return object("revision", revision, "verified", verified, "playing", playback != null && playback.optBoolean("playing"),
                 "title", title, "projector", playbackSummary(all), "hardwareConnected", hardwareConnected(all),
                 "canRewind", verified && canRewind(playback), "hasNext", remote != null && remote.optJSONObject("nextEpisode") != null,
-                "notice", clean(notice, 200), "foreground", foreground).toString();
+                "notice", clean(notice, 200), "recovery", playback == null ? "" : playback.optJSONObject("streamRecovery"), "foreground", foreground).toString();
     }
     private void queueNotificationFlush() {
         if (destroyed || !foreground || notificationFlushQueued) return;
@@ -2688,6 +2760,15 @@ public final class ConnectionService extends Service {
                 .setContentTitle(title).setContentText(verified ? playbackSummary(all) : clean(notice, 200))
                 .setContentIntent(sessionActivity).setOngoing(true).setOnlyAlertOnce(true).setShowWhen(false)
                 .setCategory(mediaCard ? Notification.CATEGORY_TRANSPORT : Notification.CATEGORY_SERVICE).setVisibility(Notification.VISIBILITY_PUBLIC);
+        JSONObject recovery = playback == null ? null : playback.optJSONObject("streamRecovery");
+        if(!mediaCard && recovery != null && recovery.optJSONObject("content") != null) {
+            String watchUrl = recovery.optJSONObject("content").optString("watchUrl");
+            Intent browse = new Intent(Intent.ACTION_VIEW, Uri.parse(watchUrl), this, MainActivity.class)
+                .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+            PendingIntent openEpisode = PendingIntent.getActivity(this, 8, browse, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+            builder.setContentTitle("Projector needs a fresh stream").setContentText("Open the episode on this phone, then Cast")
+                .addAction(new Notification.Action.Builder(android.R.drawable.ic_menu_view,"Open episode",openEpisode).build());
+        }
         if (verified) {
             boolean playing = playback.optBoolean("playing");
             boolean hardwareConnected = hardwareConnected(all);
@@ -2734,9 +2815,8 @@ public final class ConnectionService extends Service {
         JSONObject connection = all.optJSONObject("connection");
         if (connection == null) return false;
         if ("philips".equals(all.optString("selectedTarget"))) return connection.optBoolean("connected");
-        // Direct receiver readiness keeps casting and playback controls alive,
-        // but hardware keys require EShare's independent native socket.
-        return connection.has("nativeConnected") ? connection.optBoolean("nativeConnected") : connection.optBoolean("connected");
+        return connection.optBoolean("remoteConnected") || (connection.has("nativeConnected")
+            ? connection.optBoolean("nativeConnected") : connection.optBoolean("connected"));
     }
     private static boolean canRewind(JSONObject playback) {
         return playback != null && playback.optBoolean("active") && playback.optBoolean("canSeek")
@@ -2773,6 +2853,7 @@ public final class ConnectionService extends Service {
         if (subtitleDelivery != null) subtitleDelivery.close();
         subtitleNetwork.shutdownNow();
         if (localMedia != null) localMedia.close();
+        if (games != null) games.close();
         localMediaIo.shutdownNow();
         cancelQueuedVolume();
         cancelNotificationFlush();

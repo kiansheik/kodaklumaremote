@@ -7,6 +7,7 @@ import android.content.Intent;
 import android.content.ComponentName;
 import android.content.ServiceConnection;
 import android.content.pm.PackageManager;
+import android.content.res.Configuration;
 import android.os.IBinder;
 import android.os.Handler;
 import android.os.Looper;
@@ -16,6 +17,7 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.view.View;
+import android.view.HapticFeedbackConstants;
 import android.view.inputmethod.EditorInfo;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebChromeClient;
@@ -44,7 +46,10 @@ import java.util.concurrent.atomic.AtomicLong;
 public final class MainActivity extends Activity {
     private static final String LOCAL_ORIGIN = "https://luma.invalid";
     private static final String START_URL = "https://framextv.cc/watch/284833/1/1";
-    private static final int SCAN_MATTER = 6031, PICK_LOCAL_VIDEO = 6032, PICK_LOCAL_SUBTITLES = 6033;
+    private static final int SCAN_MATTER = 6031, PICK_LOCAL_VIDEO = 6032, PICK_LOCAL_SUBTITLES = 6033, PICK_GAME = 6034;
+    private String pendingGamePicker;
+    private Uri pendingGameImport;
+    private boolean pendingGamesOpen;
     private String pendingMatterScan;
     private String pendingLocalMedia;
     private Uri pendingLocalVideo;
@@ -55,6 +60,7 @@ public final class MainActivity extends Activity {
     private ProgressBar progress;
     private Button castButton;
     private ConnectionService connectionService;
+    private AirMouseController airMouse;
     private UpdateManager updateManager;
     private boolean serviceBound;
     private boolean resumed, foregroundStarted, autoConnectPending, notificationAsked;
@@ -62,6 +68,7 @@ public final class MainActivity extends Activity {
     private boolean autoConnectEnabled = true;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ConnectionService.Listener serviceListener = snapshot -> {
+        updateAirMouseUsable(snapshot);
         updateCastTarget(snapshot);
         event("onConnectionState", snapshot);
         JSONObject connection = snapshot == null ? null : snapshot.optJSONObject("connection");
@@ -73,12 +80,16 @@ public final class MainActivity extends Activity {
             if (foregroundStarted) connectionService.allowAutoConnect();
             connectionService.addListener(serviceListener);
             if (autoConnectEnabled && foregroundStarted) connectionService.restoreReceivers();
-            event("onConnectionState", connectionService.snapshot());
+            JSONObject snapshot = connectionService.snapshot();
+            updateAirMouseUsable(snapshot);
+            event("onConnectionState", snapshot);
             deliverPendingNext();
+            deliverPendingGame();
             scheduleAutoConnect(0);
         }
         @Override public void onServiceDisconnected(ComponentName name) {
             connectionService = null;
+            if (airMouse != null) airMouse.setUsable(false);
             event("onConnectionState", null);
         }
     };
@@ -164,6 +175,16 @@ public final class MainActivity extends Activity {
         controls = new WebView(this);
         configureControls();
         root.addView(controls, new FrameLayout.LayoutParams(-1, -1));
+        airMouse = new AirMouseController(this, (method, params, callback) -> {
+            if (connectionService == null) { callback.failure("NOT_CONNECTED", "Connect to the projector first."); return; }
+            connectionService.request(method, params, new ConnectionService.Callback() {
+                @Override public void success(JSONObject result) { callback.success(result); }
+                @Override public void failure(String code, String message) { callback.failure(code, message); }
+            });
+        }, (status, calibratedNow) -> {
+            if (calibratedNow && controls != null) controls.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);
+            event("onAirMouseState", status);
+        });
         browserPanel = new LinearLayout(this);
         browserPanel.setOrientation(LinearLayout.VERTICAL);
         browserPanel.setBackgroundColor(Color.rgb(15, 26, 31));
@@ -215,6 +236,7 @@ public final class MainActivity extends Activity {
         String shared = sharedUrl(getIntent());
         browser.loadUrl(shared == null ? START_URL : shared);
         if (shared != null) showBrowser(true);
+        receiveGameIntent(getIntent());
     }
 
     private int dp(int value) { return Math.round(value * getResources().getDisplayMetrics().density); }
@@ -265,6 +287,7 @@ public final class MainActivity extends Activity {
             }
             @Override public void onPageFinished(WebView view, String url) {
                 localReady = true;
+                deliverPendingGame();
                 if (capturedMedia != null) event("onCapturedMedia", capturedMedia);
             }
         });
@@ -368,6 +391,7 @@ public final class MainActivity extends Activity {
     @Override protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
+        if (receiveGameIntent(intent)) return;
         if (ConnectionService.ACTION_OPEN_REMOTE.equals(intent.getAction())) {
             showBrowser(false);
             event("onOpenRemote", null);
@@ -398,8 +422,21 @@ public final class MainActivity extends Activity {
 
     private void showBrowser(boolean visible) {
         browserVisible = visible;
+        if (airMouse != null) airMouse.setForeground(resumed && !visible);
         browserPanel.setVisibility(visible ? View.VISIBLE : View.GONE);
         controls.setVisibility(visible ? View.GONE : View.VISIBLE);
+    }
+
+    private void updateAirMouseUsable(JSONObject snapshot) {
+        if (airMouse == null) return;
+        JSONObject connection = snapshot == null ? null : snapshot.optJSONObject("connection");
+        boolean nativeConnected = connection != null && (connection.has("nativeConnected")
+                ? connection.optBoolean("nativeConnected") : connection.optBoolean("connected"));
+        airMouse.setUsable(nativeConnected && snapshot != null
+                && "luma".equals(snapshot.optString("selectedTarget", "luma")));
+        JSONObject playback = snapshot == null ? null : snapshot.optJSONObject("playback");
+        JSONObject catMode = playback == null ? null : playback.optJSONObject("catMode");
+        if (catMode != null && catMode.has("active")) airMouse.setCatModeActive(catMode.optBoolean("active"));
     }
 
     private void capture(String requestId) {
@@ -581,6 +618,7 @@ public final class MainActivity extends Activity {
             if (method.equals("app.ready")) {
                 JSONObject result = connectionService == null ? new JSONObject() : connectionService.snapshot();
                 result.put("browserUrl", browser.getUrl());
+                if (airMouse != null) result.put("airMouse", airMouse.status());
                 try { result.put("seekHistory", new JSONObject(getSharedPreferences("seek-history", MODE_PRIVATE).getString("value", "{}"))); }
                 catch (Exception corrupt) { /* start without checkpoints */ }
                 try { result.put("captionPreferences", new JSONObject(getSharedPreferences("caption-preferences", MODE_PRIVATE).getString("value", "{}"))); }
@@ -590,6 +628,45 @@ public final class MainActivity extends Activity {
                 if (capturedMedia != null) result.put("source", capturedMedia);
                 reply(id, result, null, null);
                 main.post(this::deliverPendingNext);
+                main.post(this::deliverPendingGame);
+            } else if (method.startsWith("app.airMouse")) {
+                if (params.length() != 0 || airMouse == null) { reply(id, null, "INVALID_REQUEST", "Air-mouse controls do not accept extra fields."); return; }
+                AirMouseController.Callback callback = new AirMouseController.Callback() {
+                    @Override public void success(JSONObject result) { reply(id, result, null, null); }
+                    @Override public void failure(String code, String message) { reply(id, null, code, message); }
+                };
+                if (method.equals("app.airMouseStart")) airMouse.start(callback);
+                else if (method.equals("app.airMouseRecenter")) airMouse.recenter(callback);
+                else if (method.equals("app.airMouseClick")) airMouse.click(callback);
+                else if (method.equals("app.airMouseStop")) airMouse.stop(callback);
+                else reply(id, null, "INVALID_REQUEST", "Unknown air-mouse action.");
+            } else if (method.startsWith("app.catMode")) {
+                if (params.length() != 0) { reply(id, null, "INVALID_REQUEST", "Cat Mode controls do not accept extra fields."); return; }
+                if (connectionService == null || airMouse == null) { reply(id, null, "BUSY", "The projector remote is starting. Try again in a moment."); return; }
+                String nativeMethod;
+                if (method.equals("app.catModeStart")) nativeMethod = "receiver.catStart";
+                else if (method.equals("app.catModeStop")) nativeMethod = "receiver.catStop";
+                else if (method.equals("app.catModeStatus")) nativeMethod = "receiver.catStatus";
+                else { reply(id, null, "INVALID_REQUEST", "Unknown Cat Mode action."); return; }
+                connectionService.request(nativeMethod, new JSONObject(), new ConnectionService.Callback() {
+                    @Override public void success(JSONObject result) {
+                        airMouse.setCatModeActive(result.optBoolean("active"));
+                        reply(id, result, null, null);
+                    }
+                    @Override public void failure(String code, String message) { requestFailure(id, code, message); }
+                });
+            } else if (method.equals("app.pickGame")) {
+                if (params.length() != 0 || pendingGamePicker != null) { reply(id, null, "BUSY", "Finish choosing the current game first."); return; }
+                pendingGamePicker = id;
+                try {
+                    // Documents providers frequently label .nes as application/octet-stream.
+                    // Header validation, rather than an unreliable MIME hint, is authoritative.
+                    Intent picker = new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
+                        .setType("*/*").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    startActivityForResult(picker, PICK_GAME);
+                } catch (RuntimeException unavailable) {
+                    pendingGamePicker = null; reply(id, null, "GAME_PICKER_UNAVAILABLE", "This phone could not open its file picker.");
+                }
             } else if (method.equals("app.pickLocalMedia")) {
                 if (params.length() != 0) { reply(id, null, "INVALID_REQUEST", "Choose a local file without extra fields."); return; }
                 if (pendingLocalMedia != null) { reply(id, null, "BUSY", "Finish choosing the current local file first."); return; }
@@ -752,6 +829,13 @@ public final class MainActivity extends Activity {
 
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == PICK_GAME) {
+            String id = pendingGamePicker; pendingGamePicker = null;
+            Uri uri = resultCode == RESULT_OK && data != null ? data.getData() : null;
+            if (id == null || destroyed) return;
+            if (uri == null) { reply(id, null, "GAME_IMPORT_CANCELLED", "Game selection cancelled."); return; }
+            importGame(uri, id); return;
+        }
         if (requestCode == PICK_LOCAL_VIDEO) {
             String id = pendingLocalMedia;
             Uri video = resultCode == RESULT_OK && data != null ? data.getData() : null;
@@ -836,6 +920,46 @@ public final class MainActivity extends Activity {
         catch (SecurityException ignored) { /* The transient grant remains valid while this Activity owns the selection. */ }
     }
 
+    private boolean receiveGameIntent(Intent intent) {
+        if (intent == null) return false;
+        Uri uri = null;
+        if (Intent.ACTION_VIEW.equals(intent.getAction())) uri = intent.getData();
+        else if (Intent.ACTION_SEND.equals(intent.getAction())) {
+            try { uri = intent.getParcelableExtra(Intent.EXTRA_STREAM); } catch (RuntimeException ignored) { }
+        }
+        if (uri == null || !("content".equals(uri.getScheme()) || "file".equals(uri.getScheme()))) return false;
+        pendingGameImport = uri; pendingGamesOpen = true;
+        showBrowser(false); deliverPendingGame(); return true;
+    }
+    private void deliverPendingGame() {
+        if (destroyed || !localReady || connectionService == null) return;
+        if (pendingGamesOpen) { pendingGamesOpen = false; event("onOpenGames", null); }
+        if (pendingGameImport == null) return;
+        Uri uri = pendingGameImport; pendingGameImport = null; importGame(uri, null);
+    }
+    private void importGame(Uri uri, String requestId) {
+        if (connectionService == null) {
+            if (requestId != null) reply(requestId, null, "BUSY", "The games library is starting. Try again.");
+            else { pendingGameImport = uri; pendingGamesOpen = true; }
+            return;
+        }
+        connectionService.importGame(uri, new ConnectionService.Callback() {
+            @Override public void success(JSONObject result) {
+                if (destroyed) return;
+                if (requestId != null) reply(requestId, result, null, null);
+                else { showBrowser(false); event("onOpenGames", result); }
+            }
+            @Override public void failure(String code, String message) {
+                if (destroyed) return;
+                if (requestId != null) reply(requestId, null, code, message);
+                else {
+                    Toast.makeText(MainActivity.this, message, Toast.LENGTH_LONG).show();
+                    event("onOpenGames", null);
+                }
+            }
+        });
+    }
+
     private void clearLocalSelection() { pendingLocalMedia = null; pendingLocalVideo = null; }
 
     private void reply(String id, JSONObject result, String code, String message) {
@@ -888,6 +1012,7 @@ public final class MainActivity extends Activity {
 
     @Override protected void onDestroy() {
         if (updateManager != null) updateManager.close();
+        if (airMouse != null) airMouse.close();
         destroyed = true;
         liveMediaVerifier.close();
         liveMediaObserver.clear();
@@ -906,7 +1031,12 @@ public final class MainActivity extends Activity {
         super.onResume();
         if (updateManager != null) updateManager.onResume();
         resumed = true;
-        if (connectionService != null) event("onConnectionState", connectionService.snapshot());
+        if (airMouse != null) airMouse.setForeground(!browserVisible);
+        if (connectionService != null) {
+            JSONObject snapshot = connectionService.snapshot();
+            updateAirMouseUsable(snapshot);
+            event("onConnectionState", snapshot);
+        }
         if (autoConnectEnabled && connectionService != null) connectionService.restoreReceivers();
         scheduleAutoConnect(0);
     }
@@ -923,6 +1053,7 @@ public final class MainActivity extends Activity {
     @Override protected void onPause() {
         if (updateManager != null) updateManager.onPause();
         resumed = false;
+        if (airMouse != null) airMouse.setForeground(false);
         main.removeCallbacks(autoConnect); autoConnectDue = 0;
         super.onPause();
     }
@@ -930,5 +1061,13 @@ public final class MainActivity extends Activity {
     @Override protected void onStop() {
         foregroundStarted = false;
         super.onStop();
+    }
+
+    @Override public void onConfigurationChanged(Configuration configuration) {
+        if (airMouse != null) {
+            airMouse.setForeground(false);
+            airMouse.setForeground(resumed && !browserVisible);
+        }
+        super.onConfigurationChanged(configuration);
     }
 }

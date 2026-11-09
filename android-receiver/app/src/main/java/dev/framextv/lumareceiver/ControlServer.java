@@ -6,6 +6,7 @@ import android.media.AudioManager;
 import android.net.nsd.NsdManager;
 import android.net.nsd.NsdServiceInfo;
 import android.os.Build;
+import android.os.SystemClock;
 
 import androidx.media3.common.C;
 
@@ -34,6 +35,8 @@ final class ControlServer {
     private final ReceiverApp app;
     private final ExecutorService workers = Executors.newFixedThreadPool(8);
     private volatile ServerSocket socket;
+    volatile long listeningAt;
+    private int bindFailures;
     private NsdManager.RegistrationListener nsd;
 
     ControlServer(ReceiverApp app) { this.app = app; }
@@ -45,7 +48,12 @@ final class ControlServer {
             server.setReuseAddress(true);
             server.bind(new java.net.InetSocketAddress(PORT), 16);
             socket = server;
-        } catch (IOException failure) { android.util.Log.e("LumaServer", "BIND_FAILED"); return; }
+            listeningAt = SystemClock.elapsedRealtime();
+        } catch (IOException failure) {
+            android.util.Log.e("LumaServer", "BIND_FAILED");
+            if (++bindFailures <= 12) ReceiverApp.main().postDelayed(this::start, 1000);
+            return;
+        }
         Thread accept = new Thread(this::acceptLoop, "luma-accept");
         accept.setDaemon(true);
         accept.start();
@@ -112,7 +120,7 @@ final class ControlServer {
                 if (hasUrl != hasKey || hasUrl && params.optBoolean("onlyIfInactive")) throw new ApiException("INVALID_INPUT");
                 String currentUrl = hasUrl ? MediaRequest.httpUrl(params.opt("expectedCurrentSourceUrl")) : null;
                 String currentKey = hasKey ? MediaRequest.label(params.opt("expectedCurrentContentKey"), 200) : null;
-                return ReceiverApp.onMain(() -> { JSONObject opened = playback.open(media, params.optBoolean("onlyIfInactive"), currentUrl, currentKey); playback.noteInteraction(); return opened; });
+                return ReceiverApp.onMain(() -> { JSONObject opened = playback.open(media, params.optBoolean("onlyIfInactive"), currentUrl, currentKey); app.closeGames(); playback.noteInteraction(); return opened; });
             }
             case "player.next": {
                 // Validate and enqueue from one main-thread turn. Otherwise a
@@ -137,7 +145,8 @@ final class ControlServer {
                     long wait = params.has("waitMs") ? MediaRequest.integer(params.opt("waitMs"), 0, (int) MAX_WAIT_MS) : MAX_WAIT_MS;
                     playback.awaitChange(known, wait);
                 }
-                return ReceiverApp.onMain(playback::status);
+                return ReceiverApp.onMain(() -> playback.status().put("catMode",
+                    app.catMode.summary(SystemClock.elapsedRealtime())));
             }
             case "player.pause": case "player.resume":
                 return ReceiverApp.onMain(() -> { playback.expect(params); playback.setPlaying("player.resume".equals(method)); return accepted(); });
@@ -181,6 +190,7 @@ final class ControlServer {
                 playback.applyDisplay();
                 return app.display.toJson();
             });
+            case "input.key": return ReceiverApp.onMain(() -> RemoteInput.send(app, params.optString("key", "")));
             case "volume.get": return volume();
             case "volume.set": {
                 AudioManager audio = (AudioManager) app.getSystemService(Context.AUDIO_SERVICE);
@@ -227,6 +237,119 @@ final class ControlServer {
             }
             case "pair.clients": return new JSONObject().put("clients", app.pairing.publicClients()).put("self", client);
             case "pair.revoke": return new JSONObject().put("revoked", app.pairing.revoke(params.optString("clientId")));
+            case "apps.list": return app.launcher.json();
+            case "recovery.status": return app.streamRecovery.snapshot();
+            case "history.show": return ReceiverApp.onMain(() -> { HistoryActivity.show(app); return accepted(); });
+            case "history.status": return ReceiverApp.onMain(() -> app.historyUi == null ? new JSONObject().put("active", false) : app.historyUi.snapshot());
+            case "games.list": return app.games.list();
+            case "games.get": {
+                String id = GameLibrary.id(params.optString("id"));
+                int offset = MediaRequest.integer(params.opt("offset"), 0, GameLibrary.MAX_ROM);
+                int length = MediaRequest.integer(params.opt("length"), 1, GameLibrary.CHUNK);
+                byte[] bytes = app.games.chunk(id, offset, length);
+                return new JSONObject().put("id", id).put("offset", offset).put("totalSize", app.games.file(id).length())
+                    .put("data", android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP));
+            }
+            case "games.put": {
+                String id = GameLibrary.id(params.optString("id"));
+                int offset = MediaRequest.integer(params.opt("offset"), 0, GameLibrary.MAX_ROM);
+                int total = MediaRequest.integer(params.opt("totalSize"), 16, GameLibrary.MAX_ROM);
+                Object encoded = params.opt("data");
+                if (!(encoded instanceof String) || ((String) encoded).length() > 4 * ((GameLibrary.CHUNK + 2) / 3))
+                    throw new ApiException("INVALID_GAME_DATA");
+                byte[] bytes;
+                try { bytes = android.util.Base64.decode((String) encoded, android.util.Base64.NO_WRAP); }
+                catch (IllegalArgumentException invalid) { throw new ApiException("INVALID_GAME_DATA"); }
+                JSONObject result = app.games.put(id, params.optString("name"), client, offset, total, bytes);
+                if (result.optBoolean("complete")) ReceiverApp.main().post(app::refreshGames);
+                return result;
+            }
+            case "games.play": {
+                String id = GameLibrary.id(params.optString("id"));
+                app.games.file(id);
+                return ReceiverApp.onMain(() -> { GamesActivity.show(app, id); return accepted(); });
+            }
+            case "games.show": return ReceiverApp.onMain(() -> { GamesActivity.show(app, null); return accepted(); });
+            case "games.stop": return ReceiverApp.onMain(() -> { app.stopGame(); return accepted(); });
+            case "games.status": return ReceiverApp.onMain(app::gameStatus);
+            case "games.controllers": return new JSONObject().put("devices", ControllerInput.devices());
+            case "controllers.show": return ReceiverApp.onMain(() -> { ControllerSetupActivity.show(app); return accepted(); });
+            case "controllers.status": return ReceiverApp.onMain(app::controllerSetupStatus);
+            case "controllers.players": return ReceiverApp.onMain(() -> new ControllerPlayerStore(app).snapshot());
+            case "controllers.navigation": return ReceiverApp.onMain(app::controllerNavigationStatus);
+            case "controllers.system": return ReceiverApp.onMain(() -> ControllerSystemService.status(app));
+            case "controllers.settingsPanels": return AccessibilityPanel.diagnostics(app);
+            case "controllers.accessibility": return ReceiverApp.onMain(() -> {
+                String destination = ControllerSystemService.openSettings(app);
+                return new JSONObject().put("accepted", !"unavailable".equals(destination)).put("destination", destination);
+            });
+            case "controllers.lights": return ReceiverApp.onMain(() -> app.controllerLeds.status());
+            case "controllers.setLights": {
+                int id = MediaRequest.integer(params.opt("deviceId"), 0, Integer.MAX_VALUE);
+                return ReceiverApp.onMain(() -> {
+                    android.view.InputDevice device = android.view.InputDevice.getDevice(id);
+                    if (device == null) throw new ApiException("INVALID_CONTROLLER");
+                    return app.controllerLeds.request(device, new ControllerPlayerStore(app).player(device));
+                });
+            }
+            case "controllers.snapshot": {
+                String png = ReceiverApp.onMain(() -> {
+                    android.graphics.Bitmap bitmap = app.controllerSetupSnapshot();
+                    if (bitmap == null) return null;
+                    java.io.ByteArrayOutputStream output = new java.io.ByteArrayOutputStream();
+                    bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, output); bitmap.recycle();
+                    return android.util.Base64.encodeToString(output.toByteArray(), android.util.Base64.NO_WRAP);
+                });
+                if (png == null) throw new ApiException("NO_UI", 409);
+                return new JSONObject().put("png", png);
+            }
+            case "apps.launch": {
+                app.launcher.launch(params.optString("packageName", ""));
+                return accepted();
+            }
+            case "cat.start": {
+                if (params.has("sound") && !(params.opt("sound") instanceof Boolean)) throw new ApiException("INVALID_INPUT");
+                boolean sound = params.optBoolean("sound", true);
+                return ReceiverApp.onMain(() -> {
+                    app.closeGames();
+                    playback.noteInteraction();
+                    if (playback.active()) playback.setPlaying(false);
+                    app.catMode.start(sound, SystemClock.elapsedRealtime());
+                    MainActivity.bringToFront(app);
+                    return app.catMode.json(SystemClock.elapsedRealtime());
+                });
+            }
+            case "cat.status": return app.catMode.json(SystemClock.elapsedRealtime());
+            case "cat.audioStatus": return CatSoundPlayer.diagnostics();
+            case "cat.pointer": {
+                double x = normalized(params, "x"), y = normalized(params, "y");
+                return ReceiverApp.onMain(() -> {
+                    long now = SystemClock.elapsedRealtime();
+                    if (!app.catMode.pointer(x, y, now)) throw new ApiException("CAT_MODE_INACTIVE", 409);
+                    return app.catMode.json(now);
+                });
+            }
+            case "cat.release": return ReceiverApp.onMain(() -> {
+                long now = SystemClock.elapsedRealtime();
+                if (!app.catMode.release(now)) throw new ApiException("CAT_MODE_INACTIVE", 409);
+                return app.catMode.json(now);
+            });
+            case "cat.pounce": {
+                boolean hasX = params.has("x"), hasY = params.has("y");
+                if (hasX != hasY) throw new ApiException("INVALID_INPUT");
+                Double x = hasX ? normalized(params, "x") : null;
+                Double y = hasY ? normalized(params, "y") : null;
+                return ReceiverApp.onMain(() -> {
+                    long now = SystemClock.elapsedRealtime();
+                    if (x != null && !app.catMode.pointer(x, y, now)) throw new ApiException("CAT_MODE_INACTIVE", 409);
+                    if (!app.catMode.pounce(now)) throw new ApiException("CAT_MODE_INACTIVE", 409);
+                    return app.catMode.json(now);
+                });
+            }
+            case "cat.stop": return ReceiverApp.onMain(() -> {
+                app.catMode.stop();
+                return app.catMode.json(SystemClock.elapsedRealtime());
+            });
             case "player.scrub": {
                 // Mirrors a phone-side scrub: position plus the same preview frame the phone shows.
                 if (!(params.opt("active") instanceof Boolean)) throw new ApiException("INVALID_INPUT");
@@ -278,7 +401,7 @@ final class ControlServer {
                 return new JSONObject().put("shown", app.notice(text, duration));
             }
             case "app.show":
-                ReceiverApp.main().post(() -> MainActivity.bringToFront(app));
+                ReceiverApp.main().post(() -> { app.closeGames(); MainActivity.bringToFront(app); });
                 return accepted();
             default: throw new ApiException("UNKNOWN_METHOD", 404);
         }
@@ -302,7 +425,17 @@ final class ControlServer {
             .put("pairingOpen", app.pairing.activeCode() != null)
             .put("startup", app.startupStatus())
             .put("capabilities", new JSONArray(java.util.Arrays.asList("hls", "dash", "progressive", "subtitles.sideload",
-                "tracks.audio", "tracks.text", "status.longpoll", "library.sync", "update.release", "update.dev", "volume", "display.picture", "display.subtitles", "scrub.mirror", "open.atomic", "thumbs.share", "player.next", "autoNext", "startup.diagnostics")));
+                "tracks.audio", "tracks.text", "status.longpoll", "library.sync", "update.release", "update.dev", "volume", "display.picture", "display.subtitles", "scrub.mirror", "open.atomic", "thumbs.share", "player.next", "autoNext", "startup.diagnostics", "apps.launcher", "cat.mode", "games.nes", "games.sync", "input.gamepad", "input.calibrate", "input.remote")));
+    }
+
+    /** API coordinates are strict milli-normalized integers; drawing uses 0..1. */
+    static double normalized(JSONObject params, String key) throws ApiException {
+        Object raw = params.opt(key);
+        if (!(raw instanceof Number)) throw new ApiException("INVALID_INPUT");
+        double value = ((Number) raw).doubleValue();
+        if (Double.isNaN(value) || Double.isInfinite(value) || value != Math.rint(value)
+                || value < 0 || value > 1_000) throw new ApiException("INVALID_INPUT");
+        return value / 1_000.0;
     }
 
     private JSONObject volume() throws Exception {

@@ -1,5 +1,311 @@
 # Current state
 
+## Installed receiver 0.3.33: all-format disk preload and high-quality playback
+
+- User clarified that paused loading must work for all supported media and that
+  quality should stay high even if buffering takes longer. The old local-file-only
+  eligibility is removed: remote/direct progressive files, HLS and DASH use the
+  current-title disk cache. Phone remains0.4.37; its existing cache UI works.
+- Media3 DownloadHelper chooses decoder-supported highest-bitrate tracks with
+  the same quality parameters as playback; adaptive playback no longer drops to
+  lower bitrate with bandwidth. HLS/DASH prefetch runs in60-second time ranges,
+  with audio/init/key resources handled by Media3, independently of RAM/pause.
+  Playback also caches adaptive segments. Manifests stay fresh for playback.
+- Cache has a shared LRU hard limit, 512MiB/10% reserve and8GiB ceiling; on this
+  projector the selected internal budget is about1523MiB. When nearly full, keep
+  the paused forward range and refill as playback consumes it. Seek restarts the
+  download range; changing source/stop cancels and clears old session keys.
+  Live content caches received segments but cannot preload unpublished future.
+- Complete adaptive windows are checked against actual disk spans before reporting
+  seconds ahead. That counter advances conservatively in60-second batches. A
+  fully cached tail is not labeled a fully cached title. Signed0.3.33/code47 is
+  installed. Real paused S4E2 at522.025s stays1920x1080/AAC with zero dropped
+  frames; bytes grew0.6→25.7MB while RAM stayed around23.5s. Final sample
+  reports137.975s disk ahead and still filling; left paused as announced.
+- Receiver140/140 unit tests pass. Isolated Android integration passes all three
+  formats: paused preload,1080p choice,seek to90s with upstream media blocked,
+  and cleanup. Emulator fixtures never touched the user library. No public feed
+  or commit/push. [Handoff](session-handoffs/2026-11-09-all-format-cache-quality.md).
+
+## Installed receiver 0.3.32 / phone 0.4.37: failed-stream recovery
+
+- User accepts Watch History UI; Gilded Age S4E2 failed startup. Diagnostics
+  show about 90 seconds buffering without audio/video, with disk cache off.
+  History stores canonical progress, not playable URLs. Fresh API candidates
+  also timed out in direct checks; alternate providers reported no streams.
+- Catalog now probes fresh sources (HLS playlist plus first media bytes),
+  rejects empty/error responses, and tries available alternate providers within
+  a bounded lookup budget. A startup error or 25 seconds without audio/video
+  triggers one fresh resolution excluding the failed URL. Zero duration alone
+  is not treated as failure. This does not recover failures after playback starts.
+- If projector resolution fails, a five-minute canonical episode request appears
+  in phone controls and its notification. Open episode uses the existing phone
+  browser/Play/Cast flow; this is guided assistance, not automatic browser capture.
+  Cancel/new playback clears requests; the phone card revalidates before opening.
+- Receiver139/139 unit tests and signed builds pass; focused recovery/remote
+  browser checks pass. Receiver0.3.32/code46 installed; phone0.4.37/code47
+  installed preserving data. User authorized saving Mario and installation;
+  pause-menu Save checkpoint and clean game stop were performed.
+- Live projector S4E2 resolves in about 8 seconds; later status shows duration
+  3093.007 seconds, AAC audio and position24.829 advancing. User confirms picture
+  and audio play correctly. No phone assistance was needed for this successful
+  attempt. Actual failed-source phone handoff remains covered by browser/unit
+  checks, not an end-to-end physical failure reproduction.
+  [Handoff](session-handoffs/2026-11-09-stream-recovery-phone-fallback.md).
+
+## Installed receiver 0.3.31: Watch History and Android TV settings shortcut
+
+- User confirms Cat Mode control is now good. Refreshed Accessibility permission
+  is verified: `controllers.system.directNavigation:true`. Standard direct-panel
+  availability remains false; that field is distinct from the enabled permission.
+- The real settings app is `com.android.tv.settings/.MainSettings`, enabled and
+  exported but absent from launcher inventory. It contains Accessibility as a
+  fragment, not an exported activity. The new **Accessibility** Home button and
+  controller-setup shortcut open this full settings menu, with instructions to
+  select Accessibility → LUMA Controller across apps. Droid Settings is separate.
+- **Watch History** on Home opens a controller-operated offline library grouped
+  by title/recent viewing, with saved resume/watched states, resume/restart,
+  next episode, season and episode browsing. Fresh metadata/source resolution
+  uses the existing receiver catalog; saved episodes remain browsable when the
+  catalog is unavailable. Movies and mapped anime retain canonical identities.
+  No stale media URLs are persisted. Cancel/Back/activity pause or intervening
+  playback changes prevent delayed source resolution from taking over playback.
+- Receiver135/135 tests and signed build pass; installed0.3.31/code45. Actual
+  projector smoke passes Home tile →10 titles →series actions →seasons →9 episodes
+  in the selected season →episode actions →Back through every level, using only
+  `input.key` receiver routes. Physical resume/next playback acceptance is pending.
+- Reinstalled the latest signed phone0.4.36/code46 with `adb install -r` as requested;
+  saved app data retained. No phone source changes in this follow-up. Cold-boot
+  timing and long-Home power behavior remain untested; do not shut down while the
+  user is checking history playback.
+  [Handoff](session-handoffs/2026-11-09-projector-watch-history-settings.md).
+
+## Installed receiver 0.3.28 and phone 0.4.36: smooth Cat input and direct remote
+
+- User accepted the prior launcher focus/Cat activation fix, but reported jerky
+  motion and jumps on stick release. Cat now receives calibrated analog values
+  before menu quantization, integrates movement each animation frame, takes over
+  at the rendered target position, and holds position at neutral. Phone pointer
+  takeover retains its existing short lease. Disconnect/pause stops movement.
+- Receiver API starts in Application initialization and is also ensured by
+  Accessibility connection, boot/update receiver and foreground service. Startup
+  diagnostics expose process/listener/accessibility elapsed times. On this
+  **update restart**, listening began 1,268 ms after process creation; this is
+  not a cold-boot measurement or a promise of immediate Wi-Fi readiness.
+- Authenticated `input.key` handles own-app navigation/Home and Android volume;
+  external focus/click/back uses Accessibility with a bounded vendor fallback.
+  `input.remote` advertises the capability. Phone direct connect now enables
+  remote controls, volume, app list/launch and opening the receiver without an
+  EShare socket; manual device connect also tries the paired receiver first.
+  Older receivers retain their native path. Power, text entry and system Air
+  Mouse still use vendor transport. Discovery for an unknown/changed IP still
+  uses vendor discovery; saved-address direct connection is the tested path.
+- Accessibility now requests current-screen controls for explicit local remote
+  actions; they are not stored or transmitted. After installation Android still
+  reports `directNavigation:false` with the old service permission. User was
+  asked to toggle the service off/on and accept the updated description. Own
+  receiver controls do not require this added permission. Other-app controls
+  before EShare remains unverified until that permission and physical check.
+- Receiver 130/130, phone 16 emulator instrumentation checks plus wire assertions,
+  two focused browser tests and both signed builds pass. Both apps installed;
+  projector `input.key home` confirms `route:receiver.home`. Cat smoothness and Accessibility permission refresh were subsequently confirmed;
+  cold-boot timing remains pending. Long-Home
+  power test remains deferred until Cat is accepted.
+  [Handoff](session-handoffs/2026-11-09-smooth-cat-early-receiver-api.md).
+
+## Installed receiver 0.3.27: launcher focus and Cat Mode activation repaired
+
+- Reproduced the Cat tile failure on the projector: focused Cat Mode + OK
+  moved focus to the first app and left Cat inactive. The idle OK handler had
+  omitted Cat from its button whitelist. It now activates the actual focused
+  clickable launcher control, including Cat Mode.
+- Home/resume explicitly focus the first installed app and reset grid scrolling;
+  returning from later rows no longer retains stale lower-list focus. Cat exit
+  also restores first-app focus. Native remote directions share the same Cat
+  movement helper as translated controller directions.
+- Receiver126/126 and signed release pass; 0.3.27/code41 installed. Actual
+  projector check passed first-app Home focus, lower-row reset, Cat tile launch,
+  directional manual control, confirm without exit, Back exit and restored
+  focus. User confirmed focus and activation; motion quality is addressed above. The user deferred
+  long-Home power testing until Cat Mode is fixed; do not test power yet.
+  [Launcher/Cat handoff](session-handoffs/2026-11-09-launcher-focus-cat-fix.md).
+
+## Installed receiver 0.3.26: buttons across apps, Home hold and Cat Mode
+
+- User enabled **LUMA Controller across apps** in Kodak's general settings and
+  confirms A selects, B goes back and the existing left stick still works in
+  other apps. The Accessibility service filters saved-controller button keys,
+  translates using hardware calibration and sends ordinary keys through the
+  projector's loopback EShare service. It skips LUMA's own focused activities,
+  preserving game mappings/Capture; no screen contents are requested or read.
+- Android 9's analog mapping remains unchanged outside LUMA, as the user wants.
+  The standard Accessibility settings action and an exported direct panel are
+  absent; the general-settings fallback works and the user found the toggle.
+  Live service is enabled and has translated actual physical presses.
+- A short calibrated Home press returns to LUMA. Holding it for 3 seconds saves
+  the game, requests Pro Controller sleep (HID 06 00), then sends the existing
+  projector power command. Early release/device removal cancels the timer.
+  Physical controller sleep and projector off/standby acceptance remain pending.
+- Launcher now has **Cat Mode**; stick/D-pad moves, A pounces, B exits. Physical
+  Cat acceptance is pending. Receiver126/126, manifest check and signed build
+  pass; 0.3.26/code40 installed, phone unchanged, no public release.
+  [System-controller handoff](session-handoffs/2026-11-09-controller-system-home-cat.md).
+
+## Installed receiver 0.3.24: Capture quick load assigned
+
+- Capture was calibrated and supported by input routing but omitted from the
+  NES editor's editable-control list. It is now selectable as **Capture**.
+- Installed 0.3.24/code38 and used the actual projector UI to save Capture →
+  Load latest checkpoint (2048) on the paired Pro Controller. Saved-profile
+  comparison verified every other binding and setting is unchanged. The
+  calibrated Capture hardware key is 106.
+- Receiver121/121 and signed build pass. The user confirmed that pressing
+  Capture during Mario gameplay restores the latest checkpoint.
+  [Capture handoff](session-handoffs/2026-11-09-capture-checkpoint-binding.md).
+
+## Installed receiver 0.3.23: five checkpoints and controller quick load
+
+- Manual saves retain the newest five checkpoints per game. Pause menu
+  **Checkpoint history** offers dated older saves; loading does not consume or
+  reorder history. The existing single checkpoint is preserved and imported
+  before the first new save. Automatic resume remains separate.
+- **Controllers → NES button assignments → Load latest checkpoint** can be
+  assigned to an editable button and explicitly saved. Player 1 triggers it once
+  per fresh press; held controls must return to neutral after loading. Existing
+  mappings, retrigger behavior and LEDs remain intact.
+- All 121 unit tests, signed release build and isolated Android integration
+  pass, including six saves retaining five, older/latest restore and scroll
+  navigation. Installed with app data preserved; Mario is paused at its menu
+  with one existing checkpoint and no reported error. Physical shortcut
+  acceptance remains pending; phone stays 0.4.35. No public release.
+  [Checkpoint handoff](session-handoffs/2026-11-09-checkpoint-history-shortcut.md).
+
+## Installed receiver 0.3.22: overlapping NES button presses
+
+- A fresh press on another control assigned to an already-held NES button now
+  releases that virtual button for one emulated frame, then restores the held
+  state. Releasing one binding preserves the others; the final release clears
+  the button and pending pulses. Rapid taps queue with a held frame between them.
+- Logical press edges travel separately from the aggregate held mask, so Android
+  key repeats and key/axis aliases do not retrigger. Menu and volume actions are
+  excluded. Pause, focus loss and disconnect cancel pending pulses.
+- All 114 receiver unit tests pass, including 16 new scheduler/profile tests;
+  the signed release APK is installed with app data preserved. Mario reopened
+  and reached 3,687 native frames without a reported error. `games.status`
+  recorded 45 retriggered presses consumed by the emulator. The user then
+  confirmed that holding B to run and tapping the duplicate B trigger fires
+  successfully while running.
+  Phone remains 0.4.35; controller mappings and LED implementation are unchanged.
+  [Retrigger handoff](session-handoffs/2026-11-09-nes-duplicate-button-retrigger.md).
+
+## Installed receiver 0.3.21: physical navigation and steady player light accepted
+
+- User confirms NES gameplay works on the projector and receiver/setup navigation
+  now works after 0.3.20. The cause was app-translated directions bypassing Android's
+  ViewRootImpl focus-navigation stage. `ControllerNavigation` now moves focus and
+  scrolls explicitly; physical diagnostics recorded focus moving between buttons.
+- Receiver 0.3.21/code35 is installed with data preserved. NES assignments now
+  include Volume down/up and a **Use ZL / ZR for volume** preset. New profiles
+  default to trigger volume; existing saved assignments are preserved until Save.
+  Game volume actions are edge-triggered and never enter the NES button mask.
+- The first Android HID-host reflection call was blocked by the actual firmware.
+  The Android-9-only fallback binds the existing exported system HID service,
+  checks its Binder descriptor and normal Bluetooth permissions, then sends the
+  verified Nintendo steady-player-light report. API state is `sentUnconfirmed`
+  because no hardware ACK is decoded, but the user explicitly confirmed that
+  Player 1's light is now steady. No
+  driver, pairing, input-report mode or hidden-API policy change was made.
+- All 98 unit tests and the signed release build pass. Phone remains 0.4.35.
+  [Navigation and HID handoff](session-handoffs/2026-11-09-controller-navigation-hid-lights.md).
+
+## Installed controller calibration: receiver 0.3.19 / phone 0.4.35
+
+- Receiver 0.3.19/code33 is installed in place. It adds a Pro Controller diagram,
+  live test, guided 22-step calibration, explicit hardware-profile save/discard,
+  separate NES assignments and both-stick navigation across Home/Games/player.
+  Plus toggles playback; shoulders seek and triggers adjust volume. Controller
+  profiles reload on Activity resume, with release and callback guards.
+- Player slots 1–4 persist separately. The physical projector reports the paired
+  Pro Controller connected and assigned to Player 1; other slots are empty.
+  Only Player 1 feeds the current NES port. Physical player LEDs remain unchanged:
+  Android 9 lacks the supported light API, and an OEM HID output path is unverified.
+- All 94 receiver unit tests and the signed optimized build pass. Isolated Android
+  checks confirmed game launch, menu, unmapped-key isolation, Home, media
+  play/pause, both seek directions and both volume triggers. A final direct
+  AudioManager volume fix is included in the installed build. After returning
+  through Home, the physical setup screenshot succeeded and was visually checked:
+  connected Pro Controller, Player 1, saved profile present, and live stick input.
+  Full button/calibration correctness and physical media/NES acceptance still
+  need user confirmation; a saved profile alone does not prove all mappings.
+- [Controller handoff](session-handoffs/2026-11-09-controller-calibration.md).
+
+## Installed Games baseline: phone 0.4.35 / receiver 0.3.18
+
+- Live follow-up: both production-signed candidates are installed with data
+  preserved. Projector discovery found a changed LAN address; the existing bearer
+  pairing remained valid. The supplied ROM is in the projector library and
+  phone Downloads. Actual Android 9/ARM32 runtime reached 2,814 frames with no
+  reported error; its pause menu held the frame count stable. The real phone Games
+  sheet confirmed the ROM on both devices. The user paired the full-size Pro
+  Controller and accepted receiver navigation; NES picture/audio acceptance and
+  final calibrated buttons remain pending.
+- Added projector-local NES playback using pinned QuickNES engine source,
+  controller navigation throughout the receiver, Bluetooth settings entry,
+  Games library and automatic/manual save states. Android owns pairing; physical
+  calibrated Nintendo mapping, sound and projector performance remain pending.
+- Phone imports `.nes` through its document picker and compatible external
+  VIEW/SEND intents, keeps private hash-identified copies, and synchronizes
+  missing ROMs both directions over the existing paired connection. Saves stay
+  on the projector. SNES/GBA are future work, not advertised capabilities.
+- Receiver unit tests pass 65/65. The supplied private Mario Tupi ROM passes
+  3,600 native frames, generated audio, deterministic save replay and ASAN.
+  Signed optimized receiver APK passed an isolated Android emulator integration
+  covering authentication, upload/download, native gameplay, pause/checkpoints,
+  automatic resume and process restart. Phone browser70/70 and storage/HTTP-sync
+  checks pass; actual Android picker import and paired library sync were verified
+  on the isolated emulator. Final compact list/Home button layouts were visually
+  checked. The initial preparation was local only; the later live installation
+  above is now verified. No public update feed was changed.
+- [Implementation and acceptance boundaries](games.md),
+  [handoff](session-handoffs/2026-11-09-projector-nes-games.md).
+
+## Phone 0.4.34 and receiver 0.3.17 live: Cat audio-path verification
+
+- Receiver 0.3.17/code31 is installed on the Kodak projector. Its existing Home
+  grid still reads all enabled launchable apps from Android, including the
+  previously live-confirmed Crunchyroll entry. It now also has an authenticated,
+  projector-native **Cat Mode**: cyan/yellow-green moth, mouse and bug targets
+  dart, quiver, hide and rest on a dark field, with sparse generated low-volume
+  chirps. After the user could not hear the first build, audio was changed from
+  a delayed roughly -27.5 dBFS effective peak to an immediate two-part call,
+  about 12–14 dB stronger, followed by brief calls every 4–10 seconds through
+  the media stream, but the user confirmed this still produced exactly zero
+  output. Receiver 0.3.17/code31 replaces the likely unsupported 24 kHz static
+  track with checked 48 kHz `MODE_STREAM`, native minimum buffering,
+  playback-head diagnostics and a system media-tone fallback. A session ends
+  after 12 minutes; Back stops it immediately.
+- Phone 0.4.34/code44 is installed on the Samsung. The user physically accepted
+  the calibrated orientation approach in arbitrary grips and asked for more
+  travel. The default now uses the existing High preset (20° horizontal / 12°
+  vertical rather than 26° / 16°), about 23–25% less rotation for full travel,
+  while retaining the dead zone, hysteresis, bounded stepping and smoothing.
+- **More → Start cat mode** starts autonomous play. While Air Mouse is active,
+  its filtered normalized pointer controls the toy and OK triggers a pounce;
+  Air off sends an explicit release so autonomy resumes. A 1.5-second receiver
+  lease also restores autonomy if the phone or network disappears. A dropped Cat
+  sample does not tear down the calibrated Air Mouse session.
+- Receiver tests pass 48/48, the complete phone browser suite passes 68/68, host
+  Air Mouse and native-boundary checks pass, phone main/AndroidTest Java compile,
+  and both signed release builds pass. Live acceptance confirmed receiver
+  capability plus autonomous start, manual pointer, pounce, release and stop;
+  that first live state was stopped. Package/device reads confirm phone
+  0.4.34/code44 and receiver 0.3.17/code31. Projector media volume was 8/15 and
+  unmuted, confirming the earlier missing audio path was not a quiet/muted
+  stream. After the user restored the receiver, the signed APK installed and a
+  live Cat start reported `pcm-stream`, 48,000 Hz, 10,560 samples written and
+  all 10,560 frames played. Cat Mode remains running for audible/user acceptance;
+  no public release was published.
+
 ## Installed phone 0.4.32 / receiver 0.3.13: live Backup HLS cast accepted
 
 - The user authorized a Cast-time live-media fallback for the already playing

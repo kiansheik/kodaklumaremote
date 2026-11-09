@@ -1,6 +1,10 @@
 .gradle/
 build/
 app/build/
+app/.cxx/
 local.properties
 *.jks
 *.keystore
+
+# Unused prebuilt utility in the upstream QuickNES import.
+app/src/main/cpp/third_party/quicknes/nes_emu/tools/proto

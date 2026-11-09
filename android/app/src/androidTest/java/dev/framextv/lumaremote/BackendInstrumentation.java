@@ -76,6 +76,12 @@ public final class BackendInstrumentation extends UiSmokeInstrumentation {
             require(ready.getBoolean("ready") && connection.getBoolean("connected")
                     && connection.getBoolean("receiverConnected") && !connection.getBoolean("nativeConnected"),
                     "Direct receiver readiness still depended on the native projector protocol");
+            require(connection.getBoolean("remoteConnected"), "Direct remote capability not exposed");
+            require("receiver.home".equals(call("luma.key", "key", "home").optString("route")), "Key did not use direct API");
+            require(call("luma.status").getJSONObject("volume").getInt("current") == 6, "Direct volume missing");
+            require(call("luma.launchReceiver").getBoolean("accepted"), "Direct launch missing");
+            require(!backend.connectionSnapshot().getBoolean("nativeConnected"), "Direct controls opened vendor connection");
+            rejects("INVALID_INPUT", "luma.key", "key", "shell");
             rejects("INVALID_HOST", "receiver.configure", "host", "8.8.8.8", "token", TOKEN, "port", receiverPort);
             call("device.disconnect");
         });
@@ -97,6 +103,13 @@ public final class BackendInstrumentation extends UiSmokeInstrumentation {
         });
         check("bounded keys and Unicode text", () -> {
             call("luma.key", "key", "right"); call("luma.text", "text", "Olá 👋");
+            JSONObject pointer = call("luma.airMouseInfo");
+            require(pointer.getInt("width") == 1280 && pointer.getInt("height") == 720, "Projector pointer bounds missing");
+            call("luma.airMouse", "x", 640, "y", 360, "action", -1);
+            call("luma.airMouseClick", "x", 640, "y", 360, "action", 0);
+            rejects("INVALID_INPUT", "luma.airMouse", "x", -1, "y", 360, "action", -1);
+            rejects("INVALID_INPUT", "luma.airMouse", "x", 640, "y", 360, "action", 2);
+            rejects("INVALID_INPUT", "luma.airMouseClick", "x", 640, "y", 360, "action", 1);
             JSONObject volume = call("luma.setVolume", "value", 7).getJSONObject("volume");
             require(volume.getInt("current") == 6 && volume.getInt("max") == 15, "Volume readback was replaced with the requested value");
             rejects("INVALID_INPUT", "luma.setVolume", "value", -1);
@@ -204,6 +217,29 @@ public final class BackendInstrumentation extends UiSmokeInstrumentation {
             rejects("RECEIVER_CONFIG", "receiver.status");
             configure(receiverPort); require(call("receiver.status").getBoolean("active"), "A fresh token was not accepted");
         });
+        check("authenticated Cat Mode control and bounded pointer coordinates", () -> {
+            JSONObject started = call("receiver.catStart");
+            require(started.getBoolean("active") && !started.getBoolean("manual")
+                    && started.getBoolean("sound") && started.getInt("remainingSeconds") == 720,
+                    "Cat Mode did not start autonomously");
+            JSONObject embedded = call("receiver.status").getJSONObject("catMode");
+            require(embedded.getBoolean("active") && !embedded.getBoolean("manual"),
+                    "Playback status omitted Cat Mode state");
+            JSONObject pointed = call("receiver.catPointer", "x", 500, "y", 250);
+            require(pointed.getBoolean("manual"), "Air Mouse pointer did not take Cat Mode control");
+            require(call("receiver.catPounce", "x", 0, "y", 1000).getBoolean("manual"),
+                    "Pounce rejected valid edge coordinates");
+            rejects("INVALID_INPUT", "receiver.catPointer", "x", -1, "y", 500);
+            rejects("INVALID_INPUT", "receiver.catPointer", "x", 500, "y", 1001);
+            rejects("INVALID_INPUT", "receiver.catPointer", "x", 1.5, "y", 500);
+            rejects("INVALID_INPUT", "receiver.catPointer", "x", "500", "y", 500);
+            JSONObject released = call("receiver.catRelease");
+            require(released.getBoolean("active") && !released.getBoolean("manual"),
+                    "Disabling Air Mouse did not resume autonomous Cat Mode");
+            JSONObject stopped = call("receiver.catStop");
+            require(!stopped.getBoolean("active") && !stopped.getBoolean("manual")
+                    && stopped.getInt("remainingSeconds") == 0, "Cat Mode did not stop cleanly");
+        });
         check("inactive and ready subtitle snapshots", () -> {
             configure(Integer.parseInt(args.getString("readinessPort")));
             try {
@@ -230,6 +266,7 @@ public final class BackendInstrumentation extends UiSmokeInstrumentation {
                         && !spoofed.has("diskCacheStorage") && !spoofed.has("diskCachedBytes")
                         && !spoofed.has("diskCacheTargetBytes") && !spoofed.has("diskCacheAheadSeconds"),
                     "Malformed optional buffer telemetry escaped the native boundary");
+                rejects("RECEIVER_RESPONSE", "receiver.status");
                 rejects("RECEIVER_RESPONSE", "receiver.connect");
                 rejects("RECEIVER_RESPONSE", "receiver.pairBegin", "port", malformed);
                 rejects("RECEIVER_RESPONSE", "receiver.pairComplete", "pairingId", "fixturePairing01", "code", CODE, "port", malformed);

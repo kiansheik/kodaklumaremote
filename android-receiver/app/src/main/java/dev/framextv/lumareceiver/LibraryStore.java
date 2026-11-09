@@ -116,6 +116,16 @@ final class LibraryStore extends SQLiteOpenHelper {
         }
     }
 
+    synchronized List<JSONObject> historyProgress() throws Exception {
+        List<JSONObject> result = new ArrayList<>();
+        try (Cursor rows = getReadableDatabase().rawQuery(
+                "SELECT data FROM records WHERE type='progress' AND deleted=0 ORDER BY updated_at DESC LIMIT 10000", null)) {
+            while (rows.moveToNext()) try { result.add(new JSONObject(rows.getString(0))); }
+            catch (org.json.JSONException invalid) { /* Ignore malformed legacy records. */ }
+        }
+        return result;
+    }
+
     synchronized int count(String type) {
         try (Cursor c = getReadableDatabase().rawQuery("SELECT COUNT(*) FROM records WHERE type=? AND deleted=0", new String[] {type})) {
             return c.moveToFirst() ? c.getInt(0) : 0;

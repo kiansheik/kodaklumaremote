@@ -9,6 +9,10 @@ dist/
 *.mp4
 *.m4s
 *.webm
+*.nes
+*.sfc
+*.smc
+*.gba
 .DS_Store
 __pycache__/
 *.py[cod]

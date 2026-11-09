@@ -82,7 +82,8 @@
     .text-button { background: transparent; border-color: transparent; padding: 5px 8px; min-height: 38px; color: #a3d9cc; font-size: .78rem; }
     .app-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
     .app { min-height: 64px; background: #1b2e35; font-size: .83rem; font-weight: 550; text-align: left; display: flex; gap: 10px; align-items: center; padding: 11px 12px; min-width: 0; }
-    .app-symbol { color: #9bc9c5; background: #2b434a; border-radius: 8px; width: 29px; height: 29px; display: grid; place-items: center; flex: none; font-size: .8rem; }
+    .app-symbol, .app-icon { color: #9bc9c5; background: #2b434a; border-radius: 9px; width: 36px; height: 36px; display: grid; place-items: center; flex: none; font-size: .82rem; }
+    .app-icon { object-fit: contain; padding: 2px; }
     .app-label { overflow-wrap: anywhere; min-width: 0; }
     .empty { color: #9db3ba; font-size: .84rem; padding: 11px 0 2px; grid-column: 1 / -1; }
     .typing h2 { margin-bottom: 6px; }
@@ -225,10 +226,17 @@
         button.type = 'button';
         button.className = 'app';
         button.setAttribute('aria-label', `Open ${label} app`);
-        const symbol = document.createElement('span');
-        symbol.className = 'app-symbol';
+        const safeIcon = typeof app.icon === 'string' && app.icon.length <= 192 * 1024
+          && /^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(app.icon) ? app.icon : '';
+        const symbol = document.createElement(safeIcon ? 'img' : 'span');
+        symbol.className = safeIcon ? 'app-icon' : 'app-symbol';
         symbol.setAttribute('aria-hidden', 'true');
-        symbol.textContent = [...label][0].toLocaleUpperCase();
+        if (safeIcon) {
+          symbol.src = safeIcon;
+          symbol.alt = '';
+          symbol.decoding = 'async';
+          symbol.referrerPolicy = 'no-referrer';
+        } else symbol.textContent = [...label][0].toLocaleUpperCase();
         const name = document.createElement('span');
         name.className = 'app-label';
         name.textContent = label;
@@ -335,6 +343,7 @@
     document.querySelector('#connect-form').addEventListener('submit', async event => {
       event.preventDefault();
       if (busy || connectedHost) return;
+      let loadApps = false;
       const host = hostInput.value.trim();
       if (!privateAddress(host)) { message(connectionMessage, 'Enter the projector’s local IP address.', true); hostInput.focus(); return; }
       busy = true;
@@ -350,8 +359,10 @@
         message(commandMessage, 'Ready when you are.');
         showVolume(data.volume);
         renderApps(data.apps);
+        loadApps = !Array.isArray(data.apps);
       } catch (error) { message(connectionMessage, error.message, true); }
       finally { busy = false; pendingAction = ''; updateControls(); }
+      if (loadApps) void command('apps', {}, 'App list ready.');
     });
 
     disconnectButton.addEventListener('click', async () => {

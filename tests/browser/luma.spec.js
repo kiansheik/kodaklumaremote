@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises';
 let server;
 let remoteUrl;
 const receiver = '192.168.1.50';
+const crunchyrollIcon = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
 
 test.beforeAll(async () => {
   const html = await readFile(new URL('../../src/luma/remote.html', import.meta.url));
@@ -33,7 +34,7 @@ async function openRemote(page, responder = () => undefined) {
     calls.push(body);
     const custom = await responder(body);
     const data = custom ?? (body.action === 'connect'
-      ? { connected: true, device: { name: 'LUMA test projector' }, apps: [{ packageName: 'org.xbmc.kodi', label: 'Kodi' }, { packageName: 'test.video', label: 'Video player' }] }
+      ? { connected: true, device: { name: 'LUMA test projector' }, apps: [{ packageName: 'org.xbmc.kodi', label: 'Kodi' }, { packageName: 'test.video', label: 'Video player' }, { packageName: 'com.crunchyroll.crunchyroid', label: 'Crunchyroll', icon: crunchyrollIcon }] }
       : body.action === 'disconnect' ? { connected: false }
         : body.action === 'apps' ? { apps: [{ packageName: 'test.other', label: 'New app' }] }
           : body.action === 'status' ? { connected: true, volume: { current: 6, max: 30 } }
@@ -70,11 +71,41 @@ test('a narrow remote starts disconnected, validates the address, and keeps the 
   await expect(page.locator('#volume-level')).toHaveText('—');
   await expect(page.getByLabel('Projector IP address')).toBeDisabled();
   expect(await page.evaluate(() => ({ local: localStorage.length, session: sessionStorage.length, fits: document.documentElement.scrollWidth <= innerWidth }))).toEqual({ local: 0, session: 0, fits: true });
-  expect(requests.every(request => new URL(request.url).origin === remoteUrl)).toBe(true);
+  expect(requests.every(request => request.url.startsWith('data:image/png;base64,') || new URL(request.url).origin === remoteUrl)).toBe(true);
   expect(requests.some(request => request.type === 'media')).toBe(false);
   await page.reload();
   await expect(page.getByLabel('Projector IP address')).toHaveValue('');
   await expect(page.locator('#connection-badge')).toHaveText('Not connected');
+});
+
+test('complete receiver apps and safe logos appear immediately on connect without external image requests', async ({ page }) => {
+  const { calls, requests } = await openRemote(page);
+  await connect(page);
+  const crunchyroll = page.getByRole('button', { name: 'Open Crunchyroll app', exact: true });
+  await expect(crunchyroll).toBeVisible();
+  const icon = crunchyroll.locator('img.app-icon');
+  await expect(icon).toHaveAttribute('src', crunchyrollIcon);
+  await expect(page.getByRole('button', { name: 'Open Video player app', exact: true })).toBeVisible();
+  expect(calls).toEqual([{ host: receiver, action: 'connect' }]);
+  expect(requests.filter(request => request.type === 'image').every(request => request.url.startsWith('data:image/png;base64,'))).toBe(true);
+  await crunchyroll.click();
+  await expect(page.locator('#command-message')).toHaveText('Crunchyroll launch sent. Check the projector.');
+  expect(calls.at(-1)).toEqual({ host: receiver, action: 'launch-app', packageName: 'com.crunchyroll.crunchyroid' });
+});
+
+test('a connect response without inventory stays connected and loads apps as a follow-up', async ({ page }) => {
+  const { calls } = await openRemote(page, body => {
+    if (body.action === 'connect') return { connected: true, device: { name: 'LUMA test projector' } };
+    if (body.action === 'apps') return { apps: [{ packageName: 'com.crunchyroll.crunchyroid', label: 'Crunchyroll', icon: crunchyrollIcon }] };
+    return undefined;
+  });
+  await connect(page);
+  await expect(page.getByRole('button', { name: 'Open Crunchyroll app', exact: true })).toBeVisible();
+  await expect(page.locator('#connection-badge')).toHaveText('Connected');
+  expect(calls.slice(0, 2)).toEqual([
+    { host: receiver, action: 'connect' },
+    { host: receiver, action: 'apps' },
+  ]);
 });
 
 test('navigation, app launch, volume and typing send explicit commands without claiming projector feedback', async ({ page }) => {

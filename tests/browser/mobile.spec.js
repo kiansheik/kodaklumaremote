@@ -41,7 +41,7 @@ async function openApp(page, initialSnapshot = null) {
   await page.route('**/*', route => new URL(route.request().url()).origin === appUrl ? route.continue() : route.abort());
   await page.addInitScript(({ initialSnapshot }) => {
     window.__calls = [];
-    window.__receiver = { active: false, playing: true, sourceUrl: null, content: null, tracks: [], enabled: false, currentIndex: null, position: 12, volume: 6, failText: false, holdMethod: null, held: [], job: 0, previewDelays: {}, running: true, installed: true, pairCode: '123456', pairings: 0, paired: false, subtitleScale: 1 };
+    window.__receiver = { active: false, playing: true, sourceUrl: null, content: null, tracks: [], enabled: false, currentIndex: null, position: 12, volume: 6, failText: false, holdMethod: null, held: [], job: 0, previewDelays: {}, running: true, installed: true, pairCode: '123456', pairings: 0, paired: false, subtitleScale: 1, airMouse: { available: true, active: false, calibrated: false, state: 'off', sensor: 'game-rotation-vector' }, catMode: { active: false, manual: false, sound: true, remainingSeconds: 0 } };
     const receiver = window.__receiver;
     if (initialSnapshot?.playback) {
       receiver.active = initialSnapshot.playback.active === true;
@@ -59,7 +59,19 @@ async function openApp(page, initialSnapshot = null) {
     const result = request => {
       const { method, params } = request;
       switch (method) {
-        case 'app.ready': return { browserUrl: 'https://framextv.xyz/watch/284833/1/1', ...initialSnapshot };
+        case 'app.ready': return { browserUrl: 'https://framextv.xyz/watch/284833/1/1', airMouse: receiver.airMouse, ...initialSnapshot };
+        case 'games.list': return receiver.games || { games: [], status: 'offline', syncing: false, message: 'No games yet. Import an .nes file.' };
+        case 'app.pickGame': receiver.games = { games: [{ id: 'a'.repeat(64), name: 'Super Mario Tupi', system: 'nes', sizeBytes: 40976, onProjector: false }], status: 'offline', syncing: false, message: 'Game saved on this phone. It will sync when LUMA connects.' }; return receiver.games;
+        case 'games.sync': receiver.games = { ...receiver.games, games: receiver.games.games.map(game => ({ ...game, onProjector: true })), status: 'ready', syncing: false, message: 'Games are saved on this phone and the projector.' }; return receiver.games;
+        case 'games.play': return { ...receiver.games, message: 'Game sent to the projector. Check the projector screen.' };
+        case 'games.show': case 'games.stop': return { accepted: true };
+        case 'app.airMouseStart': receiver.airMouse = { ...receiver.airMouse, active: true, calibrated: false, state: 'calibrating' }; return receiver.airMouse;
+        case 'app.airMouseRecenter': receiver.airMouse = { ...receiver.airMouse, calibrated: false, state: 'calibrating' }; return receiver.airMouse;
+        case 'app.airMouseClick': return receiver.airMouse;
+        case 'app.airMouseStop': receiver.airMouse = { ...receiver.airMouse, active: false, calibrated: false, state: 'off' }; return receiver.airMouse;
+        case 'app.catModeStart': receiver.catMode = { active: true, manual: false, sound: true, remainingSeconds: 720 }; return receiver.catMode;
+        case 'app.catModeStatus': return receiver.catMode;
+        case 'app.catModeStop': receiver.catMode = { active: false, manual: false, sound: true, remainingSeconds: 0 }; return receiver.catMode;
         case 'app.seekHistory': if (params.value) { window.__seekHistory = params.value; return { saved: true }; } return { value: window.__seekHistory || {} };
         case 'app.picturePreferences': if (params.value) { window.__picturePreferences = params.value; return { saved: true }; } return { value: window.__picturePreferences || {} };
         case 'app.browse': case 'app.handoffStatus': case 'app.checkUpdates': return { accepted: true };
@@ -110,6 +122,7 @@ async function openApp(page, initialSnapshot = null) {
         case 'luma.status': return { connected: true, volume: { current: receiver.volume, max: 30 } };
         case 'luma.apps': return { apps: Array.from({ length: 12 }, (_, index) => ({ packageName: `test.app${index}`, label: index === 0 ? '<img src=x onerror="window.appExecuted=true">' : `App ${index}` })) };
         case 'luma.text': return { accepted: true };
+        case 'receiver.recoveryStatus': return window.__recovery || initialSnapshot?.playback?.streamRecovery || {};
         case 'receiver.connect': return { ready: true, name: 'LUMA Receiver', version: '1.0.0', receiverId: 'receiver-fixture' };
         case 'receiver.open': receiver.active = true; receiver.playing = true; receiver.sourceUrl = params.media.url; receiver.content = params.media.content || null; receiver.tracks = []; receiver.enabled = false; receiver.currentIndex = null; return { accepted: true };
         case 'receiver.pause': receiver.playing = false; return { accepted: true };
@@ -1287,7 +1300,7 @@ test('saved setup opens the remote while native reconnects and keeps configurati
       headerKeys: document.querySelectorAll('.topline [data-key]').length
     };
   });
-  expect(navigation).toEqual({ flanksUp: true, sameRow: true, insidePad: true, keys: 7, headerKeys: 0 });
+  expect(navigation).toEqual({ flanksUp: true, sameRow: true, insidePad: true, keys: 9, headerKeys: 0 });
   await layout(page);
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await layout(page);
@@ -1296,6 +1309,72 @@ test('saved setup opens the remote while native reconnects and keeps configurati
   await expect(page.getByRole('button', { name: 'Show code on projector', exact: true })).toBeEnabled();
   await expect(page.locator('#pair-form')).toBeHidden();
   await expect(page.locator('#pair-code')).toHaveValue('');
+});
+
+test('air mouse calibrates explicitly, recenters, and turns OK into a pointer click', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 592 });
+  await openApp(page, { connection: { connected: true, nativeConnected: true, configured: true, host: '192.168.1.50', name: 'Test LUMA' } });
+  const toggle = page.getByRole('button', { name: 'Turn on air mouse' });
+  await expect(toggle).toBeEnabled();
+  await toggle.click();
+  await expect(page.getByRole('button', { name: 'Turn off air mouse' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('#message')).toContainText('Hold the phone still');
+  await page.getByRole('button', { name: 'Recenter air mouse' }).click();
+  await page.evaluate(() => window.LumaApp.onAirMouseState({ available: true, active: true, calibrated: true, state: 'ready', sensor: 'game-rotation-vector' }));
+  await expect(page.locator('#message')).toContainText('OK clicks');
+  await page.getByRole('button', { name: 'Select' }).click();
+  await page.waitForTimeout(120);
+  await page.getByRole('button', { name: 'Back', exact: true }).click();
+  const calls = await page.evaluate(() => window.__calls);
+  expect(calls.filter(call => call.method.startsWith('app.airMouse')).map(call => call.method)).toEqual([
+    'app.airMouseStart', 'app.airMouseRecenter', 'app.airMouseClick',
+  ]);
+  expect(calls.filter(call => call.method === 'luma.key').map(call => call.params)).toEqual([{ key: 'back' }]);
+  await page.getByRole('button', { name: 'Turn off air mouse' }).click();
+  await expect(page.getByRole('button', { name: 'Turn on air mouse' })).toHaveAttribute('aria-pressed', 'false');
+  await layout(page);
+});
+
+test('air mouse stays unavailable without a fused motion sensor', async ({ page }) => {
+  await openApp(page, { connection: { connected: true, nativeConnected: true, configured: true }, airMouse: { available: false, active: false, calibrated: false, state: 'unavailable', sensor: '' } });
+  await expect(page.getByRole('button', { name: 'Turn on air mouse' })).toBeDisabled();
+  expect(await page.evaluate(() => window.__calls.filter(call => call.method.startsWith('app.airMouse')).length)).toBe(0);
+});
+
+test('cat mode runs autonomously and air mouse temporarily steers it', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 592 });
+  await openApp(page, { connection: { connected: true, nativeConnected: true, receiverConnected: true, configured: true,
+    host: '192.168.1.50', name: 'Test LUMA' } });
+  await page.getByRole('button', { name: 'More', exact: true }).click();
+  const start = page.getByRole('button', { name: 'Start cat mode' });
+  await expect(start).toBeEnabled();
+  await expect(start).toHaveAttribute('aria-pressed', 'false');
+  await start.click();
+  await expect(page.locator('#sheet')).toBeHidden();
+  await expect(page.locator('#message')).toContainText('Air mouse takes over');
+  await page.getByRole('button', { name: 'Turn on air mouse' }).click();
+  await page.evaluate(() => window.LumaApp.onAirMouseState({ available: true, active: true, calibrated: true,
+    state: 'ready', sensor: 'game-rotation-vector', catMode: true }));
+  await expect(page.locator('#message')).toContainText('steering the cat toy');
+  await page.getByRole('button', { name: 'Turn off air mouse' }).click();
+  await page.getByRole('button', { name: 'More', exact: true }).click();
+  const stop = page.getByRole('button', { name: 'Stop cat mode' });
+  await expect(stop).toHaveAttribute('aria-pressed', 'true');
+  await stop.click();
+  await expect(page.getByRole('button', { name: 'Start cat mode' })).toHaveAttribute('aria-pressed', 'false');
+  const methods = await page.evaluate(() => window.__calls.map(call => call.method));
+  expect(methods.filter(method => method.startsWith('app.catMode'))).toEqual(['app.catModeStart', 'app.catModeStop']);
+  await layout(page);
+});
+
+test('cat mode requires the connected LUMA receiver and is hidden for Philips', async ({ page }) => {
+  await openApp(page, { settings: { hasReceiver: true, hasPairing: true, autoConnect: true },
+    connection: { connected: true, nativeConnected: true, receiverConnected: false, configured: true } });
+  await page.getByRole('button', { name: 'More', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Start cat mode' })).toBeDisabled();
+  await page.evaluate(() => window.LumaApp.onConnectionState({ selectedTarget: 'philips', connection: { connected: false },
+    receivers: { philips: { connected: true } } }));
+  await expect(page.locator('#cat-mode-toggle')).toBeHidden();
 });
 
 test('booted receiver casts before native projector navigation becomes available', async ({ page }) => {
@@ -1796,4 +1875,70 @@ test('public LUMA subtitles are normalized on the phone and confirmed delivered 
   expect(add.params.track.url).toBe(media.tracks.find(track => track.language === 'pt-BR' || track.language === 'pt-br')?.url ?? add.params.track.url);
   expect(add.params.preparedId).toMatch(/^prepared_[A-Za-z0-9_-]{7,}$/u);
   expect(calls.filter(call => call.method === 'receiver.open')).toHaveLength(1);
+});
+
+test('NES games import offline, survive reconnect and play by content id', async ({ page }) => {
+  await page.setViewportSize({ width: 360, height: 740 });
+  await openApp(page);
+  await page.getByRole('tab', { name: 'Browse', exact: true }).click();
+  await page.locator('#open-games').click();
+  await expect(page.locator('#sheet-title')).toHaveText('Games');
+  await expect(page.locator('#games-sync')).toBeDisabled();
+  await page.locator('#games-import').click();
+  await expect(page.locator('#games-status')).toContainText('saved on this phone');
+  await expect(page.locator('#games-list button')).toHaveCount(1);
+  await expect(page.locator('#games-list button')).toBeDisabled();
+  await page.evaluate(() => window.LumaApp.onConnectionState({ connection: { connected: true, nativeConnected: true, receiverConnected: true, configured: true, host: '192.168.1.50' } }));
+  await page.locator('#games-sync').click();
+  await expect(page.locator('#games-list')).toContainText('Phone + projector');
+  await page.locator('#games-list button').click();
+  await expect(page.locator('#games-status')).toContainText('Game sent to the projector');
+  expect(await page.evaluate(() => window.__calls.filter(call => call.method === 'games.play').map(call => call.params))).toEqual([{ id: 'a'.repeat(64) }]);
+  await expect(page.locator('#games-import')).toBeInViewport();
+  await expect(page.locator('#games-stop')).toBeInViewport();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+
+test('external NES open shows games and preserves buttons across receiver status updates', async ({ page }) => {
+  await openApp(page, { connection: { connected: true, nativeConnected: true, receiverConnected: true, configured: true, host: '192.168.1.50' } });
+  await page.evaluate(() => window.LumaApp.onOpenGames());
+  await page.locator('#games-import').click();
+  await page.evaluate(() => { window.__gameButton = document.querySelector('#games-list button'); window.LumaApp.onConnectionState({ games: window.__receiver.games }); });
+  expect(await page.evaluate(() => window.__gameButton === document.querySelector('#games-list button'))).toBe(true);
+  await page.locator('#games-show').click();
+  await expect(page.locator('#games-status')).toHaveText('Games opened on the projector.');
+  await page.locator('#games-stop').click();
+  await expect(page.locator('#games-status')).toHaveText('Game stopped on the projector.');
+  await page.evaluate(() => window.LumaApp.onConnectionState({ connection: { connected: false, nativeConnected: false, receiverConnected: false, configured: true } }));
+  await expect(page.locator('#games-list button')).toBeDisabled();
+  await expect(page.locator('#games-import')).toBeEnabled();
+});
+
+
+test('direct receiver remote works while the vendor socket is offline', async ({ page }) => {
+  await openApp(page, {
+    settings: { hasReceiver: true, hasPairing: true, autoConnect: true },
+    connection: { connected: true, nativeConnected: false, remoteConnected: true, receiverConnected: true,
+      configured: true, host: '192.168.1.50', name: 'LUMA Receiver' },
+  });
+  const home = page.getByRole('button', { name: 'Home', exact: true });
+  await expect(home).toBeEnabled();
+  await home.click();
+  expect(await page.evaluate(() => window.__calls.some(call => call.method === 'luma.key' && call.params.key === 'home'))).toBe(true);
+  await page.evaluate(() => window.LumaApp.onConnectionState({ connection: {
+    connected: false, nativeConnected: false, remoteConnected: false, receiverConnected: false, configured: true,
+  } }));
+  await expect(home).toBeDisabled();
+});
+
+
+test('failed projector stream offers exact episode page and rejects an expired request', async ({page}) => {
+  const recovery = {id:'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',content:{key:'framextv:tv:42:4:2',kind:'tv',contentId:'42',season:4,episode:2,watchUrl:'https://framextv.cc/watch/42/4/2',title:'Fixture'},resumeSeconds:0};
+  await openApp(page,{connection:{connected:true,nativeConnected:false,remoteConnected:true,receiverConnected:true,configured:true},playback:{active:false,streamRecovery:recovery}});
+  await expect(page.locator('#stream-recovery')).toBeVisible();
+  await page.locator('#open-recovery-episode').click();
+  expect(await page.evaluate(()=>window.__calls.some(c=>c.method==='app.browse'&&c.params.url==='https://framextv.cc/watch/42/4/2'))).toBe(true);
+  await page.evaluate(()=>{window.__recovery={};window.__calls=[];});
+  await page.locator('#open-recovery-episode').click();
+  expect(await page.evaluate(()=>window.__calls.some(c=>c.method==='app.browse'))).toBe(false);
 });

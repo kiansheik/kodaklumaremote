@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">LUMA Receiver</string>
+    <string name="controller_accessibility_name">LUMA Controller across apps</string>
+    <string name="controller_accessibility_description">Use your calibrated controller buttons in other apps. Hold Home for 3 seconds to put the Pro Controller to sleep and send the projector power command. Analog sticks keep Android’s mappings outside LUMA. Phone navigation uses the current screen’s controls locally. Screen contents are never stored or sent to the phone.</string>
 </resources>

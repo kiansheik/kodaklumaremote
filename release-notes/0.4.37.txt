@@ -1,0 +1,11 @@
+LUMA Remote 0.4.37 + LUMA Receiver 0.3.33
+
+- Faster receiver-first phone controls, including navigation, volume and app launch before the projector vendor service is ready.
+- Watch History on the projector: resume titles, browse seasons and episodes, and play the next episode with your controller.
+- Fresh-stream checks and alternate sources, with an Open episode request on the phone when projector playback needs help.
+- Disk preloading for HLS, DASH and direct videos, including while paused. Playback prefers the highest supported quality; cache storage is bounded and cleared when changing titles.
+- NES Games with phone ROM import/library sync, controller calibration and mappings, five recent checkpoints, and Capture-button quick loading. Games are supplied by the user.
+- Nintendo Pro Controller navigation, player-light assignment, optional across-app controls through Android Accessibility, and improved launcher focus.
+- Cat Mode with smoother controller movement, plus phone air-mouse and media-control improvements.
+
+Existing installations update in place using the same signing certificate. Android confirms installation. Across-app navigation requires enabling LUMA Controller in Accessibility settings. Live streams can cache available segments; future segments cannot be preloaded.

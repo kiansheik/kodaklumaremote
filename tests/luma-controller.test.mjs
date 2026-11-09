@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 import http from 'node:http';
-import { createLumaControllerServer, validateLumaHost } from '../scripts/luma-controller.mjs';
+import { createLumaControllerServer, ReceiverAppsClient, ReceiverAppsError, validateLumaHost } from '../scripts/luma-controller.mjs';
 import { LumaProtocolError } from '../scripts/luma-protocol.mjs';
 
 let server, origin;
@@ -35,6 +35,7 @@ test('remote is served locally with no-store and frame protection; host/origin/r
   assert.equal(page.status, 200);
   assert.equal(page.headers.get('cache-control'), 'no-store');
   assert.match(page.headers.get('content-security-policy'), /frame-ancestors 'none'/);
+  assert.match(page.headers.get('content-security-policy'), /img-src data:/);
   assert.match(await page.text(), /LUMA remote/);
   assert.equal((await post({ action: 'discover' }, { Origin: 'https://unrelated.example' })).status, 403);
   const wrongHostStatus = await new Promise((resolve, reject) => {
@@ -43,6 +44,98 @@ test('remote is served locally with no-store and frame protection; host/origin/r
   assert.equal(wrongHostStatus, 403);
   assert.equal((await post({ action: 'discover' }, { 'Content-Type': 'text/plain' })).status, 415);
   assert.equal((await fetch(`${origin}/api/luma`)).status, 404);
+});
+
+test('paired receiver catalog wins over incomplete EShare inventory and launches Crunchyroll without exposing its token', async () => {
+  const host = '192.168.1.50';
+  const icon = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+  const vendorCalls = [], receiverCalls = [];
+  const vendor = {
+    connect: async () => ({ device: { name: 'LUMA fixture' } }), close() {},
+    getApps: async () => [{ packageName: 'org.xbmc.kodi', label: 'Kodi' }],
+    launchApp: async packageName => vendorCalls.push(packageName),
+  };
+  const paired = {
+    getApps: async () => [{ packageName: 'com.crunchyroll.crunchyroid', label: 'Crunchyroll', icon }],
+    launchApp: async packageName => receiverCalls.push(packageName),
+  };
+  const isolated = createLumaControllerServer({ connectionFactory: () => vendor, receiverAppsFactory: () => paired });
+  await new Promise(resolve => isolated.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${isolated.address().port}`;
+  const send = payload => fetch(`${base}/api/luma`, { method: 'POST', headers: { Origin: base, 'Content-Type': 'application/json' }, body: JSON.stringify({ host, ...payload }) });
+  try {
+    const connectedResponse = await send({ action: 'connect' });
+    const raw = await connectedResponse.text();
+    assert.doesNotMatch(raw, /bearer|token|authorization/iu);
+    const connected = JSON.parse(raw);
+    assert.equal(connected.apps, undefined);
+    assert.deepEqual((await (await send({ action: 'apps' })).json()).apps,
+      [{ packageName: 'com.crunchyroll.crunchyroid', label: 'Crunchyroll', icon }]);
+    assert.deepEqual(await (await send({ action: 'launch-app', packageName: 'com.crunchyroll.crunchyroid' })).json(), { accepted: true });
+    assert.deepEqual(receiverCalls, ['com.crunchyroll.crunchyroid']);
+    assert.deepEqual(vendorCalls, []);
+  } finally { isolated.closeAllConnections(); await new Promise(resolve => isolated.close(resolve)); }
+});
+
+test('older or unreachable receiver launcher API falls back to current EShare inventory and launch', async () => {
+  const host = '192.168.1.50';
+  const launched = [];
+  const vendor = {
+    connect: async () => ({ device: { name: 'LUMA fixture' } }), close() {},
+    getApps: async () => [{ packageName: 'org.xbmc.kodi', label: 'Kodi' }],
+    launchApp: async packageName => launched.push(packageName),
+  };
+  const paired = {
+    getApps: async () => { throw new ReceiverAppsError('UNAVAILABLE'); },
+    launchApp: async () => { throw new ReceiverAppsError('UNAVAILABLE'); },
+  };
+  const isolated = createLumaControllerServer({ connectionFactory: () => vendor, receiverAppsFactory: () => paired });
+  await new Promise(resolve => isolated.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${isolated.address().port}`;
+  const send = payload => fetch(`${base}/api/luma`, { method: 'POST', headers: { Origin: base, 'Content-Type': 'application/json' }, body: JSON.stringify({ host, ...payload }) });
+  try {
+    assert.equal((await (await send({ action: 'connect' })).json()).apps, undefined);
+    assert.deepEqual((await (await send({ action: 'apps' })).json()).apps, [{ packageName: 'org.xbmc.kodi', label: 'Kodi' }]);
+    assert.deepEqual(await (await send({ action: 'launch-kodi' })).json(), { accepted: true });
+    assert.deepEqual(launched, ['org.xbmc.kodi']);
+  } finally { isolated.closeAllConnections(); await new Promise(resolve => isolated.close(resolve)); }
+});
+
+test('receiver launcher client bounds and sanitizes app metadata while keeping authorization in its private request', async () => {
+  const icon = 'data:image/png;base64,iVBORw0KGgo=';
+  let observed;
+  assert.throws(() => new ReceiverAppsClient({ host: '8.8.8.8', token: 'a'.repeat(32) }), failure => failure instanceof ReceiverAppsError && failure.code === 'INVALID_CONFIG');
+  const client = new ReceiverAppsClient({
+    host: '192.168.1.50', token: 'a'.repeat(32),
+    fetchImpl: async (url, options) => {
+      observed = { url, options };
+      return new Response(JSON.stringify({ ok: true, result: { apps: [
+        { packageName: 'com.crunchyroll.crunchyroid', label: ' Crunchyroll ', icon },
+        { packageName: 'example.noicon', label: 'No icon', icon: 'https://attacker.invalid/icon.png' },
+      ] } }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    },
+  });
+  assert.deepEqual(await client.getApps(), [
+    { packageName: 'com.crunchyroll.crunchyroid', label: 'Crunchyroll', icon },
+    { packageName: 'example.noicon', label: 'No icon' },
+  ]);
+  assert.equal(observed.url, 'http://192.168.1.50:4191/api/v1/apps.list');
+  assert.equal(observed.options.headers.Authorization, `Bearer ${'a'.repeat(32)}`);
+  assert.equal(observed.options.body, '{}');
+});
+
+test('receiver launcher client drops icons beyond the aggregate two MiB budget', async () => {
+  const icon = `data:image/png;base64,${Buffer.alloc(128 * 1024).toString('base64')}`;
+  const apps = Array.from({ length: 17 }, (_, index) => ({
+    packageName: `example.app${index}`, label: `App ${index}`, icon,
+  }));
+  const client = new ReceiverAppsClient({
+    host: '192.168.1.50', token: 'a'.repeat(32),
+    fetchImpl: async () => new Response(JSON.stringify({ ok: true, result: { apps } }), { status: 200 }),
+  });
+  const result = await client.getApps();
+  assert.equal(result.filter(app => app.icon).length, 16);
+  assert.equal(result.at(-1).icon, undefined);
 });
 
 test('connection identity gates commands; launch Kodi uses its package and disconnect closes transport', async () => {

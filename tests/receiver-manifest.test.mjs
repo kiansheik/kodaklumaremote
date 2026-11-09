@@ -10,4 +10,8 @@ test('receiver remains launchable and is an explicit Android Home candidate', ()
   assert.equal(filters.length, 2);
   assert.ok(filters.some(filter => filter.includes('android.intent.category.LAUNCHER') && filter.includes('android.intent.category.LEANBACK_LAUNCHER')));
   assert.ok(filters.some(filter => filter.includes('android.intent.category.HOME') && filter.includes('android.intent.category.DEFAULT')));
+  const queries = manifest.match(/<queries>([\s\S]*?)<\/queries>/u)?.[1] || '';
+  assert.match(queries, /android\.intent\.category\.LEANBACK_LAUNCHER/u);
+  assert.match(queries, /android\.intent\.category\.LAUNCHER/u);
+  assert.doesNotMatch(manifest, /QUERY_ALL_PACKAGES/u);
 });

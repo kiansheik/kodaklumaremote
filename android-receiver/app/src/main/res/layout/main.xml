@@ -11,24 +11,74 @@
         android:layout_width="match_parent" android:layout_height="match_parent" />
     <LinearLayout android:id="@+id/idle" android:layout_width="match_parent"
         android:layout_height="match_parent" android:orientation="vertical"
-        android:gravity="center" android:background="#0B3D2E" android:padding="48dp">
+        android:gravity="center_horizontal" android:background="#0A2F2A" android:padding="36dp">
         <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-            android:text="@string/app_name" android:textColor="#FFFFFF" android:textSize="40sp" />
+            android:text="@string/app_name" android:textColor="#FFFFFF" android:textSize="36sp"
+            android:textStyle="bold" />
         <TextView android:id="@+id/idle_status" android:layout_width="wrap_content"
-            android:layout_height="wrap_content" android:layout_marginTop="16dp"
-            android:gravity="center" android:textColor="#CCFFFFFF" android:textSize="20sp" />
+            android:layout_height="wrap_content" android:layout_marginTop="8dp"
+            android:gravity="center" android:textColor="#CCFFFFFF" android:textSize="17sp" />
         <TextView android:id="@+id/pairing_code" android:layout_width="wrap_content"
-            android:layout_height="wrap_content" android:layout_marginTop="24dp"
-            android:textColor="#FFE082" android:textSize="72sp" android:letterSpacing="0.2"
+            android:layout_height="wrap_content" android:layout_marginTop="10dp"
+            android:textColor="#FFE082" android:textSize="52sp" android:letterSpacing="0.2"
             android:visibility="gone" />
         <TextView android:id="@+id/update_prompt" android:layout_width="wrap_content"
-            android:layout_height="wrap_content" android:layout_marginTop="24dp"
-            android:gravity="center" android:textColor="#FFE082" android:textSize="20sp"
+            android:layout_height="wrap_content" android:layout_marginTop="10dp"
+            android:gravity="center" android:textColor="#FFE082" android:textSize="17sp"
             android:visibility="gone" />
+        <LinearLayout android:layout_width="wrap_content" android:layout_height="60dp"
+            android:orientation="horizontal" android:gravity="center_vertical" android:baselineAligned="false">
+        <Button android:id="@+id/history_open" android:layout_width="wrap_content"
+            android:layout_height="48dp" android:layout_marginRight="12dp"
+            android:background="@drawable/launcher_tile" android:paddingLeft="24dp"
+            android:paddingRight="24dp" android:text="Watch History"
+            android:textAllCaps="false" android:textColor="#FFFFFF" android:textSize="16sp" />
+        <Button android:id="@+id/games_open" android:layout_width="wrap_content"
+            android:layout_height="48dp"
+            android:layout_marginRight="12dp" android:background="@drawable/launcher_tile"
+            android:paddingLeft="24dp" android:paddingRight="24dp" android:text="Games"
+            android:textAllCaps="false" android:textColor="#FFFFFF" android:textSize="16sp" />
+        <Button android:id="@+id/cat_open" android:layout_width="wrap_content"
+            android:layout_height="48dp" android:layout_marginRight="12dp"
+            android:background="@drawable/launcher_tile" android:paddingLeft="24dp"
+            android:paddingRight="24dp" android:text="Cat Mode"
+            android:textAllCaps="false" android:textColor="#FFFFFF" android:textSize="16sp" />
+        <Button android:id="@+id/controllers_open" android:layout_width="wrap_content"
+            android:layout_height="48dp"
+            android:layout_marginRight="12dp" android:background="@drawable/launcher_tile"
+            android:paddingLeft="24dp" android:paddingRight="24dp" android:text="Controllers"
+            android:textAllCaps="false" android:textColor="#FFFFFF" android:textSize="16sp" />
+        <Button android:id="@+id/accessibility_open" android:layout_width="wrap_content"
+            android:layout_height="48dp" android:layout_marginRight="12dp"
+            android:background="@drawable/launcher_tile" android:paddingLeft="24dp"
+            android:paddingRight="24dp" android:text="Accessibility"
+            android:textAllCaps="false" android:textColor="#FFFFFF" android:textSize="16sp" />
+        <Button android:id="@+id/home_setup" android:layout_width="wrap_content"
+            android:layout_height="48dp"
+            android:background="@drawable/launcher_tile" android:paddingLeft="24dp"
+            android:paddingRight="24dp" android:text="Choose LUMA Receiver as Home"
+            android:textAllCaps="false" android:textColor="#FFFFFF" android:textSize="16sp" />
+        </LinearLayout>
+        <TextView android:id="@+id/apps_heading" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:layout_marginTop="12dp"
+            android:text="All apps" android:textColor="#F2FFFFFF" android:textSize="20sp"
+            android:textStyle="bold" />
+        <ScrollView android:id="@+id/apps_scroll" android:layout_width="match_parent"
+            android:layout_height="0dp" android:layout_weight="1" android:layout_marginTop="8dp"
+            android:clipToPadding="false" android:fillViewport="true" android:focusable="false"
+            android:overScrollMode="never" android:paddingBottom="8dp">
+            <GridLayout android:id="@+id/apps_grid" android:layout_width="match_parent"
+                android:layout_height="wrap_content" android:alignmentMode="alignMargins"
+                android:columnCount="6" android:orientation="horizontal"
+                android:useDefaultMargins="false" />
+        </ScrollView>
         <TextView android:id="@+id/footer" android:layout_width="wrap_content"
-            android:layout_height="wrap_content" android:layout_marginTop="32dp"
+            android:layout_height="wrap_content" android:layout_marginTop="8dp"
             android:gravity="center" android:textColor="#88FFFFFF" android:textSize="14sp" />
     </LinearLayout>
+    <dev.framextv.lumareceiver.CatToyView android:id="@+id/cat_toy"
+        android:layout_width="match_parent" android:layout_height="match_parent"
+        android:background="#040B16" android:visibility="gone" />
     <LinearLayout android:id="@+id/scrub" android:layout_width="wrap_content"
         android:layout_height="wrap_content" android:layout_gravity="bottom|center_horizontal"
         android:layout_marginBottom="64dp" android:orientation="vertical" android:gravity="center_horizontal"

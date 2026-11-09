@@ -13,7 +13,16 @@ import androidx.media3.datasource.PriorityDataSource;
 import androidx.media3.datasource.cache.CacheDataSource;
 import androidx.media3.datasource.cache.CacheSpan;
 import androidx.media3.datasource.cache.CacheWriter;
-import androidx.media3.datasource.cache.NoOpCacheEvictor;
+import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor;
+import androidx.media3.datasource.cache.ContentMetadata;
+import androidx.media3.datasource.cache.CacheDataSink;
+import androidx.media3.common.MediaItem;
+import androidx.media3.exoplayer.offline.DownloadHelper;
+import androidx.media3.exoplayer.offline.DownloadRequest;
+import androidx.media3.exoplayer.offline.Downloader;
+import androidx.media3.exoplayer.offline.DefaultDownloaderFactory;
+import androidx.media3.exoplayer.DefaultRenderersFactory;
+import androidx.media3.common.TrackSelectionParameters;
 import androidx.media3.datasource.cache.SimpleCache;
 
 import org.json.JSONObject;
@@ -30,13 +39,13 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * Current-title disk cache for progressive local media.
+ * Current-title disk cache for progressive, HLS and DASH media.
  *
  * ExoPlayer keeps only its small RAM window. A lower-priority CacheWriter fills
  * app-private disk independently, including while paused. ExoPlayer registers
  * {@link C#PRIORITY_PLAYBACK} only while loading, which preempts this worker's
- * {@link C#PRIORITY_DOWNLOAD} reads. Playback is read-only with respect to this
- * cache so the worker's explicit storage budget cannot be exceeded.
+ * {@link C#PRIORITY_DOWNLOAD} reads. Adaptive playback also stores fetched segments. A shared LRU ceiling bounds
+ * both writers; progressive prefetch retains its explicit rolling byte window.
  */
 final class PlaybackDiskCache {
     static final long MIB = 1024L * 1024L;
@@ -67,6 +76,9 @@ final class PlaybackDiskCache {
         final MediaRequest request;
         final List<Resource> resources = new ArrayList<>();
         boolean scheduled, stopped, restartRequested;
+        MediaItem adaptiveItem;
+        final List<AdaptiveWindow> windows = new ArrayList<>();
+        long seekGeneration;
         long cachedBytes, targetBytes, contentBytes = C.LENGTH_UNSET;
         long positionMs, durationMs = C.TIME_UNSET, windowStartBytes, windowEndBytes, videoLength = C.LENGTH_UNSET;
         boolean rolling;
@@ -90,6 +102,15 @@ final class PlaybackDiskCache {
         }
     }
 
+    private static final class AdaptiveWindow {
+        final long startMs, endMs;
+        final List<DataSpec> specs;
+        AdaptiveWindow(long start, long end, List<DataSpec> specs) { startMs=start;endMs=end;this.specs=specs; }
+    }
+
+    private final Context context;
+    private DownloadHelper helper;
+    private Downloader downloader;
     private final PriorityTaskManager priorities = new PriorityTaskManager();
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private final SimpleCache cache;
@@ -102,6 +123,7 @@ final class PlaybackDiskCache {
     private String inactiveState;
 
     PlaybackDiskCache(Context context) {
+        this.context=context.getApplicationContext();
         SimpleCache opened = null;
         long limit = 0;
         long usable = 0;
@@ -124,7 +146,7 @@ final class PlaybackDiskCache {
             File directory = new File(selected.root, "playback-media");
             limit = selected.budget; usable = selected.usable; selectedStorage = selected.label;
             if (limit >= MIN_CACHE_BYTES) {
-                opened = new SimpleCache(directory, new NoOpCacheEvictor(), database);
+                opened = new SimpleCache(directory, new LeastRecentlyUsedCacheEvictor(limit), database);
                 opened.checkInitialization();
             } else state = "low-storage";
         } catch (Exception failure) {
@@ -162,8 +184,23 @@ final class PlaybackDiskCache {
     }
 
     static boolean supportsPrefetch(MediaRequest request) {
-        return request != null && !request.mediaId.isEmpty()
-            && !MediaRequest.HLS.equals(request.contentType) && !MediaRequest.DASH.equals(request.contentType);
+        return request != null;
+    }
+
+    static boolean adaptive(MediaRequest request) {
+        return MediaRequest.HLS.equals(request.contentType) || MediaRequest.DASH.equals(request.contentType);
+    }
+
+    static String adaptiveKey(long generation, String identity) {
+        try {
+            byte[] digest=java.security.MessageDigest.getInstance("SHA-256").digest(identity.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            StringBuilder key=new StringBuilder("adaptive:"+Long.toHexString(generation)+":");
+            for(byte b:digest)key.append(String.format(java.util.Locale.ROOT,"%02x",b&255));
+            return key.toString();
+        } catch(java.security.NoSuchAlgorithmException impossible) {throw new IllegalStateException(impossible);}
+    }
+    private static String adaptiveKey(Session active, DataSpec spec) {
+        return adaptiveKey(active.generation,spec.key==null?spec.uri.toString():spec.key);
     }
 
     static String resourceKey(String mediaId, long generation, String kind) {
@@ -213,8 +250,9 @@ final class PlaybackDiskCache {
     synchronized Source source(MediaRequest request, DataSource.Factory upstream, String url, String kind) {
         Session active = session;
         if (cache == null || active == null || active.request != request) return new Source(upstream, null);
-        String key = resourceKey(request.mediaId, active.generation, kind);
+        String key = resourceKey(request.mediaId.isEmpty()?"remote":request.mediaId, active.generation, kind);
         active.resources.add(new Resource(kind, url, key, upstream, request.headers));
+        if (adaptive(request)) return new Source(adaptivePlayback(active,upstream),null);
         CacheDataSource.Factory factory = new CacheDataSource.Factory()
             .setCache(cache).setUpstreamDataSourceFactory(upstream)
             // The bounded background writer owns all disk writes. Playback can
@@ -228,7 +266,8 @@ final class PlaybackDiskCache {
         Session active = session;
         if (cache == null || active == null || active.scheduled || active.resources.isEmpty()) return;
         active.scheduled = true;
-        io.execute(() -> fill(active));
+        if (adaptive(active.request)) prepareAdaptive(active);
+        else io.execute(() -> fill(active));
     }
 
     synchronized void updatePosition(long positionMs, long durationMs, boolean discontinuity) {
@@ -236,6 +275,10 @@ final class PlaybackDiskCache {
         if (active == null) return;
         active.positionMs = Math.max(0, positionMs);
         if (durationMs > 0 && durationMs != C.TIME_UNSET) active.durationMs = durationMs;
+        if (discontinuity && adaptive(active.request)) {
+            active.seekGeneration++;
+            if(downloader!=null)downloader.cancel();
+        }
         if (discontinuity && active.rolling && writer != null) {
             active.restartRequested = true;
             cancelWriterLocked();
@@ -267,7 +310,11 @@ final class PlaybackDiskCache {
         notifyAll();
     }
 
-    private void cancelWriterLocked() { if (writer != null) writer.cancel(); }
+    private void cancelWriterLocked() {
+        if (writer != null) writer.cancel();
+        if (downloader != null) downloader.cancel();
+        if (helper != null) { helper.release();helper=null; }
+    }
 
     private boolean current(Session candidate) {
         synchronized (this) { return session == candidate && generation == candidate.generation && !candidate.stopped; }
@@ -309,6 +356,11 @@ final class PlaybackDiskCache {
 
     private long cachedBytes(Session active) {
         if (cache == null) return 0;
+        if(adaptive(active.request)) {
+            long bytes=0;String prefix="adaptive:"+Long.toHexString(active.generation)+":";
+            for(String key:cache.getKeys()) if(key.startsWith(prefix)) for(CacheSpan span:cache.getCachedSpans(key))bytes+=span.length;
+            return bytes;
+        }
         long total = 0;
         for (Resource resource : active.resources) {
             for (CacheSpan span : cache.getCachedSpans(resource.key)) total += Math.max(0, span.length);
@@ -374,6 +426,160 @@ final class PlaybackDiskCache {
             }
         }
         return false;
+    }
+
+    /** Identical decoder-aware quality policy for playback and the downloader. */
+    static TrackSelectionParameters qualityParameters(Context context) {
+        return new TrackSelectionParameters.Builder(context)
+            .setForceHighestSupportedBitrate(true).clearVideoSizeConstraints()
+            .setViewportSize(Integer.MAX_VALUE,Integer.MAX_VALUE,false).build();
+    }
+
+    private CacheDataSource.Factory adaptiveFactory(Session active, DataSource.Factory upstream) {
+        return new CacheDataSource.Factory().setCache(cache).setUpstreamDataSourceFactory(upstream)
+            .setCacheKeyFactory(spec->adaptiveKey(active,spec))
+            .setCacheWriteDataSinkFactory(new CacheDataSink.Factory().setCache(cache).setFragmentSize(MIB))
+            .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR);
+    }
+
+    private DataSource.Factory adaptivePlayback(Session active, DataSource.Factory upstream) {
+        CacheDataSource.Factory cached=adaptiveFactory(active,upstream);
+        // Manifests must stay fresh (particularly live playlists). Only playback
+        // manifests bypass disk; downloader manifests are scoped to this title.
+        return () -> new DataSource() {
+            DataSource delegate;
+            final List<androidx.media3.datasource.TransferListener> listeners=new ArrayList<>();
+            public void addTransferListener(androidx.media3.datasource.TransferListener listener) {listeners.add(listener);}
+            public long open(DataSpec spec) throws IOException {
+                delegate=spec.isFlagSet(DataSpec.FLAG_ALLOW_GZIP)?upstream.createDataSource():cached.createDataSource();
+                for(androidx.media3.datasource.TransferListener listener:listeners)delegate.addTransferListener(listener);
+                return delegate.open(spec);
+            }
+            public int read(byte[] b,int offset,int length) throws IOException {return delegate.read(b,offset,length);}
+            public Uri getUri(){return delegate==null?null:delegate.getUri();}
+            public Map<String,List<String>> getResponseHeaders(){return delegate==null?java.util.Collections.emptyMap():delegate.getResponseHeaders();}
+            public void close() throws IOException {if(delegate!=null)delegate.close();}
+        };
+    }
+
+    /** Main looper. Media3 chooses tracks using the projector's decoder capabilities. */
+    private void prepareAdaptive(Session active) {
+        Resource video=active.resources.get(0);
+        String mime=MediaRequest.HLS.equals(active.request.contentType)
+            ? androidx.media3.common.MimeTypes.APPLICATION_M3U8 : androidx.media3.common.MimeTypes.APPLICATION_MPD;
+        MediaItem item=new MediaItem.Builder().setUri(active.request.url).setMimeType(mime).build();
+        DownloadHelper preparing=new DownloadHelper.Factory().setDataSourceFactory(video.upstream)
+            .setRenderersFactory(new DefaultRenderersFactory(context).setEnableDecoderFallback(true))
+            .setTrackSelectionParameters(qualityParameters(context)).create(item);
+        helper=preparing;active.targetBytes=limitBytes;
+        preparing.prepare(new DownloadHelper.Callback() {
+            public void onPrepared(DownloadHelper ready,boolean tracksAvailable) {
+                synchronized(PlaybackDiskCache.this) {
+                    if(!current(active)||helper!=ready){ready.release();return;}
+                    active.adaptiveItem=ready.getDownloadRequest(null).toMediaItem();
+                    ready.release();helper=null;
+                    io.execute(()->fillAdaptive(active,video));
+                }
+            }
+            public void onPrepareError(DownloadHelper failed,IOException error) {
+                synchronized(PlaybackDiskCache.this) {
+                    failed.release();if(helper==failed)helper=null;
+                    // Live content has no finite downloadable future. Its published
+                    // segments still use the bounded playback cache.
+                    if(current(active))active.state="limited";
+                }
+                android.util.Log.w("LumaDiskCache","ADAPTIVE_PREPARE "+error.getClass().getSimpleName());
+            }
+        });
+    }
+
+    private boolean windowPresent(Session active, AdaptiveWindow window) {
+        for(DataSpec spec:window.specs) {
+            String key=adaptiveKey(active,spec);
+            long length=spec.length;
+            if(length==C.LENGTH_UNSET) {
+                long total=ContentMetadata.getContentLength(cache.getContentMetadata(key));
+                if(total==C.LENGTH_UNSET)return false;
+                length=total-spec.position;
+            }
+            if(length>0&&!cache.isCached(key,spec.position,length))return false;
+        }
+        return !window.specs.isEmpty();
+    }
+
+    private long adaptiveAhead(Session active) {
+        return Math.max(0,adaptiveEnd(active,active.positionMs)-active.positionMs);
+    }
+
+    private long adaptiveEnd(Session active,long from) {
+        long end=from;
+        for(AdaptiveWindow window:active.windows) {
+            if(window.endMs<=end)continue;
+            if(window.startMs>end || !windowPresent(active,window))break;
+            end=window.endMs;
+        }
+        return end;
+    }
+
+    private void fillAdaptive(Session active,Resource video) {
+        long cursor=-1,seek=-1;
+        int failures=0;
+        while(current(active)) {
+            try {
+                long duration;
+                synchronized(this) {
+                    if(seek!=active.seekGeneration || cursor<0 || active.positionMs>cursor+60_000) {
+                        seek=active.seekGeneration;
+                        cursor=Math.max(0,active.positionMs/60_000*60_000);
+                    }
+                    duration=active.durationMs;
+                    if(duration<=0 || duration==C.TIME_UNSET){wait(500);continue;}
+                    active.windows.removeIf(window->!windowPresent(active,window));
+                    long ahead=adaptiveAhead(active);
+                    // Once space is nearly full, keep the paused forward buffer.
+                    // Resume filling as playback consumes it, rather than evicting
+                    // the next scenes just to download the end of the episode.
+                    if(cursor>=duration || cachedBytes(active)>limitBytes*4/5 && ahead>120_000) {
+                        active.state=cursor>=duration && adaptiveEnd(active,0)>=duration ? "complete":"limited";
+                        wait(1000);continue;
+                    }
+                }
+                final long start=cursor,end=Math.min(duration,cursor+60_000);
+                List<DataSpec> specs=java.util.Collections.synchronizedList(new ArrayList<>());
+                CacheDataSource.Factory factory=adaptiveFactory(active,video.upstream)
+                    .setUpstreamPriorityTaskManager(priorities).setUpstreamPriority(C.PRIORITY_DOWNLOAD)
+                    .setCacheKeyFactory(spec->{specs.add(spec);return adaptiveKey(active,spec);});
+                DownloadRequest request=new DownloadRequest.Builder("current",active.adaptiveItem.localConfiguration.uri)
+                    .setMimeType(active.adaptiveItem.localConfiguration.mimeType)
+                    .setStreamKeys(active.adaptiveItem.localConfiguration.streamKeys)
+                    .setTimeRange(start*1000,(end-start)*1000).build();
+                Downloader local=new DefaultDownloaderFactory(factory,Runnable::run).createDownloader(request);
+                synchronized(this){if(!current(active))return;downloader=local;active.state="filling";}
+                local.download((length,bytes,percent)->{
+                    synchronized(PlaybackDiskCache.this){if(current(active))active.cachedBytes=cachedBytes(active);}
+                });
+                synchronized(this) {
+                    if(!current(active))return;
+                    if(seek!=active.seekGeneration)continue;
+                    active.windows.removeIf(window->window.startMs==start);
+                    active.windows.add(new AdaptiveWindow(start,end,new ArrayList<>(specs)));
+                    active.windows.sort(Comparator.comparingLong(window->window.startMs));
+                    active.cachedBytes=cachedBytes(active);
+                }
+                cursor=end;failures=0;
+            } catch(InterruptedException|IOException failure) {
+                synchronized(this) {
+                    if(!current(active))return;
+                    // Downloader cancellation interrupts its executing worker.
+                    // A seek is a restart, not a permanently stopped executor.
+                    Thread.interrupted();
+                    if(seek!=active.seekGeneration)continue;
+                    active.state="waiting";
+                    if(++failures==1)android.util.Log.w("LumaDiskCache","ADAPTIVE_RETRY "+failure.getClass().getSimpleName());
+                    try{wait(Math.min(10_000,failures*2000));}catch(InterruptedException ignored){Thread.interrupted();}
+                }
+            } finally { synchronized(this){downloader=null;} }
+        }
     }
 
     private void fill(Session active) {
@@ -482,6 +688,10 @@ final class PlaybackDiskCache {
 
     private void clear(Session old) {
         if (cache == null) return;
+        if(adaptive(old.request)) {
+            String prefix="adaptive:"+Long.toHexString(old.generation)+":";
+            for(String key:cache.getKeys()) if(key.startsWith(prefix)) cache.removeResource(key);
+        }
         for (Resource resource : old.resources) {
             try { cache.removeResource(resource.key); }
             catch (RuntimeException failure) { android.util.Log.w("LumaDiskCache", "CLEAR_FAILED"); }
@@ -494,6 +704,10 @@ final class PlaybackDiskCache {
             .put("diskCacheLimitBytes", limitBytes).put("diskCacheUsableBytesAtStart", usableBytesAtStart)
             .put("diskCacheStorage", storage);
         if (active != null) {
+            if(adaptive(active.request)) {
+                active.cachedBytes=cachedBytes(active);
+                result.put("diskCacheAheadSeconds",adaptiveAhead(active)/1000d);
+            }
             result.put("diskCachedBytes", active.cachedBytes).put("diskCacheTargetBytes", active.targetBytes)
                 .put("diskCacheComplete", "complete".equals(active.state));
             if (active.contentBytes != C.LENGTH_UNSET) result.put("diskCacheContentBytes", active.contentBytes);

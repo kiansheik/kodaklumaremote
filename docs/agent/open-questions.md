@@ -1,5 +1,73 @@
 # Open questions
 
+All-format current-title disk cache is installed, with highest-supported-bitrate
+playback. Real S4E2 paused1080p cache grows past the RAM buffer; unit/instrumented
+HLS/DASH/progressive coverage passes. Very long running storage-limit/rolling
+refill and published-segment live behavior have not been physically exercised.
+
+Receiver0.3.33/code47 and phone0.4.37/code47 are installed. Cat control is user-
+accepted and refreshed Accessibility permission is verified directNavigation:true.
+Home Accessibility opens hidden Android TV MainSettings; select its Accessibility
+entry (Droid Settings is a separate app). Watch History browsing passed real
+projector checks and user UI acceptance. Gilded Age S4E2 exposed an unresponsive
+fresh source; bounded probes/provider fallback and a guided phone episode handoff
+are now installed. Projector-only S4E2 playback is physically user-confirmed.
+The phone fallback has automated coverage but no physical end-to-end acceptance.
+Cold boot4191-vs8121 and long-Home controller sleep/projector shutdown are still
+unverified. Do not power off during the current watch-history playback check.
+
+Receiver 0.3.26/code40: across-app A/B mapping and retained left-stick navigation
+are physically user-confirmed after enabling LUMA Controller across apps through
+Kodak general settings. Verify new Cat Mode entry/movement/pounce/exit, then the
+3-second Home hold: controller sleeps first, projector power command follows.
+Distinguish full shutdown from standby; a socket write alone proves neither.
+
+Receiver 0.3.24/code38 adds the missing Capture row. Capture → Load latest
+checkpoint is saved and verified on the real controller profile. The user
+confirmed physical Capture press/restore works. All other assignments are unchanged.
+
+Receiver 0.3.23/code37 is installed with five manual checkpoints and the optional
+Load latest checkpoint controller assignment. JVM and isolated Android history
+tests pass; the projector recognizes the pre-existing checkpoint. Capture was
+subsequently selected and physically accepted in 0.3.24. Existing mappings are preserved.
+
+Receiver 0.3.22/code36 is installed. User confirmed duplicate-binding retriggers
+allow firing while B remains held for running in Mario. User confirmed actual NES gameplay,
+repaired receiver/setup navigation and a steady physical Player 1 LED after
+the Android 9 HID service accepted the output report and reflection was blocked.
+Verify the new NES ZL/ZR volume preset after Save, then restart/reconnect light
+reapplication and saved mappings. Do not replace drivers based on the old UI bug.
+
+Phone 0.4.35 and receiver 0.3.18 were installed on the real devices. The ROM
+ran on the projector and synchronized to the phone; the user paired a full-size
+Pro Controller and accepted basic receiver navigation. Controller Setup in
+receiver 0.3.19 addresses the missing right stick and physical button calibration.
+Finish live calibration, saved-profile reload, both-stick navigation, media
+controls, simultaneous NES input, disconnect release, sound and frame pacing.
+Saved player slots prepare for multiplayer; the NES frontend currently routes
+only Player 1. The Android 9 HID-service output follow-up above supersedes the
+earlier public-light-API limitation; normal permission checks remain in force.
+ROMs sync both directions; save states remain projector-local.
+Verify the actual phone file manager offers Open with LUMA; use the document
+picker when it supplies an opaque or differently typed URI. [Games](games.md).
+
+Current Kodak launcher/Air Mouse/Cat Mode checkpoint: receiver 0.3.17/code31 is
+installed and
+returned 28 launchable apps including Crunchyroll; its Home grid and laptop
+remote use that complete catalog and icons. Confirm default-Home/cold-boot return,
+several third-party launches and remote-only navigation after a power cycle. The
+phone 0.4.34/code44 is installed. The user accepted neutral-pose calibration in
+arbitrary grips; verify the new High default crosses the screen comfortably
+without sacrificing hold stability, Center or OK clicks. Also verify pause,
+Browse, rotation, disconnect and target switching stop sensor delivery and never
+auto-resume it. For Cat Mode, observe autonomous motion/sound at the real viewing
+distance, Air Mouse takeover, OK pounce, Air-off/packet-loss return to autonomy,
+Back/phone stop and the 12-minute cap; finish play with a physical toy or treat.
+This is orientation pointing, not infrared/positional Wii tracking;
+accelerometer double integration is deliberately not used. Universal native
+Chromecast receiver impersonation remains outside a normal sideloaded launcher
+and needs a separately supported receiver path.
+
 Current checkpoint: actual HLS picture/sound/PT-BR on the Philips are user-confirmed.
 Physical remote input is browser pointer emulation; the installed candidate opens
 its panel but cannot navigate/select, and the later adapter is source-tested only.
@@ -23,7 +91,7 @@ Clean automated Chromium still reproduces the public anti-debug bundle's
 for the exact later episode plus a provider 404 hidden by missing CORS. Neither
 reproduced as the cause of the post-flush physical player: its cached source
 loaded and stayed present. Recheck with a fully fresh title before changing child
-blank handling, mixed-content policy or third-party cookies. Phone 0.4.32/code42
+blank handling, mixed-content policy or third-party cookies. Phone 0.4.34/code44
 is installed with data preserved; public feeds are unchanged.
 
 Current Backup-server boundary: the installed phone now observes bounded likely
@@ -37,7 +105,8 @@ correlation, duration/ad disambiguation, pinned connections and an authenticated
 projector-side probe before Open; blob/service-worker, DRM, cookie-dependent and
 source-IP-bound providers remain unsupported rather than bypassed.
 
-Receiver 0.3.13/code27 is installed and live on the projector. Phone 0.4.32
+Receiver 0.3.17/code31 is installed; its live 48 kHz Cat audio diagnostic reports
+all written frames played, but human/cat audibility still needs confirmation. Phone 0.4.34
 acceptance additionally needs one public subtitle chosen after playback starts,
 visible text on the projector, and a Philips selection held across repeated
 native status snapshots without a refresh/frozen remote. During a local
@@ -371,9 +440,10 @@ Why did the rapid pause/seek60/resume sequence stop this HLS? MP4 seek worked;
 target HLS seek reliability has not passed. Retest deliberately with settled
 commands before changing transport or introducing a relay.
 
-LUMA native remote now has confirmed app inventory, receiver launch, navigation
-and ready-device discovery. Remaining: text/volume changes, reverse-screen view
-and touchpad, PIN pairing, actual Samsung acceptance and system-wide launcher
-behavior on the exact Android/model. LUMA Receiver's source-level boot service
-and receiver-first phone path are implemented; their physical cold-boot timing
-is question 20. See [remote evidence](luma-remote.md).
+LUMA native remote now has confirmed complete app inventory, receiver/app launch,
+navigation and ready-device discovery. Receiver 0.3.14 is a live logo launcher;
+default-Home cold-boot behavior still needs a power-cycle check. Remaining:
+text/volume changes, reverse-screen view, PIN pairing and physical Samsung
+acceptance of the installed gyro air mouse. LUMA Receiver's source-level boot
+service and receiver-first phone path are implemented; their physical cold-boot
+timing is question 20. See [remote evidence](luma-remote.md).

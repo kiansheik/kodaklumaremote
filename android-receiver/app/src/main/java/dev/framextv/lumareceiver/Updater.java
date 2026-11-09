@@ -125,7 +125,8 @@ final class Updater {
         set("idle", null);
     }
 
-    void installIfIdle() { main.post(() -> { if (installWhenIdle && (playback == null || !playback.active())) install(); }); }
+    void installIfIdle() { main.post(() -> { if (installWhenIdle && (playback == null || !playback.active())
+        && !ReceiverApp.get(context).gamesOpen() && !ReceiverApp.get(context).controllerSetupOpen()) install(); }); }
 
     /** Main thread: hand the verified APK to PackageInstaller. */
     void install() {

@@ -1,5 +1,61 @@
 # Repository map
 
+- All-format disk preload: `PlaybackDiskCache` handles progressive byte windows
+  and Media3 DownloadHelper/Downloader adaptive time windows. Its shared quality
+  parameters are also applied by `PlaybackController`. Session-hashed adaptive
+  keys, fresh playback manifests, bounded LRU and span-validated time coverage
+  keep storage/status scoped to the current source. `CacheInstrumentation` and
+  `scripts/test-receiver-cache.mjs` exercise paused preload/1080p/blocked-upstream
+  seeks/cleanup for HLS, DASH and direct MP4 on an isolated emulator.
+
+- Stream recovery: `Catalog` selects/probes fresh candidates and alternate
+  providers through `StreamProbe`; `PlaybackController` retries failed startup.
+  `StreamRecovery` holds expiring canonical phone requests, exposed by paired
+  `recovery.status` and player status. Phone `NativeBackend` validates these;
+  mobile recovery card and `ConnectionService` notification open the episode
+  through existing browser/capture/Cast support. No stream URL is persisted.
+
+- Receiver watch history: `HistoryActivity` supplies controller UI; pure
+  `HistoryIndex` validates/groups canonical progress and bounds resume positions.
+  `LibraryStore.historyProgress` reads existing nondeleted sync records; `Catalog`
+  adds season/episode metadata and movie/current-episode resolution beside auto-next.
+  `history.show/status` support paired-client navigation checks. Media URLs remain
+  transient; generation/lifecycle checks cancel stale opens.
+- `AccessibilityPanel` resolves standard/exported direct panels, then explicitly
+  opens hidden Android TV `MainSettings` before general vendor settings. Home's
+  Accessibility button and Controller Setup share this resolver. Paired
+  `controllers.settingsPanels` reports bounded settings component metadata.
+
+- NES Games: receiver `GamesActivity`, `NesGameView`, `NesNative`,
+  `GameLibrary`, `CheckpointHistory`, `NesFrameInput`,
+  `ControllerInput`/`ControllerState` plus pinned QuickNES JNI
+  sources under `android-receiver/app/src/main/cpp/`; phone `GamesLibrary`/
+  `GamesManager`, external import intents and mobile Games sheet. Native, JVM
+  transfer, browser and isolated Android tests are described in [Games](games.md).
+- Receiver controller setup: `ControllerSetupActivity`/`ControllerDiagramView`,
+  pure `ControllerCalibration` and `ControllerProfile`, private
+  `ControllerProfileStore`, and `ControllerPlayers`/`ControllerPlayerStore`.
+  Hardware calibration, receiver navigation, NES actions and player slots are
+  separate. `ControllerNavigation` supplies the focus-navigation stage skipped
+  by app-translated keys. `ControllerLeds`/`HidHostTransport` and pure
+  `NintendoPlayerLights` provide bounded Android 9 Pro Controller LED output
+  through the existing Bluetooth service; physical Player 1 light is accepted.
+- Direct remote: `RemoteInput` dispatches authenticated `input.key` locally;
+  `ControllerSystemService` supplies Accessibility focus/click/back outside the
+  receiver (screen controls stay local), with `LocalProjectorKeys` fallback.
+  `NativeBackend` routes supported `luma.*` actions over receiver HTTP when
+  `input.remote` is advertised; `ConnectionService`/mobile use `remoteConnected`
+  independently of `nativeConnected`. `ReceiverApp.ensureListening` starts the
+  listener from process/service/Accessibility/boot entry points.
+- Smooth Cat: `CatControllerMotion` integrates calibrated analog velocity per
+  animation frame and holds neutral; `CatToyView` supplies its rendered position
+  for takeover, while `CatModeState` arbitrates phone/controller ownership.
+- Across-app buttons: `ControllerSystemService` is an opt-in Accessibility key
+  filter using saved profiles, with `LocalProjectorKeys` dispatch through the
+  existing loopback EShare service. It leaves analog motion and focused LUMA
+  activities alone. `ControllerHomeHold`/pure `HomeHoldState` coordinate short
+  Home and three-second sleep/power; Cat Mode has a Home launcher entry.
+
 - `src/extension/manifest.json`: site-only MV3 manifest, MAIN world, matching
   same-origin frames, no extension API permissions/background/network observers.
 - `src/extension/player.js`: video selection, Shadow DOM fallback UI, native Cast
@@ -143,7 +199,8 @@
   are considered and a roomier removable card is preferred; status exposes only
   non-sensitive storage class/capacity/progress, never filesystem paths.
 - `src/luma/remote.html`: responsive projector remote, explicit short discovery/
-  direct IP, app inventory/Kodi launch, navigation, text and volume refresh.
+  direct IP, complete icon-backed app inventory/package launch, navigation,
+  text and volume refresh.
 - `tests/luma-*.test.mjs`, `tests/browser/luma.spec.js`: fake TCP/UDP/HTTP
   boundaries and actual browser flows. `docs/agent/luma-remote.md` records REA
   provenance, physical acceptance and remaining startup/phone work.
@@ -158,6 +215,9 @@
   Explicit unavailable-ticket proof retires known bindings; unknown writes remain guarded.
 - `src/mobile/{index.html,app.js,capture.js}`: no-scroll combined phone remote,
   native RPC adapters, same-origin declared source/track capture and matched pause.
+  Two D-pad corners provide explicit Air-mouse start/stop and recenter controls.
+  Native state gates them to a connected LUMA target; while active, ordinary OK
+  requests pointer down/up and Back stays a key.
   The main remote exposes scrub, back 30 and catalog-proven next episode. The same
   exact successor is projected to notification/MediaSession skip-next. A
   current-title tap opens the exact saved Library title/episode, while bounded
@@ -221,6 +281,30 @@
   opens setup and Menu reopens the reversible setting. Receiver 0.3.7 persists
   distinct OK presses and Home-settings launches; the public `info.startup`
   object exposes those counters/timestamps plus live default-Home/UI state.
+  `LauncherCatalog` queries enabled launchable packages, bounds labels/icons and
+  supplies both the Home logo grid and authenticated app-list/launch endpoints.
+  Installed receiver 0.3.17 retains the live-confirmed 28-app catalog including
+  Crunchyroll. `CatModeState`, `CatMotion`, `CatToyView` and `CatSoundPlayer`
+  own the bounded 12-minute Cat session, deterministic autonomous prey motion,
+  Canvas UI, an immediate plus recurring media-stream chirp schedule and
+  1.5-second Air Mouse lease. Authenticated
+  `cat.*` endpoints use strict milli-normalized integer coordinates.
+  Receiver 0.3.17 replaces silent 24 kHz static PCM with checked 48 kHz stream
+  writes, playback-head diagnostics and a system-tone fallback.
+- `AirMouseFilter.java` and `AirMouseController.java`: pure-Java relative-
+  quaternion calibration/filtering plus Activity-owned foreground sensor
+  lifecycle. Latest hover wins, only one transport write is in flight and an
+  atomic click emits down/up at the current absolute projector coordinate. The
+  default High preset is about 23–25% more responsive than Normal. When Cat Mode
+  is active, filtered coordinates and OK route to its pointer/pounce endpoints;
+  stopping Air Mouse explicitly releases manual control.
+- `NativeBackend.java`: `luma.airMouseInfo` reads `GETFBINFO` bounds and
+  `luma.airMouse` emits validated `GYROSCOPEEVENT` hover frames;
+  `luma.airMouseClick` writes down/up together on the serialized EShare control
+  connection. The service suppresses per-frame state publications and follow-up
+  playback polls. It also validates Cat status and maps the bounded Cat API.
+  Host/backend/browser fixtures cover the contract; the original calibration
+  model has user acceptance, while the new sensitivity and Cat UI remain pending.
 - `SubtitleNormalizer.java`, `SubtitleDelivery.java`: phone-side bounded text
   conversion to UTF-8 SRT and source/receiver-scoped RAM capabilities. Separate
   fetch work does not block Kodi controls. Up to128 tracks/16MiB stay available

@@ -17,10 +17,12 @@ if (!/^dev\.framextv\.lumaremote(?:\.receiverfixture)?$/u.test(appPackage)) thro
 if (!/^emulator-\d+$/u.test(serial)) throw new Error('Select an Android emulator test target.');
 const commands = [], mutations = [], pairings = [], sockets = new Set();
 let currentSource = '', currentContent = null, position = 0, playing = true, appLists = 0, connections = 0;
+let catActive = false, catManual = false;
 const TOKEN = 'fixture_receiver_token_0123456789', CODE = '123456', PAIRING = 'fixturePairing01';
 const FIRST = 'https://media.example/first.m3u8';
 const reply = (response, status, body) => { response.writeHead(status, { 'Content-Type': 'application/json' }); response.end(typeof body === 'string' ? body : JSON.stringify(body)); };
 const failure = (response, status, code) => reply(response, status, { ok: false, error: { code } });
+const catStatus = () => ({ active: catActive, manual: catManual, sound: true, remainingSeconds: catActive ? 720 : 0 });
 async function body(request) {
   const chunks = []; let size = 0;
   for await (const bytes of request) { size += bytes.length; assert.ok(size < 256 * 1024); chunks.push(bytes); }
@@ -55,6 +57,7 @@ const tcp = net.createServer(socket => {
       if (method === 'GETAPPINFOSEVNET') {
         appLists++; const frame = appFrame(); socket.write(frame.subarray(0, 2)); setTimeout(() => socket.write(frame.subarray(2)), 15);
       }
+      if (method === 'GETFBINFO') socket.write('1280\r\n720\r\n');
       if (command === 'MediaControl\r\ngetVolume\r\n\r\n') socket.write('6 15\r\n\r\n');
       if (command === 'KEYEVENT\r\n21\r\n\r\n') socket.end();
     }
@@ -62,10 +65,12 @@ const tcp = net.createServer(socket => {
 });
 // Minimal LUMA Receiver LAN API (android-receiver ControlServer envelope and
 // PlaybackController guard semantics). Rejected and incomplete requests never mutate.
+let infoReads = 0;
+const directRemoteCommands = [];
 const receiver = http.createServer(async (request, response) => {
   try {
     const method = route(request);
-    if (request.method === 'GET' && method === 'info') { reply(response, 200, { ok: true, result: { app: 'lumareceiver', versionName: 'fixture-1.0', receiverId: 'fixture-receiver' } }); return; }
+    if (request.method === 'GET' && method === 'info') { reply(response, 200, { ok: true, result: { app: 'lumareceiver', versionName: 'fixture-1.0', receiverId: 'fixture-receiver', capabilities: infoReads++ === 0 ? ['input.remote'] : [] } }); return; }
     assert.equal(request.method, 'POST'); assert.ok(method);
     if (method === 'pair.begin' || method === 'pair.complete') {
       assert.equal(request.headers.authorization, undefined, 'Pairing must not send a bearer token.');
@@ -77,6 +82,16 @@ const receiver = http.createServer(async (request, response) => {
     }
     if (request.headers.authorization !== `Bearer ${TOKEN}`) { failure(response, 401, 'UNAUTHORIZED'); return; }
     const params = await body(request);
+    if (method === 'input.key') {
+      assert.equal(params.key, 'home'); directRemoteCommands.push(method);
+      reply(response, 200, { ok: true, result: { accepted: true, route: 'receiver.home' } }); return;
+    }
+    if (method === 'volume.get') {
+      directRemoteCommands.push(method); reply(response, 200, { ok: true, result: { current: 6, max: 15 } }); return;
+    }
+    if (method === 'app.show') {
+      directRemoteCommands.push(method); reply(response, 200, { ok: true, result: { accepted: true } }); return;
+    }
     const expect = () => {
       if (!currentSource) { failure(response, 409, 'NO_VIDEO'); return false; }
       if ('expectedSourceUrl' in params && params.expectedSourceUrl !== currentSource
@@ -90,10 +105,21 @@ const receiver = http.createServer(async (request, response) => {
           bufferedSeconds: position + 18.5, bufferAheadSeconds: 18.5, canSeek: true, sourceUrl: currentSource, title: currentContent?.title || 'Fixture',
           diskCacheState: 'filling', diskCacheStorage: 'internal', diskCachedBytes: 128 * 1024 * 1024,
           diskCacheTargetBytes: 512 * 1024 * 1024, diskCacheAheadSeconds: 300.5,
-          ...(currentContent ? { content: currentContent } : {}) }
-        : { revision: mutations.length, active: false, playing: false, paused: false, state: 'idle', positionSeconds: 0, durationSeconds: 0, bufferedSeconds: 0, canSeek: false, sourceUrl: '' } });
+          catMode: catStatus(), ...(currentContent ? { content: currentContent } : {}) }
+        : { revision: mutations.length, active: false, playing: false, paused: false, state: 'idle', positionSeconds: 0, durationSeconds: 0, bufferedSeconds: 0, canSeek: false, sourceUrl: '', catMode: catStatus() } });
       return;
     }
+    if (method === 'cat.status') { reply(response, 200, { ok: true, result: catStatus() }); return; }
+    if (method === 'cat.start') { catActive = true; catManual = false; accept(catStatus()); return; }
+    if (method === 'cat.pointer' || method === 'cat.pounce') {
+      if (!catActive || !Number.isInteger(params.x) || !Number.isInteger(params.y)
+          || params.x < 0 || params.x > 1000 || params.y < 0 || params.y > 1000) {
+        failure(response, 400, !catActive ? 'CAT_MODE_INACTIVE' : 'INVALID_INPUT'); return;
+      }
+      catManual = true; accept(catStatus()); return;
+    }
+    if (method === 'cat.release') { catManual = false; accept(catStatus()); return; }
+    if (method === 'cat.stop') { catActive = false; catManual = false; accept(catStatus()); return; }
     if (method === 'player.open') {
       const url = params.media?.url || '';
       const special = /\/(rejected|unknown|false-result|null-result|invalid-content)\.m3u8$/u.exec(url)?.[1];
@@ -186,6 +212,7 @@ const malformed = http.createServer(async (request, response) => {
         content: { key: 'framextv:tv:42:2:4', kind: 'tv', contentId: '42', season: 2, episode: 3, title: 'Spoofed' },
         bufferAheadSeconds: -1, diskCacheState: '../../private', diskCacheStorage: '/storage/private',
         diskCachedBytes: -1, diskCacheTargetBytes: Number.MAX_SAFE_INTEGER + 1, diskCacheAheadSeconds: Infinity },
+      { active: false, playing: false, catMode: { active: true, manual: false, sound: true, remainingSeconds: 901 } },
     ];
     reply(response, 200, { ok: true, result: snapshots[malformedStatus++] });
   } catch { failure(response, 500, 'INTERNAL'); }
@@ -204,9 +231,15 @@ try {
     '-e', 'readinessPort', String(readiness.address().port), '-e', 'malformedPort', String(malformed.address().port),
     `${appPackage}.test/dev.framextv.lumaremote.BackendInstrumentation`], { timeout: 90000, maxBuffer: 128 * 1024 });
   process.stdout.write(stdout); if (stderr) process.stderr.write(stderr);
-  assert.match(stdout, /INSTRUMENTATION_RESULT: failures=0/u); assert.match(stdout, /INSTRUMENTATION_RESULT: passed=15/u); assert.match(stdout, /INSTRUMENTATION_CODE: -1/u);
+  assert.match(stdout, /INSTRUMENTATION_RESULT: failures=0/u); assert.match(stdout, /INSTRUMENTATION_RESULT: passed=16/u); assert.match(stdout, /INSTRUMENTATION_CODE: -1/u);
   assert.equal(connections, 2); assert.equal(appLists, 1);
   assert.ok(commands.includes('CONTENT\r\n1\r\n0 Olá 👋\r\n\r\n'));
+  assert.ok(commands.includes('GETFBINFO\r\n1\r\n\r\n'));
+  assert.deepEqual(commands.filter(command => command.startsWith('GYROSCOPEEVENT')), [
+    'GYROSCOPEEVENT\r\n640.0\r\n360.0\r\n-1\r\n\r\n',
+    'GYROSCOPEEVENT\r\n640.0\r\n360.0\r\n0\r\n\r\n',
+    'GYROSCOPEEVENT\r\n640.0\r\n360.0\r\n1\r\n\r\n',
+  ]);
   assert.equal(commands.filter(command => command === 'KEYEVENT\r\n26\r\n\r\n').length, 1);
   assert.ok(commands.includes('STARTAPPEVNET\r\ndev.framextv.lumareceiver\r\n\r\n'));
   assert.equal(commands.filter(command => command.startsWith('STARTAPPEVNET')).length, 1);
@@ -217,22 +250,29 @@ try {
   assert.deepEqual(pairings.map(({ method, params }) => [method, params.pairingId, params.code]), [
     ['pair.begin', undefined, undefined], ['pair.complete', PAIRING, '000000'], ['pair.complete', 'expiredPairing01', CODE], ['pair.complete', PAIRING, CODE]]);
   assert.deepEqual(mutations.map(message => message.method), ['player.open', 'player.open', 'player.open', 'player.open', 'player.addSubtitle',
-    'player.setSubtitle', 'player.setSubtitle', 'player.pause', 'player.resume', 'player.seek', 'player.stop']);
-  const opens = mutations.filter(message => message.method === 'player.open').map(message => message.params);
+    'player.setSubtitle', 'player.setSubtitle', 'cat.start', 'cat.pointer', 'cat.pounce', 'cat.release', 'cat.stop',
+    'player.pause', 'player.resume', 'player.seek', 'player.stop']);
+  const playerMutations = mutations.filter(message => message.method.startsWith('player.'));
+  const opens = playerMutations.filter(message => message.method === 'player.open').map(message => message.params);
   assert.deepEqual(opens[0], { media: { url: FIRST, contentType: 'application/vnd.apple.mpegurl' }, onlyIfInactive: true });
-  assert.deepEqual(opens[1], { media: { url: FIRST, contentType: 'application/vnd.apple.mpegurl' }, onlyIfInactive: false }, 'Invalid content identity must not be forwarded.');
+  assert.deepEqual(opens[1], { media: { url: FIRST, contentType: 'application/vnd.apple.mpegurl', title: 'Fixture Series · S2 E3' }, onlyIfInactive: false }, 'Invalid content identity must not be forwarded; display titles remain allowed.');
   const episode = { key: 'framextv:tv:42:2:3', kind: 'tv', contentId: '42', season: 2, episode: 3, watchUrl: 'https://framextv.cc/watch/42/2/3', title: 'Fixture Series · S2 E3' };
   assert.deepEqual(opens[2], { media: { url: FIRST, contentType: 'application/vnd.apple.mpegurl', content: episode, title: episode.title }, onlyIfInactive: false });
   assert.deepEqual(opens[3], { media: { url: FIRST, contentType: 'application/vnd.apple.mpegurl', content: episode, title: episode.title, resumeSeconds: 30 },
     onlyIfInactive: false, expectedCurrentSourceUrl: FIRST, expectedCurrentContentKey: episode.key });
-  assert.deepEqual(mutations.slice(4).map(message => message.params), [
+  assert.deepEqual(playerMutations.slice(4).map(message => message.params), [
     { track: { url: 'https://media.example/pt.vtt', select: true, language: 'pt-BR', label: 'Português' }, expectedSourceUrl: FIRST },
     { index: 1, expectedSourceUrl: FIRST }, { index: 'off', expectedSourceUrl: FIRST },
     { expectedSourceUrl: FIRST, expectedContentKey: episode.key }, { expectedSourceUrl: FIRST },
     { position: 60, expectedSourceUrl: FIRST }, { expectedSourceUrl: FIRST },
   ]);
-  assert.equal(readinessReads, 6); assert.equal(malformedStatus, 3); assert.equal(deadlineCalls, 2);
-  console.log('Native backend: 15 instrumentation checks and LUMA Receiver wire assertions passed against emulator-only fixtures.');
+  assert.deepEqual(mutations.filter(message => message.method.startsWith('cat.')).map(message => [message.method, message.params]), [
+    ['cat.start', {}], ['cat.pointer', { x: 500, y: 250 }], ['cat.pounce', { x: 0, y: 1000 }],
+    ['cat.release', {}], ['cat.stop', {}],
+  ]);
+  assert.deepEqual(directRemoteCommands, ['input.key', 'volume.get', 'app.show']);
+  assert.equal(readinessReads, 6); assert.equal(malformedStatus, 4); assert.equal(deadlineCalls, 2);
+  console.log('Native backend: 16 instrumentation checks and LUMA Receiver wire assertions passed against emulator-only fixtures.');
 } finally {
   for (const socket of sockets) socket.destroy();
   for (const server of servers) { server.closeAllConnections?.(); if (server.listening) await new Promise(done => server.close(done)); }

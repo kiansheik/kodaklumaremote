@@ -7,6 +7,7 @@ import android.content.Intent;
 /** Boot/update: start serving immediately and make the receiver the visible screen. */
 public final class StartupReceiver extends BroadcastReceiver {
     @Override public void onReceive(Context context, Intent intent) {
+        ReceiverApp.get(context).ensureListening("boot");
         ReceiverApp.startReceiverService(context);
         if (showOnStartup(intent == null ? null : intent.getAction())) MainActivity.bringToFront(context);
     }

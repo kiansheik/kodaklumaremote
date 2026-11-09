@@ -85,6 +85,16 @@ const errors = {
   SOURCE_UNAVAILABLE: 'No supported video was found. Open its player and try Cast again.',
   SOURCE_MISMATCH: 'A server returned a different movie or episode. It was rejected; choose another server or try again.',
   INVALID_REQUEST: 'That app action is unavailable. Try again.',
+  AIR_MOUSE_UNAVAILABLE: 'This phone does not have a supported motion sensor.',
+  AIR_MOUSE_NOT_READY: 'Hold the phone still until the air mouse finishes centering.',
+  CAT_MODE_INACTIVE: 'Start Cat Mode before steering the toy.',
+  INVALID_ROM: 'Choose a complete, uncompressed .nes ROM file.',
+  GAME_TOO_LARGE: 'Choose an NES ROM smaller than 8 MiB.',
+  GAME_IMPORT_CANCELLED: 'Game selection cancelled.',
+  GAME_HASH_MISMATCH: 'The ROM did not match. Import or sync it again.',
+  GAME_LIBRARY_FULL: 'The games library is full (256 games or 128 MiB).',
+  GAME_STORAGE: 'Could not save this game on the phone. Check available storage.',
+  GAMES_UNAVAILABLE: 'Update LUMA Receiver to use Games.',
   SOURCE_CHANGED: 'The selected video changed. Choose it again in Browse.',
   STORAGE_UNAVAILABLE: 'Settings could not be saved on this phone. Try setup again.',
   SETUP_TIMEOUT: 'LUMA Receiver did not answer. Check that it is installed on the projector and try again.',
@@ -111,20 +121,68 @@ const errors = {
   CAMERA_DENIED: 'Camera access is needed to scan. You can enter the setup code instead.',
 };
 const state = {
-  native: false, busy: false, handoff: false, configured: false, connected: false, nativeConnected: false, receiverConnected: false,
+  native: false, busy: false, handoff: false, configured: false, connected: false, nativeConnected: false, remoteConnected: false, receiverConnected: false,
   host: '', name: '', playback: null, activeMedia: null, pendingMedia: null,
   tracks: [], catalog: [], selectedIndex: null, subtitlesEnabled: false, nextEpisode: null, apps: [],
   appPage: 0, subtitlePage: 0, sheet: null, sourceGeneration: 0, sourceChanged: false, autoStart: false, setupError: null,
   jobToken: null, flowController: null, setupFlow: false, volume: null, skipNextLaunch: false, subtitleFlow: false, subtitleError: null,
   pairingId: null, subtitleScale: 1,
+  airMouse: { available: true, active: false, calibrated: false, state: 'off', sensor: '' },
+  catMode: { active: false, manual: false, sound: true, remainingSeconds: 0 },
+  games: { games: [], connected: false, syncing: false, message: '' },
   settings: { hasReceiver: false, hasPairing: false, autoConnect: true },
   target: 'luma', pendingTarget: 'luma',
   tvSetup: 'remote', tvAddress: 'stable', matterShareTimer: null,
   matter: { available: false, paired: false, connected: false, pairing: false, capabilities: {}, volume: null, inputs: [] },
   philips: { connected: false, host: '', name: 'Philips TV', startupUrl: '', awaitingApproval: false, pendingHost: '', playback: null, activeMedia: null, tracks: [], catalog: [], selectedIndex: null, subtitlesEnabled: false, nextEpisode: null, volume: null, subtitlePage: 0 },
 };
+function airMouseState(value, announce = false) {
+  if (!value || typeof value !== 'object') return;
+  const previous = state.airMouse;
+  const next = {
+    available: value.available !== false,
+    active: value.active === true,
+    calibrated: value.calibrated === true,
+    state: ['off', 'calibrating', 'ready', 'unavailable', 'disconnected', 'error'].includes(value.state) ? value.state : 'off',
+    sensor: typeof value.sensor === 'string' ? value.sensor.slice(0, 40) : '',
+  };
+  state.airMouse = next;
+  renderControls();
+  if (!announce) return;
+  if (next.state === 'ready' && previous.state !== 'ready') message(state.catMode.active
+    ? 'Air mouse ready. You are steering the cat toy; OK makes it pounce.'
+    : 'Air mouse ready. Move the phone to aim; OK clicks.');
+  else if (next.state === 'calibrating') message('Hold the phone still and point it at the center of the screen…');
+  else if (previous.active && !next.active && next.state === 'off' && state.catMode.active) message('Cat mode is back to automatic play.');
+  else if (previous.active && next.state === 'disconnected') message('Air mouse stopped because the projector disconnected.', true);
+  else if (previous.active && next.state === 'error') message('Air mouse stopped after a projector control error.', true);
+}
+function catModeState(value, announce = false) {
+  if (!value || typeof value !== 'object') return;
+  const previous = state.catMode;
+  const remaining = Number(value.remainingSeconds);
+  state.catMode = {
+    active: value.active === true,
+    manual: value.manual === true,
+    sound: value.sound !== false,
+    remainingSeconds: Number.isInteger(remaining) && remaining >= 0 && remaining <= 15 * 60 ? remaining : 0,
+  };
+  clearTimeout(catModeTimer);
+  catModeTimer = null;
+  if (state.catMode.active && state.catMode.remainingSeconds > 0) {
+    catModeTimer = setTimeout(() => {
+      void rpc('app.catModeStatus').then(result => catModeState(result, true)).catch(() => {});
+    }, (state.catMode.remainingSeconds + 1) * 1000);
+  }
+  renderControls();
+  if (!announce) return;
+  if (previous.active && !state.catMode.active) message('Cat mode finished. Give your cat a real toy or treat to complete the hunt.');
+}
 const pending = new Map();
 let requestId = 0;
+let catModeTimer = null;
+let gamesBusy = false;
+let gamesSignature = '';
 let flowId = 0;
 let lastKeyTime = -Infinity;
 let returnFocus;
@@ -385,7 +443,7 @@ async function resumeMedia(media, target, signal) {
 function receiver(target = state.target) { return target === 'philips' ? state.philips : state; }
 function tvConnected() { return state.philips.connected || state.matter.connected; }
 function volumeContext() {
-  if (state.target !== 'philips') return state.nativeConnected ? { route: 'luma', key: `luma:${state.host}` } : null;
+  if (state.target !== 'philips') return (state.nativeConnected || state.remoteConnected) ? { route: 'luma', key: `luma:${state.host}` } : null;
   if (state.matter.connected && state.matter.capabilities.volume && state.matter.volume) return { route: 'matter', key: 'philips:matter' };
   return state.philips.connected ? { route: 'msx', key: `philips:msx:${state.philips.host}:${state.philips.activeMedia?.url || ''}` } : null;
 }
@@ -400,7 +458,7 @@ function remoteVolume() {
   if (state.matter.connected && state.matter.capabilities.volume && state.matter.volume) return state.matter.volume;
   return state.philips.connected ? state.philips.volume : null;
 }
-function navigationReady() { return state.native && !state.busy && !state.handoff && (state.target === 'philips' ? state.matter.connected && state.matter.capabilities.navigation : state.nativeConnected); }
+function navigationReady() { return state.native && !state.busy && !state.handoff && (state.target === 'philips' ? state.matter.connected && state.matter.capabilities.navigation : state.nativeConnected || state.remoteConnected); }
 function matterState(value) {
   if (!value || typeof value !== 'object') return;
   const remote = state.matter;
@@ -808,12 +866,16 @@ function sheet(name) {
   for (const panel of document.querySelectorAll('.sheet-panel')) panel.hidden = panel.id !== `panel-${name}`;
   $('#sheet-title').textContent = { settings: 'Configuration', reset: 'Forget saved setup', power: state.target === 'philips' ? 'Turn off the TV?' : 'Turn off the projector?', more: 'More controls', typing: 'Type text', apps: 'Apps', subtitles: 'Subtitles', inputs: 'TV inputs', 'matter-share': 'Add another phone', handoff: state.setupFlow ? 'Pair LUMA Receiver' : 'Start casting' }[name];
   if (name === 'history') $('#sheet-title').textContent = 'Library';
+  if (name === 'games') $('#sheet-title').textContent = 'Games';
   $('#close-sheet').focus();
   if (name === 'power') $('#cancel-power').focus();
   if (name === 'typing') $('#remote-text').focus();
   renderControls();
 }
 function renderControls() {
+  const recovery = state.playback?.streamRecovery;
+  $('#stream-recovery').hidden = state.target !== 'luma' || !state.receiverConnected || !recovery?.content?.watchUrl;
+  $('#open-recovery-episode').disabled = state.busy || state.handoff || !state.receiverConnected;
   syncRemoteRedirect();
   if (pendingVolume && pendingVolume.key !== volumeContext()?.key) clearPendingVolume();
   const free = state.native && !state.busy && !state.handoff;
@@ -823,7 +885,7 @@ function renderControls() {
   const tvRemote = free && tv && matter.connected;
   const navigation = navigationReady();
   const projector = free && !tv && state.connected;
-  const luma = free && !tv && state.nativeConnected;
+  const luma = free && !tv && (state.nativeConnected || state.remoteConnected);
   const player = free && (tv ? remote.connected : state.configured);
   const active = player && playbackMatchesMedia(remote.activeMedia, remote.playback);
   const saved = tv ? remote.connected || matter.paired : state.settings.hasReceiver && state.settings.hasPairing;
@@ -944,6 +1006,19 @@ function renderControls() {
   $('#pair-show').disabled = !projector;
   for (const input of $('#pair-form').querySelectorAll('input')) input.disabled = !free;
   for (const button of document.querySelectorAll('[data-key]')) { button.disabled = !navigation; if (button.closest('.topline')) button.style.visibility = tv && !matter.capabilities.navigation ? 'hidden' : ''; }
+  const airToggle = $('#air-mouse-toggle'), airCenter = $('#air-mouse-center');
+  airToggle.style.visibility = tv ? 'hidden' : '';
+  airCenter.style.visibility = tv ? 'hidden' : '';
+  airToggle.disabled = tv || !free || !state.nativeConnected || !state.airMouse.available;
+  airCenter.disabled = tv || !free || !state.nativeConnected || !state.airMouse.active;
+  airToggle.setAttribute('aria-pressed', String(state.airMouse.active));
+  airToggle.setAttribute('aria-label', state.airMouse.active ? 'Turn off air mouse' : 'Turn on air mouse');
+  airToggle.textContent = state.airMouse.active ? 'Air off' : 'Air mouse';
+  const catToggle = $('#cat-mode-toggle');
+  catToggle.hidden = tv;
+  catToggle.disabled = tv || !free || !state.receiverConnected;
+  catToggle.setAttribute('aria-pressed', String(state.catMode.active));
+  catToggle.textContent = state.catMode.active ? 'Stop cat mode' : 'Start cat mode';
   // LUMA status polling keeps volume current; Philips may need a manual refresh.
   $('#refresh-volume').hidden = !tv;
   $('#refresh-volume').disabled = !(tv ? player || tvRemote : luma);
@@ -1020,6 +1095,7 @@ function renderControls() {
   $('#show-history').disabled = !free;
   $('#open-library').disabled = !free;
   renderLibraryControls();
+  renderGames();
   $('#choose-video').textContent = tv && !remote.connected ? 'Open TV receiver' : 'Choose video';
   $('#choose-video').disabled = tv && !remote.connected ? !free : !state.native;
   // Browse and Library are one tap away in the tab bar; only offer this when nothing is loaded.
@@ -1032,6 +1108,7 @@ function renderControls() {
 }
 function playback(snapshot, target = 'luma') {
   if (!snapshot || typeof snapshot.active !== 'boolean') return;
+  if (target === 'luma' && snapshot.catMode) catModeState(snapshot.catMode);
   const remote = receiver(target);
   if (remote.activeMedia && snapshot.active && !playbackMatchesMedia(remote.activeMedia, snapshot)) {
     if (target === state.target) clearScrubPreview();
@@ -1114,6 +1191,7 @@ function restoredRemote(value, observedPlayback) {
 }
 function connectionState(snapshot, { initial = false } = {}) {
   if (!snapshot || typeof snapshot !== 'object') return;
+  if (snapshot.games && typeof snapshot.games === 'object') state.games = snapshot.games;
   if (initial && ['luma', 'philips'].includes(snapshot.selectedTarget)) state.target = snapshot.selectedTarget;
   if (snapshot.receivers?.philips) msxState(snapshot.receivers.philips);
   if (snapshot.settings && typeof snapshot.settings === 'object') {
@@ -1122,6 +1200,7 @@ function connectionState(snapshot, { initial = false } = {}) {
   const connection = snapshot.connection;
   if (connection && typeof connection === 'object') {
     if (typeof connection.connected === 'boolean') state.connected = connection.connected;
+    state.remoteConnected = connection.remoteConnected === true;
     if (typeof connection.nativeConnected === 'boolean') state.nativeConnected = connection.nativeConnected;
     else if (typeof connection.connected === 'boolean') state.nativeConnected = connection.connected;
     if (typeof connection.receiverConnected === 'boolean') state.receiverConnected = connection.receiverConnected;
@@ -1144,7 +1223,7 @@ function connectionState(snapshot, { initial = false } = {}) {
   }
   volume(snapshot);
   if (state.connected && $('#message').textContent === 'Connecting to your saved projector…')
-    message(state.nativeConnected ? 'Projector connected. Your remote is ready.' : 'LUMA Receiver is ready. You can cast now; projector navigation will connect later.');
+    message((state.nativeConnected || state.remoteConnected) ? 'Projector connected. Your remote is ready.' : 'LUMA Receiver is ready. You can cast now; projector navigation will connect later.');
   if (!state.handoff) {
     const remote = state.subtitleFlow ? null : restoredRemote(snapshot.remote, snapshot.playback);
     if (remote) {
@@ -1166,7 +1245,7 @@ function connectionState(snapshot, { initial = false } = {}) {
     message(tvConnected() ? 'Philips TV connected. Your remote is ready.' : state.matter.paired ? 'Reconnecting to your paired TV…' : 'Pair your TV remote or connect its video receiver.');
   } else if (initial && (state.connected || (state.settings.hasReceiver && state.settings.hasPairing))) {
     page('remote');
-    message(state.connected ? state.nativeConnected ? 'Projector connected. Your remote is ready.' : 'LUMA Receiver is ready. You can cast now; projector navigation will connect later.' : 'Connecting to your saved projector…');
+    message(state.connected ? (state.nativeConnected || state.remoteConnected) ? 'Projector connected. Your remote is ready.' : 'LUMA Receiver is ready. You can cast now; projector navigation will connect later.' : 'Connecting to your saved projector…');
   } else if (initial && state.settings.hasReceiver) {
     deviceStep('pair');
   }
@@ -1183,7 +1262,7 @@ async function command(method, params, success, consume) {
   } catch (error) {
     if (method === 'app.capture') reportStatus('error', error.code);
     if (typeof method === 'string' && method.startsWith('luma.') && ['CONNECTION_FAILED', 'TIMEOUT', 'NOT_CONNECTED', 'INVALID_RESPONSE'].includes(error.code)) {
-      state.nativeConnected = false;
+      state.nativeConnected = false; state.remoteConnected = false;
       state.connected = state.receiverConnected;
       state.apps = [];
       state.volume = null;
@@ -1434,6 +1513,8 @@ async function startMsxCasting() {
 }
 window.LumaApp = Object.freeze({
   onConnectionState(snapshot) { connectionState(snapshot); },
+  onOpenGames(value) { if (value?.games) state.games = value; void openGames(); },
+  onAirMouseState(status) { airMouseState(status, true); },
   onOpenRemote() {
     if (!state.handoff) closeSheet();
     page('remote');
@@ -1993,7 +2074,7 @@ for (const button of document.querySelectorAll('[data-reset]')) button.addEventL
     }
     if (scope !== 'pairing') {
       state.connected = false;
-      state.nativeConnected = false;
+      state.nativeConnected = false; state.remoteConnected = false;
       state.receiverConnected = false;
       state.configured = false;
       state.settings.hasReceiver = false;
@@ -2010,6 +2091,64 @@ for (const button of document.querySelectorAll('[data-reset]')) button.addEventL
 });
 $('#choose-video').addEventListener('click', () => state.target === 'philips' && !state.philips.connected ? openTvReceiver() : browse());
 $('#change-stream').addEventListener('click', () => void openSitePage(screenContent(), 'episode'));
+function renderGames() {
+  const free = state.native && !state.busy && !state.handoff && !gamesBusy;
+  const connected = state.target === 'luma' && state.receiverConnected;
+  $('#open-games').disabled = !state.native || state.busy || state.handoff;
+  $('#more-games').disabled = !state.native || state.busy || state.handoff;
+  $('#library-games').disabled = !state.native || state.busy || state.handoff;
+  $('#games-import').disabled = !free;
+  $('#games-sync').disabled = !free || !connected || state.games.syncing === true;
+  $('#games-show').disabled = !free || !connected;
+  $('#games-stop').disabled = !free || !connected;
+  const games = (Array.isArray(state.games.games) ? state.games.games : []).slice(0, 256)
+    .filter(game => game && /^[a-f0-9]{64}$/u.test(game.id) && game.system === 'nes');
+  const signature = JSON.stringify(games);
+  if (signature !== gamesSignature) {
+    gamesSignature = signature;
+    $('#games-list').replaceChildren();
+    for (const game of games) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'choice';
+      const heading = document.createElement('strong'); heading.textContent = safeText(game.name || 'NES game').slice(0, 120);
+      const detail = document.createElement('small');
+      detail.textContent = game.onProjector ? 'NES · Phone + projector · Play' : 'NES · Saved on phone · Sync and play';
+      button.append(heading, detail);
+      button.addEventListener('click', () => void gamesAction('games.play', { id: game.id }));
+      $('#games-list').append(button);
+    }
+  }
+  for (const button of $('#games-list').querySelectorAll('button')) button.disabled = !free || !connected;
+  if (!gamesBusy) $('#games-status').textContent = state.games.syncing
+    ? 'Syncing saved games…'
+    : state.games.message || (games.length ? 'Connect to LUMA to sync and play.' : 'No games yet. Import an .nes file to save it here.');
+}
+async function openGames() {
+  sheet('games');
+  try { state.games = await rpc('games.list'); renderGames(); }
+  catch (error) { $('#games-status').textContent = error.message; }
+}
+async function gamesAction(method, params = {}) {
+  if (gamesBusy) return;
+  gamesBusy = true; renderGames();
+  $('#games-status').textContent = method === 'app.pickGame' ? 'Choose an .nes file…'
+    : method === 'games.sync' ? 'Syncing saved games…' : method === 'games.play' ? 'Sending the game to the projector…' : 'Updating the projector…';
+  let failure;
+  try {
+    const result = await rpc(method, params, { timeoutMs: method === 'app.pickGame' ? 300000 : 180000 });
+    if (Array.isArray(result?.games)) state.games = result;
+    else state.games = { ...state.games, message: method === 'games.stop' ? 'Game stopped on the projector.' : 'Games opened on the projector.' };
+  } catch (error) { failure = error.message; }
+  finally { gamesBusy = false; renderGames(); if (failure) $('#games-status').textContent = failure; }
+}
+$('#open-games').addEventListener('click', () => void openGames());
+$('#more-games').addEventListener('click', () => void openGames());
+$('#library-games').addEventListener('click', () => void openGames());
+$('#games-import').addEventListener('click', () => void gamesAction('app.pickGame'));
+$('#games-sync').addEventListener('click', () => void gamesAction('games.sync'));
+$('#games-show').addEventListener('click', () => void gamesAction('games.show'));
+$('#games-stop').addEventListener('click', () => void gamesAction('games.stop'));
 function libraryIdentity(value) {
   if (!value || !['movie', 'tv'].includes(value.kind) || typeof value.id !== 'string' || !/^[1-9][0-9]{0,9}$/.test(value.id)) return null;
   const animeId = value.kind === 'tv' && typeof value.animeId === 'string' && /^[1-9][0-9]{0,9}$/.test(value.animeId) ? value.animeId : null;
@@ -2436,6 +2575,7 @@ $('#receiver-form').addEventListener('submit', async event => {
     }
     state.connected = true;
     state.nativeConnected = result.nativeConnected !== false;
+    state.remoteConnected = result.remoteConnected === true;
     state.receiverConnected = result.receiverConnected === true;
     state.settings.hasReceiver = true;
     state.host = host;
@@ -2465,6 +2605,7 @@ $('#rescan-projectors').addEventListener('click', async () => {
     if (result?.connected === true) {
       state.connected = true;
       state.nativeConnected = result.nativeConnected !== false;
+    state.remoteConnected = result.remoteConnected === true;
       state.receiverConnected = result.receiverConnected === true;
       state.name = safeText(result.device?.name || result.name) || state.name;
       const found = result.devices?.find(device => privateHost(device?.host || ''));
@@ -2483,7 +2624,7 @@ function disconnect() {
     return rpc('msx.disconnect', {});
   }, {}, 'TV controls disconnected. A playing video stays on the TV.', result => { state.philips.connected = false; msxState(result); });
   return command('device.disconnect', {}, 'Disconnected. A playing video stays on the projector.', () => {
-    state.connected = false; state.nativeConnected = false; state.receiverConnected = false; state.configured = false;
+    state.connected = false; state.nativeConnected = false; state.remoteConnected = false; state.receiverConnected = false; state.configured = false;
     state.apps = []; state.volume = null; $('#volume-level').textContent = '—'; renderApps();
   });
 }
@@ -2742,11 +2883,32 @@ function key(name) {
   if (!navigationReady() || now - lastKeyTime < 100) return;
   lastKeyTime = now;
   if (state.target === 'philips') { void command('matter.key', { key: name }, 'TV command sent.', matterState); return; }
+  if (name === 'enter' && state.airMouse.active) {
+    void command('app.airMouseClick', {}, 'Air-mouse click sent.', airMouseState);
+    return;
+  }
   void command('luma.key', { key: name }, 'Remote command sent.', () => {
     if (['volume-up', 'volume-down', 'mute'].includes(name)) $('#volume-level').textContent = '—';
   });
 }
 document.querySelectorAll('[data-key]').forEach(button => button.addEventListener('click', () => key(button.dataset.key)));
+$('#air-mouse-toggle').addEventListener('click', () => {
+  if (state.airMouse.active) void command('app.airMouseStop', {}, 'Air mouse off.', airMouseState);
+  else void command('app.airMouseStart', {}, 'Hold the phone still and point it at the center of the screen…', airMouseState);
+});
+$('#air-mouse-center').addEventListener('click', () => {
+  void command('app.airMouseRecenter', {}, 'Hold the phone still to recenter…', airMouseState);
+});
+$('#cat-mode-toggle').addEventListener('click', () => {
+  if (state.catMode.active) {
+    void command('app.catModeStop', {}, 'Cat mode stopped. Finish with a real toy or treat.', catModeState);
+  } else {
+    void command('app.catModeStart', {}, 'Cat mode is running. Air mouse takes over; Air off resumes automatic play. Finish with a real toy or treat.', result => {
+      catModeState(result);
+      closeSheet();
+    });
+  }
+});
 $('#show-more').addEventListener('click', () => {
   sheet('more');
   $('#picture-brightness').hidden = state.target === 'philips' ? !state.philips.connected : !state.configured;
@@ -3089,6 +3251,7 @@ void (async () => {
     $('#browser-url').value = typeof result?.browserUrl === 'string' ? result.browserUrl : DEFAULT_SITE;
     message('Connect your projector to get started.');
     connectionState(result, { initial: true });
+    airMouseState(result?.airMouse);
     loadSeekHistory(result?.seekHistory);
     loadCaptionPreferences(result?.captionPreferences);
     loadPicturePreferences(result?.picturePreferences);
@@ -3096,3 +3259,15 @@ void (async () => {
     if (result?.source && !result?.remote) window.LumaApp.onCapturedMedia(result.source);
   } catch (error) { message(error.message, true); }
 })();
+
+$('#open-recovery-episode').addEventListener('click', async () => {
+  const expected = state.playback?.streamRecovery?.id;
+  try {
+    const recovery = await rpc('receiver.recoveryStatus');
+    if (!expected || recovery.id !== expected || !recovery.content?.watchUrl) {
+      message('That request has ended. Choose the episode again on the projector.'); return;
+    }
+    await rpc('app.browse', { url: recovery.content.watchUrl });
+    message('Play the video on this page, then tap Cast to send its fresh stream to the projector.');
+  } catch (error) { message(error.message || 'Could not open the recovery request.', true); }
+});

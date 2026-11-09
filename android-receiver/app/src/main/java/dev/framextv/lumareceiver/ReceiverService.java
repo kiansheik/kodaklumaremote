@@ -24,7 +24,7 @@ public final class ReceiverService extends Service {
             .setContentTitle(getString(R.string.app_name)).setContentText("Ready on port " + ControlServer.PORT).build();
         if (Build.VERSION.SDK_INT >= 29) startForeground(NOTIFICATION, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK);
         else startForeground(NOTIFICATION, notification);
-        ReceiverApp.get(this).server.start();
+        ReceiverApp.get(this).ensureListening("foregroundService");
         return START_STICKY;
     }
 

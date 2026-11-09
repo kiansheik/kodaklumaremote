@@ -4,13 +4,22 @@ import android.app.Activity;
 import android.content.ActivityNotFoundException;
 import android.content.Context;
 import android.content.Intent;
+import android.media.AudioManager;
 import android.os.Bundle;
 import android.os.SystemClock;
 import android.provider.Settings;
+import android.text.TextUtils;
+import android.util.TypedValue;
+import android.view.Gravity;
 import android.view.KeyEvent;
+import android.view.MotionEvent;
+import android.view.InputDevice;
 import android.view.View;
 import android.view.WindowManager;
 import android.widget.FrameLayout;
+import android.widget.GridLayout;
+import android.widget.ImageView;
+import android.widget.LinearLayout;
 import android.widget.TextView;
 
 
@@ -23,6 +32,7 @@ import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.net.NetworkInterface;
 import java.util.Collections;
+import java.util.List;
 
 /** Full-screen player plus an idle screen with address, pairing code and update prompt. */
 public final class MainActivity extends Activity implements PlaybackController.Ui, Updater.Ui {
@@ -39,7 +49,13 @@ public final class MainActivity extends Activity implements PlaybackController.U
         }
     };
     private View idle;
-    private TextView status, pairingCode, updatePrompt, footer, notice, scrubTime;
+    private CatToyView catToy;
+    private TextView status, pairingCode, updatePrompt, footer, notice, scrubTime, appsHeading;
+    private View homeSetup, gamesOpen, controllersOpen;
+    private ControllerInput controllerInput;
+    private boolean dispatchingController;
+    private GridLayout appsGrid;
+    private List<LauncherCatalog.Entry> launcherEntries = Collections.emptyList();
     private View scrub;
     private android.widget.ImageView scrubImage;
     private android.widget.ProgressBar scrubBar;
@@ -47,6 +63,7 @@ public final class MainActivity extends Activity implements PlaybackController.U
     private long backArmedUntil;
     private final Runnable hideNotice = () -> notice.setVisibility(View.GONE);
     private boolean externalShown;
+    private boolean resumed;
     /** Draws receiver-rendered captions from the player clock; cheap when nothing changes. */
     private final Runnable captionTick = new Runnable() {
         @Override public void run() {
@@ -65,6 +82,7 @@ public final class MainActivity extends Activity implements PlaybackController.U
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
+        setVolumeControlStream(AudioManager.STREAM_MUSIC);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         setContentView(R.layout.main);
         app = ReceiverApp.get(this);
@@ -77,9 +95,55 @@ public final class MainActivity extends Activity implements PlaybackController.U
         playerOverlay.addView(brightnessOverlay, new FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
         idle = findViewById(R.id.idle);
+        catToy = findViewById(R.id.cat_toy);
+        catToy.attach(app.catMode);
         status = findViewById(R.id.idle_status);
         pairingCode = findViewById(R.id.pairing_code);
         updatePrompt = findViewById(R.id.update_prompt);
+        homeSetup = findViewById(R.id.home_setup);
+        gamesOpen = findViewById(R.id.games_open);
+        controllersOpen = findViewById(R.id.controllers_open);
+        findViewById(R.id.history_open).setOnClickListener(view -> HistoryActivity.show(this));
+        gamesOpen.setOnClickListener(view -> GamesActivity.show(this, null));
+        findViewById(R.id.cat_open).setOnClickListener(view -> {
+            app.playback.noteInteraction();
+            if (app.playback.active()) app.playback.setPlaying(false);
+            app.catMode.start(true, SystemClock.elapsedRealtime());
+            showNotice("Cat Mode · Stick / D-pad moves · A pounces · B exits", 5000);
+        });
+        findViewById(R.id.accessibility_open).setOnClickListener(view -> {
+            String destination = ControllerSystemService.openSettings(this);
+            if ("unavailable".equals(destination)) showNotice("Accessibility settings are unavailable");
+        });
+        controllersOpen.setOnClickListener(view -> ControllerSetupActivity.show(this));
+        controllerInput = new ControllerInput(this, new ControllerInput.Listener() {
+            @Override public void onButtonsChanged(int buttons) {
+            }
+            @Override public void onAnalogInput(float x, float y) {
+                app.catMode.controllerInput(x, y);
+            }
+            @Override public void onNavigationKey(int key, int action, int repeat) {
+                ControllerInput.prepareNavigation(MainActivity.this, action);
+                CatModeState.Snapshot cat = app.catMode.snapshot(SystemClock.elapsedRealtime());
+                if (cat.active && ControllerNavigation.direction(key) != 0) {
+                    return;
+                }
+                if (app.playback.title() == null && ControllerNavigation.direction(key) != 0) {
+                    ControllerNavigation.handle(MainActivity.this, key, action, repeat); return;
+                }
+                long now = SystemClock.uptimeMillis();
+                dispatchingController = true;
+                try {
+                    if (!dispatchKeyEvent(new KeyEvent(now, now, action, key, repeat, 0,
+                            android.view.KeyCharacterMap.VIRTUAL_KEYBOARD, 0, 0, InputDevice.SOURCE_KEYBOARD)))
+                        ControllerNavigation.handle(MainActivity.this,
+                            key == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE ? KeyEvent.KEYCODE_DPAD_CENTER : key, action, repeat);
+                } finally { dispatchingController = false; }
+            }
+        });
+        appsHeading = findViewById(R.id.apps_heading);
+        appsGrid = findViewById(R.id.apps_grid);
+        homeSetup.setOnClickListener(view -> openHomeSettings("button"));
         footer = findViewById(R.id.footer);
         notice = findViewById(R.id.notice);
         scrub = findViewById(R.id.scrub);
@@ -96,13 +160,43 @@ public final class MainActivity extends Activity implements PlaybackController.U
         app.setNoticeUi(this::showNotice);
         app.setScrubUi(this::onScrub);
         app.setSnapshotUi(this::snapshot);
+        app.setControllerNavigationUi(() -> ControllerNavigation.snapshot(this));
+        app.catMode.setListener(() -> runOnUiThread(this::renderCatMode));
         onDisplayChanged();
         ReceiverApp.startReceiverService(this);
     }
 
-    @Override protected void onResume() { super.onResume(); render(); captions.removeCallbacks(captionTick); captions.post(captionTick); }
+    @Override protected void onResume() {
+        super.onResume();
+        resumed = true;
+        controllerInput.start();
+        refreshLauncher();
+        render();
+        renderCatMode();
+        captions.removeCallbacks(captionTick);
+        captions.post(captionTick);
+        resetLauncherFocus();
+    }
 
-    @Override protected void onPause() { captions.removeCallbacks(captionTick); super.onPause(); }
+    @Override protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        // Android may reserve the controller Home button and deliver a launcher Intent.
+        if (intent.hasCategory(Intent.CATEGORY_HOME)) {
+            app.catMode.stop();
+            app.playback.stop();
+            render();
+        }
+        resetLauncherFocus();
+    }
+
+    @Override protected void onPause() {
+        resumed = false;
+        controllerInput.stop();
+        catToy.pauseAnimation();
+        captions.removeCallbacks(captionTick);
+        super.onPause();
+    }
 
     @Override protected void onStop() {
         // Nothing is visible to watch; keep position and let the phone resume.
@@ -111,12 +205,16 @@ public final class MainActivity extends Activity implements PlaybackController.U
     }
 
     @Override protected void onDestroy() {
+        controllerInput.close();
         app.playback.setUi(null);
         app.updater.attach(null, app.playback);
         app.setPairingUi(null);
         app.setNoticeUi(null);
         app.setScrubUi(null);
         app.setSnapshotUi(null);
+        app.setControllerNavigationUi(null);
+        app.catMode.setListener(null);
+        catToy.close();
         app.playback.player().removeListener(cueListener);
         playerView.setPlayer(null);
         super.onDestroy();
@@ -166,6 +264,77 @@ public final class MainActivity extends Activity implements PlaybackController.U
     @Override public void bringToFront() { bringToFront(this); }
     @Override public void onUpdateChanged() { render(); }
 
+    private void refreshLauncher() {
+        launcherEntries = app.launcher.list();
+        appsGrid.removeAllViews();
+        for (LauncherCatalog.Entry entry : launcherEntries) appsGrid.addView(appTile(entry), appTileParams());
+        appsHeading.setText(launcherEntries.isEmpty() ? "No launchable apps found" : "All apps  ·  " + launcherEntries.size());
+    }
+
+    private void resetLauncherFocus() {
+        if (app.playback.title() != null || app.catMode.snapshot(SystemClock.elapsedRealtime()).active) return;
+        appsGrid.post(() -> {
+            if (!resumed || !idle.isShown() || app.catMode.snapshot(SystemClock.elapsedRealtime()).active) return;
+            View first = appsGrid.getChildCount() > 0 ? appsGrid.getChildAt(0) : gamesOpen;
+            first.requestFocusFromTouch();
+            ((android.widget.ScrollView)findViewById(R.id.apps_scroll)).scrollTo(0, 0);
+        });
+    }
+
+    private void moveCat(int key) {
+        CatModeState.Snapshot cat = app.catMode.snapshot(SystemClock.elapsedRealtime());
+        double dx = key == KeyEvent.KEYCODE_DPAD_LEFT ? -.035 : key == KeyEvent.KEYCODE_DPAD_RIGHT ? .035 : 0;
+        double dy = key == KeyEvent.KEYCODE_DPAD_UP ? -.035 : key == KeyEvent.KEYCODE_DPAD_DOWN ? .035 : 0;
+        app.catMode.pointer(cat.x + dx, cat.y + dy, SystemClock.elapsedRealtime());
+    }
+
+    private View appTile(LauncherCatalog.Entry entry) {
+        LinearLayout tile = new LinearLayout(this);
+        tile.setOrientation(LinearLayout.VERTICAL);
+        tile.setGravity(Gravity.CENTER);
+        tile.setPadding(dp(10), dp(10), dp(10), dp(8));
+        tile.setBackgroundResource(R.drawable.launcher_tile);
+        tile.setClickable(true);
+        tile.setFocusable(true);
+        tile.setContentDescription("Open " + entry.label);
+        tile.setElevation(dp(2));
+        ImageView icon = new ImageView(this);
+        icon.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        icon.setImageDrawable(app.launcher.icon(entry));
+        tile.addView(icon, new LinearLayout.LayoutParams(dp(66), dp(66)));
+        TextView label = new TextView(this);
+        label.setText(entry.label);
+        label.setTextColor(0xFFFFFFFF);
+        label.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        label.setGravity(Gravity.CENTER);
+        label.setSingleLine(true);
+        label.setEllipsize(TextUtils.TruncateAt.END);
+        LinearLayout.LayoutParams labelParams = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        labelParams.topMargin = dp(7);
+        tile.addView(label, labelParams);
+        tile.setOnFocusChangeListener((view, focused) -> view.setElevation(dp(focused ? 10 : 2)));
+        tile.setOnClickListener(view -> {
+            try {
+                app.launcher.launch(entry.packageName);
+                showNotice("Opening " + entry.label + "…");
+            } catch (ApiException failure) { showNotice("Could not open " + entry.label); }
+        });
+        return tile;
+    }
+
+    private GridLayout.LayoutParams appTileParams() {
+        GridLayout.LayoutParams params = new GridLayout.LayoutParams();
+        params.width = 0;
+        params.height = dp(132);
+        params.columnSpec = GridLayout.spec(GridLayout.UNDEFINED, 1, 1f);
+        params.setGravity(Gravity.FILL);
+        params.setMargins(dp(7), dp(7), dp(7), dp(7));
+        return params;
+    }
+
+    private int dp(int value) { return Math.round(value * getResources().getDisplayMetrics().density); }
+
     @Override public void onDisplayChanged() {
         captions.setStyle(app.display.subtitleScale(), app.display.subtitleBox());
         float brightness = app.display.brightness();
@@ -193,7 +362,7 @@ public final class MainActivity extends Activity implements PlaybackController.U
         int clients = app.pairing.clientCount();
         status.setText(code != null ? "Enter this code on your phone to pair it"
             : (clients == 0 ? "Not paired yet. Open LUMA Remote on your phone and add this projector."
-                : "Ready. Choose something to watch on your phone.")
+                : "Ready. Open an app below or choose something to watch on your phone.")
             + "\n" + address() + ":" + ControlServer.PORT + "  ·  " + clients + (clients == 1 ? " paired device" : " paired devices"));
         String prompt = null, footerText = "";
         try {
@@ -211,11 +380,26 @@ public final class MainActivity extends Activity implements PlaybackController.U
                 + "  ·  library: " + app.library.count("progress") + " items";
         } catch (Exception ignored) { }
         long okPresses = app.okPressCount();
-        footer.setText(footerText + (footerText.isEmpty() ? "" : "\n") + (app.isDefaultHome()
+        boolean defaultHome = app.isDefaultHome();
+        homeSetup.setVisibility(!defaultHome && code == null ? View.VISIBLE : View.GONE);
+        footer.setText(footerText + (footerText.isEmpty() ? "" : "\n") + (defaultHome
             ? "Projector Home is LUMA Receiver  ·  OK received: " + okPresses + "  ·  Menu: change Home app"
-            : "Press OK to make LUMA Receiver the projector Home app  ·  OK received: " + okPresses));
+            : "Choose the Home button above, or press Menu, to make this the projector Home  ·  OK received: " + okPresses));
         updatePrompt.setVisibility(prompt == null ? View.GONE : View.VISIBLE);
         updatePrompt.setText(prompt == null ? "" : prompt);
+    }
+
+    private void renderCatMode() {
+        boolean active = app.catMode.snapshot(SystemClock.elapsedRealtime()).active;
+        catToy.setVisibility(active ? View.VISIBLE : View.GONE);
+        if (active && resumed) {
+            scrub.setVisibility(View.GONE);
+            catToy.resumeAnimation();
+        } else if (!active) {
+            catToy.endSession();
+        } else {
+            catToy.pauseAnimation();
+        }
     }
 
     private void openHomeSettings(String source) {
@@ -235,7 +419,49 @@ public final class MainActivity extends Activity implements PlaybackController.U
         notice.postDelayed(hideNotice, durationMs);
     }
 
+    @Override public void onWindowFocusChanged(boolean focused) {
+        super.onWindowFocusChanged(focused);
+        if (!focused && controllerInput != null) controllerInput.clear();
+    }
+
+    @Override public boolean dispatchGenericMotionEvent(MotionEvent event) {
+        return controllerInput != null && controllerInput.onMotion(event) || super.dispatchGenericMotionEvent(event);
+    }
+
     @Override public boolean dispatchKeyEvent(KeyEvent event) {
+        if (!dispatchingController && controllerInput != null && controllerInput.onKey(event)) return true;
+        // Logical Plus behaves as OK outside playback, and as play/pause in it.
+        if (event.getKeyCode() == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE && app.playback.title() == null)
+            event = new KeyEvent(event.getDownTime(), event.getEventTime(), event.getAction(),
+                KeyEvent.KEYCODE_DPAD_CENTER, event.getRepeatCount(), event.getMetaState(),
+                event.getDeviceId(), event.getScanCode(), event.getFlags(), event.getSource());
+        if (event.getKeyCode() == KeyEvent.KEYCODE_HOME) {
+            if (event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0) {
+                app.catMode.stop(); app.playback.stop(); render(); resetLauncherFocus();
+            }
+            return true;
+        }
+        CatModeState.Snapshot cat = app.catMode.snapshot(SystemClock.elapsedRealtime());
+        if (cat.active) {
+            int catKey = event.getKeyCode();
+            boolean catControl = catKey == KeyEvent.KEYCODE_BACK || catKey == KeyEvent.KEYCODE_DPAD_CENTER
+                || catKey == KeyEvent.KEYCODE_ENTER || catKey == KeyEvent.KEYCODE_DPAD_LEFT
+                || catKey == KeyEvent.KEYCODE_DPAD_RIGHT || catKey == KeyEvent.KEYCODE_DPAD_UP
+                || catKey == KeyEvent.KEYCODE_DPAD_DOWN || catKey == KeyEvent.KEYCODE_MENU;
+            if (!catControl) return super.dispatchKeyEvent(event);
+            if (event.getAction() == KeyEvent.ACTION_DOWN && ControllerNavigation.direction(catKey) != 0) {
+                moveCat(catKey);
+            } else if (event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0) {
+                if (catKey == KeyEvent.KEYCODE_BACK) {
+                    app.catMode.stop();
+                    resetLauncherFocus();
+                    showNotice("Cat Mode ended");
+                } else if (catKey == KeyEvent.KEYCODE_DPAD_CENTER || catKey == KeyEvent.KEYCODE_ENTER) {
+                    app.catMode.pounce(SystemClock.elapsedRealtime(), false);
+                }
+            }
+            return true;
+        }
         if (event.getAction() != KeyEvent.ACTION_DOWN) return super.dispatchKeyEvent(event);
         int key = event.getKeyCode();
         boolean initialOk = isInitialOkPress(event.getAction(), key, event.getRepeatCount());
@@ -248,18 +474,36 @@ public final class MainActivity extends Activity implements PlaybackController.U
             if (promptShown && key == KeyEvent.KEYCODE_BACK) { app.updater.skipAvailable(); return true; }
             if (key == KeyEvent.KEYCODE_BACK && app.pairing.activeCode() != null) { app.pairing.cancel(); return true; }
             if (key == KeyEvent.KEYCODE_MENU) { openHomeSettings("menu"); return true; }
+            View focused = getCurrentFocus();
+            if (initialOk && idle.hasFocus() && focused != null && focused.isShown() && focused.isClickable())
+                return ControllerNavigation.handle(this, key, event.getAction(), event.getRepeatCount());
             if (app.pairing.activeCode() == null && !app.isDefaultHome() && initialOk) {
                 openHomeSettings("ok"); return true;
             }
             if (app.pairing.activeCode() == null && app.isDefaultHome() && initialOk) {
-                showNotice("OK received (" + okCount + "). LUMA Receiver is already the Home app.");
-                render();
+                if (appsGrid.getChildCount() > 0) appsGrid.getChildAt(0).requestFocusFromTouch();
+                else showNotice("No launchable apps found.");
                 return true;
             }
             return super.dispatchKeyEvent(event);
         }
         boolean controls = playerView.isControllerFullyVisible();
         switch (key) {
+            case KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE:
+                if (event.getRepeatCount() == 0) {
+                    app.playback.setPlaying(!app.playback.player().getPlayWhenReady());
+                    playerView.showController();
+                }
+                return true;
+            case KeyEvent.KEYCODE_MEDIA_REWIND:
+                app.playback.seekBy(-10_000); showSeek(); return true;
+            case KeyEvent.KEYCODE_MEDIA_FAST_FORWARD:
+                app.playback.seekBy(30_000); showSeek(); return true;
+            case KeyEvent.KEYCODE_MENU:
+                if (event.getRepeatCount() == 0) {
+                    if (controls) playerView.hideController(); else playerView.showController();
+                }
+                return true;
             case KeyEvent.KEYCODE_BACK:
                 if (controls) { playerView.hideController(); return true; }
                 if (SystemClock.elapsedRealtime() < backArmedUntil) { app.playback.stop(); return true; }

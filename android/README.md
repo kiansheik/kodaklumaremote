@@ -213,6 +213,39 @@ readable same-origin players. The original site redirects to `.cc`; Browse
 starts there directly. Unsupported/encrypted/bare-blob sources and cross-origin
 players are rejected. The website WebView has no native JavaScript bridge. A
 separate local-only WebView hosts the trusted remote. No cookies or browser
-authorization headers are copied to Kodi. Kodak protocol pairing that requires a PIN,
-touchpad/reverse-screen view and projector boot/default-launcher changes remain
-outside this prototype. HLS seek stability remains unconfirmed on the device.
+authorization headers are copied to Kodi. Kodak protocol pairing that requires
+a PIN and reverse-screen view remain outside this prototype. Installed phone
+0.4.34 **Air mouse** control calibrates the current portrait pose, uses fused
+rotation with dead-zone/smoothing and makes the existing OK button click at the
+pointer; **Center** resets neutral. The user accepted calibration in arbitrary
+grips; the High default sensitivity and lifecycle still need a short device pass.
+Installed receiver 0.3.17 retains the reversible complete-app Home launcher and adds Cat
+Mode. **More → Start cat mode** runs it autonomously; Air Mouse steers, OK
+pounces and Air off resumes automatic motion. The live API sequence passed, but
+0.3.16 produced zero sound on the projector. Installed 0.3.17 uses checked 48 kHz
+streaming PCM plus a system-tone fallback; live diagnostics report complete
+write/playback-head progress. Visual/audio/
+cat-response, default-Home/cold-boot and HLS seek stability remain device acceptance.
+
+## NES games
+
+In phone 0.4.35, open **More → Games** or **Library → Games library**, then
+**Import .nes game**. Import works offline and copies the validated ROM into
+private app storage. File managers can also use Open with/Share for NES or
+binary files; Android providers that hide the extension or assign another MIME
+may require the in-app picker. ZIP files are not accepted.
+
+When this phone connects to a paired LUMA Receiver with Games support, missing
+ROMs copy in both directions. Files use SHA-256 identity, bounded authenticated
+chunks and complete-file verification before becoming visible. Sync never
+removes games. The limits are 8 MiB per ROM, 256 games and 128 MiB per library.
+The compatible NES 2.0 subset preserves original imported bytes; unsupported
+extended mapper, memory, region and peripheral headers are rejected explicitly.
+Choose a game to transfer it if needed and open it on the projector. The phone
+can then disconnect; emulation and controllers belong to the projector.
+
+Local checks: `node scripts/test-phone-games.mjs` exercises synthetic ROM
+storage and authenticated loopback sync; `npx playwright test
+tests/browser/mobile.spec.js` includes offline import and Games controls.
+Physical phone file-provider behavior, Bluetooth pairing and projector latency
+still require device acceptance.

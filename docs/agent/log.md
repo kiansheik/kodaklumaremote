@@ -1,5 +1,155 @@
 # Work log
 
+- 2026-11-09 all-format cache: user observed HLS only filled20s RAM. Extended
+  current-title disk preload to remote progressive/HLS/DASH; shared bounded LRU,
+  Media3 track-aware adaptive downloads, seek/cancel cleanup and highest-supported
+  bitrate policy. Installed receiver0.3.33/code47, preserving S4E2 at522.025s and
+  leaving it paused to preload. Live1080p/AAC/zero dropped frames, disk bytes
+  continue increasing after RAM fills. Unit140/140 plus three isolated Android
+  cache/quality/offline-seek/cleanup checks pass.
+  [Handoff](session-handoffs/2026-11-09-all-format-cache-quality.md).
+
+- 2026-11-09 stream recovery: investigated Gilded Age S4E2 startup failure;
+  cache off, fresh URLs also unresponsive. Added bounded media probes, provider
+  fallback, startup retry excluding failed URL, and expiring canonical phone
+  episode handoff. Installed receiver0.3.32/code46 and phone0.4.37/code47.
+  Receiver139/139 unit tests and focused browser checks pass. Live S4E2 now
+  resolves on the projector, reports3093.007 seconds/AAC/advancing position; user
+  confirms correct picture/audio. Phone assistance was not needed.
+  [Handoff](session-handoffs/2026-11-09-stream-recovery-phone-fallback.md).
+
+- 2026-11-09 settings/history: found hidden exported Android TV MainSettings;
+  added Accessibility Home shortcut to that menu, replacing the ineffective
+  Droid Settings fallback on this projector. User refreshed permission;
+  directNavigation:true verified and Cat Mode physically accepted. Added Home
+  Watch History with title grouping, resume/restart, next episode and season/
+  episode browsing using durable synced progress and fresh catalog sources.
+  Receiver135/135 and release pass;0.3.31/code45 installed. Live direct-API UI
+  check passes10 titles, series/seasons/episodes and Back navigation; physical
+  resume/next playback pending. Phone0.4.36/code46 reinstalled preserving data.
+  [Handoff](session-handoffs/2026-11-09-projector-watch-history-settings.md).
+
+- 2026-11-09 smooth Cat/direct remote: installed receiver0.3.28/code42 and
+  phone0.4.36/code46. Frame-driven analog motion replaces menu-repeat stepping;
+  neutral holds the target. Application/Accessibility now ensure the API listener.
+  Phone basic remote/volume/apps use paired receiver4191 directly, with vendor
+  transport retained for unsupported functions and older receivers. Unit130/130,
+  phone instrumentation16/16+wire and two browser checks pass; direct Home works
+  on projector. Permission refresh, physical Cat acceptance and cold boot remain
+  pending; power test still deferred.
+  [Handoff](session-handoffs/2026-11-09-smooth-cat-early-receiver-api.md).
+
+- 2026-11-09 launcher/Cat repair: reproduced Cat OK redirecting focus to the
+  first app because the idle handler omitted Cat. Installed 0.3.27/code41 with
+  focused-control activation, first-app focus/scroll reset on Home/resume/exit,
+  and shared Cat directional handling for controller and native remote keys.
+  Receiver126/126 and release pass; actual projector launch/manual-input/exit
+  and focus-reset checks pass. User controller acceptance is pending; power
+  test is explicitly deferred until Cat works.
+  [Handoff](session-handoffs/2026-11-09-launcher-focus-cat-fix.md).
+
+- 2026-11-09 system controller: installed receiver 0.3.26/code40. User enabled
+  the Accessibility button filter via Kodak general settings and accepted A/B
+  operation in other apps with unchanged working stick navigation. Added a
+  three-second Home hold for save → controller sleep → projector power request,
+  plus a Cat Mode launcher entry and directional controller input. Unit126/126,
+  manifest and signed build pass; physical Cat and power acceptance are pending.
+  [Handoff](session-handoffs/2026-11-09-controller-system-home-cat.md).
+
+- 2026-11-09 Capture shortcut: installed receiver 0.3.24/code38, exposing the
+  already-calibrated Capture control in NES assignments. Saved Capture → Load
+  latest checkpoint through the projector UI, then compared complete profiles:
+  only that assignment changed. Unit121/121 and signed build pass; the user
+  confirmed physical Capture quick load works. No public release.
+  [Handoff](session-handoffs/2026-11-09-capture-checkpoint-binding.md).
+
+- 2026-11-09 checkpoint history: installed receiver 0.3.23/code37. Each game
+  retains five manual saves with a dated history picker; the newest checkpoint
+  can be bound to a controller button for fresh-press-only quick load. Legacy
+  checkpoint and saved assignments are preserved. Receiver121/121, signed build
+  and isolated Android save/eviction/older/latest restore/navigation checks pass.
+  Actual projector Mario is paused with one existing checkpoint and no error;
+  physical shortcut acceptance is pending. No public release.
+  [Handoff](session-handoffs/2026-11-09-checkpoint-history-shortcut.md).
+
+- 2026-11-09 duplicate NES binding follow-up: installed receiver 0.3.22/code36
+  with frame-sampled release/repress edges for a fresh overlapping binding press.
+  Aggregate holds survive partial release; final release and lifecycle changes
+  cancel pending pulses. Receiver114/114 and signed build pass. Mario reopened
+  on the projector with advancing frames, no reported error and 45 consumed
+  retriggered presses. The user confirmed physical held-B plus fire-trigger
+  acceptance: firing and running work together. No public release.
+  [Handoff](session-handoffs/2026-11-09-nes-duplicate-button-retrigger.md).
+
+- 2026-11-09 physical controller navigation/HID follow-up: user accepted NES
+  gameplay but reported failed receiver/setup navigation. Explicit focus movement
+  fixes the skipped ViewRootImpl stage; user and live focus diagnostics confirm
+  navigation. Installed receiver 0.3.21/code35 adds optional in-game trigger volume
+  and Android 9 HID-service output. Reflection was blocked; the permission-checked
+  Binder route accepted the steady-player-light report, and the user confirmed
+  the physical Player 1 LED is steady. Unit98/98 and signed build pass; no public release or driver
+  change. [Handoff](session-handoffs/2026-11-09-controller-navigation-hid-lights.md).
+
+- 2026-11-09 live Games and controller calibration: installed phone 0.4.35 and
+  receiver 0.3.18 preserving data; real ROM runtime, receiver-to-phone sync and
+  user-confirmed Pro Controller pairing/receiver navigation passed. Follow-up
+  receiver 0.3.19/code33 adds guided calibration, saved profiles, separate NES
+  assignments, both-stick receiver controls and persistent player slots. All
+  94 unit tests and signed build pass; the update is installed and reports the
+  connected Pro Controller as Player 1. Final isolated game/media/seek/volume
+  checks passed after fixing synthetic volume dispatch. The actual setup screen
+  was visually verified, with saved profile and live stick input; complete
+  physical mapping acceptance remains pending. LEDs remain unchanged on Android 9.
+  No public release.
+  [Handoff](session-handoffs/2026-11-09-controller-calibration.md).
+
+- 2026-11-09 local NES Games candidate: native pinned QuickNES core, receiver-wide
+  gamepad navigation and Bluetooth settings, Games library/pause/checkpoints,
+  phone ROM import plus missing-only two-way authenticated sync. Receiver65/65,
+  phone browser70/70, storage/HTTP-sync and native/ASAN checks pass. Supplied
+  private ROM runs in native and optimized Android emulator tests; actual SAF
+  import and paired sync UI accepted locally. Signed phone0.4.35/code45 and
+  receiver0.3.18/code32 are ready; no physical install or public release.
+  [Handoff](session-handoffs/2026-11-09-projector-nes-games.md).
+
+- 2026-11-05 more-sensitive Air Mouse and live Cat Mode: moved the accepted
+  calibrated pointer from Normal to High sensitivity (20°/12° full-scale rather
+  than 26°/16°). Receiver Cat Mode adds bounded autonomous cyan/yellow-green prey
+  motion, sparse generated chirps, a 12-minute cap and a 1.5-second manual lease;
+  Air Mouse takes over, OK pounces and Air off/packet loss returns to autonomy.
+  Strict authenticated `cat.*` contracts, malformed-status boundaries and
+  dropped-sample behavior are covered. Receiver unit 47/47, phone browser 68/68,
+  host filter/native validation, phone main/AndroidTest compilation and signed
+  release builds pass. Production-signed phone 0.4.34/code44 and receiver
+  0.3.15/code29 were installed in place. Live start → pointer → pounce → release
+  → stop passed; phone Activity cold launch stayed running without a fatal
+  exception. The user then reported inaudible sound. Receiver 0.3.16/code30
+  replaces the delayed ~-27.5 dBFS first chirp with an immediate two-part call,
+  roughly 12–14 dB more signal, media-stream routing and 4–10-second recurrence;
+  it was signed, installed and started at the unmuted 8/15 projector volume.
+  The user confirmed exactly zero output, proving this was not merely quiet.
+  Prepared receiver 0.3.17/code31 now uses checked 48 kHz streaming PCM,
+  minimum sink buffering, playback diagnostics and a system-tone fallback; all
+  48 receiver tests and signed APK verification pass. Deployment could not begin
+  because receiver/native ports 4191/8121 both became refused while the device
+  still answered ICMP. After the user restored the receiver, 0.3.17 installed
+  successfully. A live Cat start then reported `pcm-stream` at 48 kHz with all
+  10,560 written samples reflected in playback-head frames. It remains running
+  for audible/cat-response acceptance; public release remains pending.
+  [Handoff](session-handoffs/2026-11-05-cat-mode-sensitive-air-mouse.md).
+
+- 2026-11-05 projector launcher and installed phone air mouse: installed receiver
+  0.3.14/code28 exposes and renders all 28 launchable projector apps, including
+  Crunchyroll, with icons; the laptop remote uses the same catalog/launch route.
+  The installed phone update adds neutral-pose calibration/recentering, fused-rotation
+  pointing with dead zone and smoothing, quiet/coalesced `GYROSCOPEEVENT` sends,
+  and atomic OK pointer clicks. Host filter/backend, 66 phone-browser, focused
+  Air-mouse 2/2, launcher 10/10, Android main/AndroidTest compile, signed release
+  and diff checks pass. Production-signed phone 0.4.33/code43 was installed in
+  place on the Samsung; Game Rotation Vector is present. The locked phone blocked
+  final UI/motion acceptance, the receiver was not reinstalled and no public
+  release ran. [Handoff](session-handoffs/2026-11-05-projector-launcher-air-mouse.md).
+
 - 2026-10-24 manual stream-source pages and 0.4.28 candidate: Remote can open
   the exact current frameXTV watch page without stopping projector playback;
   Library can open the selected player or verified movie/series/anime title

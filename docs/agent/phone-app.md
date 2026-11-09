@@ -44,7 +44,10 @@ unsent changes. Philips UI volume uses a separate two-second debounce. A small
 red/green indicator shows connection state. Browse is a separate bottom tab.
 After valid setup, configuration moves behind Settings instead of remaining a
 primary Devices tab.
-More holds text entry, installed apps, seek, explicit Stop and Kodi launch.
+More holds text entry, installed apps, seek, explicit Stop, Kodi launch and the
+LUMA-only Cat Mode toggle. Cat Mode starts autonomously; an active Air Mouse
+temporarily steers its normalized pointer, OK pounces and Air off releases it
+back to automatic motion.
 The main Remote has a Power icon beside Choose video. Its confirmation focuses
 Cancel; Cancel, Escape, backdrop dismissal and connection loss send nothing.
 Turn off sends one dedicated `luma.powerOff` request with a literal confirmation.
@@ -233,7 +236,14 @@ off while the receiver remains on ordinary Wi-Fi, observe playback across
 several segment/buffer boundaries and reconnect without restarting media.
 
 The phone runs Android 16; its exact WebView and LUMA model/Android remain
-unverified. Generic Cast,
-Miracast, PIN pairing, touchpad/scroll gestures, screen preview, firmware/store
-repair and automatic Kodi boot are not implemented here. The previously seen
-rapid HLS pause/seek/resume stop still needs a settled-command device test.
+unverified. Generic Cast, Miracast, PIN pairing, screen preview, firmware/store
+repair and automatic Kodi boot are not implemented here. Production-signed
+0.4.34/code44 is installed. Its Air Mouse turns fused phone orientation into
+calibrated, smoothed pointer motion; it is not positional tracking. The user
+accepted the calibration model and the default is now the existing High preset.
+Receiver 0.3.16 Cat Mode passed live API takeover/release checks, but the user
+confirmed zero audio output. Installed receiver 0.3.17's checked 48 kHz stream
+reports all written frames played; the system-tone fallback remains available
+if initialization/progress fails. Audible/cat-response acceptance is pending.
+The previously seen rapid HLS pause/seek/resume stop still needs a settled-command
+device test.

@@ -17,14 +17,23 @@ public class PlaybackDiskCacheTest {
             PlaybackDiskCache.cacheBudgetBytes(20L * PlaybackDiskCache.GIB));
     }
 
-    @Test public void onlyOpaqueLocalProgressiveMediaIsPrefetched() throws Exception {
+    @Test public void allSupportedMediaTypesArePrefetched() throws Exception {
         String id = "local:0123456789abcdef0123456789abcdef";
         assertTrue(PlaybackDiskCache.supportsPrefetch(MediaRequest.parse(new JSONObject(
             "{\"url\":\"http://192.168.1.5/movie.mkv\",\"mediaId\":\"" + id + "\"}"))));
-        assertFalse(PlaybackDiskCache.supportsPrefetch(MediaRequest.parse(new JSONObject(
+        assertTrue(PlaybackDiskCache.supportsPrefetch(MediaRequest.parse(new JSONObject(
             "{\"url\":\"http://192.168.1.5/stream.m3u8\",\"mediaId\":\"" + id + "\"}"))));
-        assertFalse(PlaybackDiskCache.supportsPrefetch(MediaRequest.parse(new JSONObject(
+        assertTrue(PlaybackDiskCache.supportsPrefetch(MediaRequest.parse(new JSONObject(
             "{\"url\":\"https://cdn.example/movie.mp4\"}"))));
+    }
+
+    @Test public void adaptiveKeysSeparateResourcesAndSessionsWithoutLeakingUrls() {
+        String first=PlaybackDiskCache.adaptiveKey(1,"https://example.com/segment?token=private");
+        assertTrue(first.startsWith("adaptive:1:"));
+        assertFalse(first.contains("private"));
+        assertFalse(first.equals(PlaybackDiskCache.adaptiveKey(2,"https://example.com/segment?token=private")));
+        assertFalse(first.equals(PlaybackDiskCache.adaptiveKey(1,"https://example.com/audio")));
+        assertEquals(first,PlaybackDiskCache.adaptiveKey(1,"https://example.com/segment?token=private"));
     }
 
     @Test public void cacheKeysAreOpaqueAndSessionScoped() {

@@ -1,11 +1,12 @@
 # LUMA remote protocol and prototype
 
-2026-10-18: The Kodak LUMA Android client exposes a local EShare-style remote
-protocol. A loopback Node.js bridge and responsive browser remote now implement
-its bounded control subset. Seven mocked-browser cases pass. The actual receiver
-returned 23 apps; the user confirmed Kodi launch and Right/Left navigation from
-this browser remote. Kodi's HTTP service was absent before launch and identified
-as 21.2 afterward. Volume and typing remain physically unverified.
+2026-11-05: The Kodak LUMA Android client exposes a local EShare-style remote
+protocol. A loopback Node.js bridge, laptop remote and packaged phone remote
+implement its bounded control subset. Installed receiver 0.3.17 retained the 28
+launchable apps including Crunchyroll and renders the same complete, icon-backed
+catalog as its Home screen. Earlier physical checks confirmed Kodi launch and
+Right/Left navigation. The user physically accepted calibrated Air Mouse aiming;
+the more-sensitive preset and Cat Mode still need user-visible acceptance.
 
 ## Run and check
 
@@ -79,8 +80,11 @@ describe this client version, not guaranteed behavior on every LUMA firmware.
 | Keys | `KEYEVENT` with an allowlisted Android key code. |
 | Power (phone app) | Original `dialog_power_off` confirmation uses dialog case101 → MainActivity.d(26) → worker → EShare key serializer. The phone implements this as dedicated confirmed `luma.powerOff`, not an ordinary power key. KEYEVENT26 send does not prove shutdown rather than standby. |
 | Text | `CONTENT`, mode `1`, payload prefixed `0 `. CR/LF/NUL and oversized UTF-8 payloads are rejected. |
-| App inventory | `GETAPPINFOSEVNET`; the spelling is present in the APK. Reply uses little-endian total/field lengths. Names and package identifiers are validated; icon bytes are never served. |
+| App inventory | `GETAPPINFOSEVNET`; the spelling is present in the APK. Reply uses little-endian total/field lengths. Names, package identifiers and bounded icons are validated; receiver 0.3.14 also exposes its complete Android launchable-app catalog through the authenticated API. |
 | App launch | `STARTAPPEVNET` with a package from the current verified inventory. The spelling is present in the APK. |
+| Pointer bounds | `GETFBINFO\r\n1\r\n\r\n`; the first two reply fields are width and height. The phone validates them and uses 1280×720 only as the archived client's fallback. |
+| Air mouse | `GYROSCOPEEVENT\r\n{x}\r\n{y}\r\n{action}\r\n\r\n`; `-1` is hover, `0` down, `2` pressed move and `1` up. A click is down then up at the current coordinate. |
+| Cat Mode | Paired receiver HTTP methods `cat.start/status/pointer/pounce/release/stop`; pointer coordinates are strict integers `0..1000` and the receiver owns the manual lease/session limits. |
 
 This protocol is separate from Kodi’s HTTP JSON-RPC. Kodak’s
 [LUMA 350 support page](https://kodakprojectors.caglobal.com/pages/luma-350-portable-smart-projector-support)
@@ -118,16 +122,32 @@ Node bridge is required for the desktop remote. The implemented
 socket adapter, so the Mac is unnecessary for the phone prototype. Actual
 Samsung capture/playback acceptance remains pending.
 
-## Kodi at startup
+## Projector Home, air mouse and Cat Mode
 
-**Open Kodi** is a launch request, not boot configuration. Kodi is not a HOME
-launcher. A boot helper or custom launcher
-would need the projector’s exact Android version/model, installation support,
-an explicit device choice and actual boot testing. No startup setting, launcher
-or APK on the projector has been changed by this remote work. Existing Kodi
-playback/subtitle acceptance is recorded in [the Kodi test](../../tests/manual-kodi.md).
+Receiver 0.3.17 is installed as a reversible Android Home candidate and its Home
+screen shows all enabled launchable packages with logos. This does not silently
+select itself as Android's default Home; projector settings and a cold power
+cycle remain authoritative acceptance. **Open Kodi** and other tiles are app
+launch requests, not boot configuration. Existing Kodi playback/subtitle
+acceptance is recorded in [the Kodi test](../../tests/manual-kodi.md).
 
-Next device acceptance: test volume and typing on the projector, reconnect and
-cold-boot discovery timing. Keep the existing media-playback proof separate
-from this new remote-control acceptance. Phone hardware acceptance, reverse
-screen view, touchpad and startup behavior remain unfinished.
+Installed phone 0.4.34 air mouse uses the game rotation vector (rotation-vector
+fallback), stable-pose calibration, dead-zone/hysteresis and adaptive smoothing.
+It sends bounded absolute pointer coordinates; it does not integrate
+accelerometer position. The user accepted the grip-independent calibration;
+the default High preset now needs about 23–25% less rotation than Normal. Air
+mode remains explicit, foreground-only and stopped by pause, Browse,
+target/configuration changes or disconnect.
+
+The paired receiver's authenticated `cat.*` API owns a 12-minute Cat Mode
+session. Its Canvas view uses high-contrast cyan/yellow-green prey shapes,
+nonperiodic darts/pauses/hides and generated chirps without bundled audio. After
+the initial sound proved completely absent, not merely quiet. Installed 0.3.17
+uses a checked 48 kHz streaming track plus a system-tone fallback and exposes
+bounded audio-path diagnostics. Live state reported `pcm-stream` with every
+written sample represented in the playback-head count; audibility remains user
+acceptance.
+It runs autonomously until the phone's filtered Air Mouse samples take a
+1.5-second manual lease; OK pounces and Air off releases the lease. Live API
+acceptance passed start → pointer → pounce → release → stop and left the mode
+stopped. Visual/audio/cat-response acceptance is still pending.
