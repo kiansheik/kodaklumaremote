@@ -1,12 +1,12 @@
 {
   "schemaVersion": 1,
   "packageName": "dev.framextv.lumareceiver",
-  "versionName": "0.3.3",
-  "versionCode": 17,
+  "versionName": "0.3.33",
+  "versionCode": 47,
   "minSdk": 23,
-  "apkUrl": "https://github.com/kiansheik/kodaklumaremote/releases/download/v0.4.23/luma-receiver-0.3.3.apk",
-  "sha256": "3250643ef08f221c6176b3b0775f57bd3caef9ac6cc7b626f0c57c11f26bcafb",
-  "sizeBytes": 1134601,
-  "releasedAt": "2026-10-23T23:34:14.360Z",
-  "notes": "Saved LUMA projectors stay castable while their receiver reconnects, so a Library selection now waits for the boot receiver instead of returning to setup.\n\nLUMA Receiver 0.3.3 starts its listener and brings its own screen forward when the projector finishes booting. Native projector controls may connect later without blocking playback.\n"
+  "apkUrl": "https://github.com/kiansheik/kodaklumaremote/releases/download/v0.4.37/luma-receiver-0.3.33.apk",
+  "sha256": "09c61d38ae3d10d8bce8b61a627daaf81f2d675048c37055b41d492d6f745454",
+  "sizeBytes": 3230553,
+  "releasedAt": "2026-11-09T21:38:11.895Z",
+  "notes": "LUMA Remote 0.4.37 + LUMA Receiver 0.3.33\n\n- Faster receiver-first phone controls, including navigation, volume and app launch before the projector vendor service is ready.\n- Watch History on the projector: resume titles, browse seasons and episodes, and play the next episode with your controller.\n- Fresh-stream checks and alternate sources, with an Open episode request on the phone when projector playback needs help.\n- Disk preloading for HLS, DASH and direct videos, including while paused. Playback prefers the highest supported quality; cache storage is bounded and cleared when changing titles.\n- NES Games with phone ROM import/library sync, controller calibration and mappings, five recent checkpoints, and Capture-button quick loading. Games are supplied by the user.\n- Nintendo Pro Controller navigation, player-light assignment, optional across-app controls through Android Accessibility, and improved launcher focus.\n- Cat Mode with smoother controller movement, plus phone air-mouse and media-control improvements.\n\nExisting installations update in place using the same signing certificate. Android confirms installation. Across-app navigation requires enabling LUMA Controller in Accessibility settings. Live streams can cache available segments; future segments cannot be preloaded.\n"
 }
