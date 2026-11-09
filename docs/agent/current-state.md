@@ -1,5 +1,22 @@
 # Current state
 
+## Public release 0.4.37 / receiver 0.3.33 (2026-11-09)
+
+- Published stable `v0.4.37` from source commit
+  `0c7d36475353e4271f89948248904761c90f43f7`, including phone0.4.37/code47
+  and receiver0.3.33/code47. Both public APK downloads match their signed manifests.
+- Install page: https://kiansheik.io/kodaklumaremote/ . Both fixed public feeds
+  now return the new versions. Existing phones can use Settings → Check for
+  updates; installation still requires Android confirmation. Julia has not yet
+  confirmed installation. No message was sent to her.
+- Release validation:268 Node tests,185 browser tests, signed builds and
+  production certificate/hash checks pass. Recent receiver140 unit tests and
+  three isolated all-format cache integration checks remain applicable.
+- Published source includes emulator source/licenses; the unused upstream Linux
+  `tools/proto` executable is excluded, and no ROM/signing key is bundled. User
+  explicitly approved public source/tests/license/docs publication after review.
+  [Handoff](session-handoffs/2026-11-09-public-release-0.4.37.md).
+
 ## Installed receiver 0.3.33: all-format disk preload and high-quality playback
 
 - User clarified that paused loading must work for all supported media and that

@@ -1,5 +1,11 @@
 # Work log
 
+- 2026-11-09 publication: shipped stable phone0.4.37 and receiver0.3.33 from
+  source0c7d364 after explicit user approval for public source and binaries.
+  Full release checks268 Node/185 browser pass. Downloaded public APKs match
+  manifest hashes/sizes; Pages completed and fixed feeds report both versions.
+  [Handoff](session-handoffs/2026-11-09-public-release-0.4.37.md).
+
 - 2026-11-09 all-format cache: user observed HLS only filled20s RAM. Extended
   current-title disk preload to remote progressive/HLS/DASH; shared bounded LRU,
   Media3 track-aware adaptive downloads, seek/cancel cleanup and highest-supported

@@ -1,5 +1,9 @@
 # Open questions
 
+Phone0.4.37/receiver0.3.33 are publicly released; both update feeds and downloaded
+APK hashes are verified. Julia can download or check for updates; her installation
+has not been observed. No device reinstall or playback interruption during release.
+
 All-format current-title disk cache is installed, with highest-supported-bitrate
 playback. Real S4E2 paused1080p cache grows past the RAM buffer; unit/instrumented
 HLS/DASH/progressive coverage passes. Very long running storage-limit/rolling
