@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <meta name="color-scheme" content="dark">
+  <title>Share with LUMA</title>
+  <link rel="stylesheet" href="./share.css">
+  <script type="module" src="./share.js"></script>
+</head>
+<body>
+  <main>
+    <header class="masthead"><a class="brand" href="../" aria-label="LUMA home"><span class="brand-mark" aria-hidden="true">L</span> LUMA</a><span class="eyebrow">SCREEN SHARING</span></header>
+    <section class="intro">
+      <p class="eyebrow accent">YOUR SCREEN. A LITTLE BIGGER.</p>
+      <h1>Share with<br><span>LUMA.</span></h1>
+      <p class="lede">Bring a Chrome tab or your screen to the projector. Choose a tab and include its audio to watch with sound.</p>
+    </section>
+    <div class="workspace">
+      <section class="card connection" aria-labelledby="connect-heading">
+        <div class="section-heading"><span class="step" aria-hidden="true">01</span><h2 id="connect-heading">Connect your projector</h2></div>
+        <p class="muted">Keep both devices on the same Wi-Fi. Find the projector address on the LUMA home screen.</p>
+        <form id="connect-form">
+          <label for="host">Projector IP address</label>
+          <div class="field-row"><input id="host" type="text" inputmode="decimal" placeholder="192.168.1.50" autocomplete="off" spellcheck="false" required aria-describedby="network-help"><button id="connect" type="submit">Connect</button></div>
+          <p id="network-help" class="hint">Allow local network access when Chrome asks.</p>
+        </form>
+        <form id="pair-form" hidden>
+          <label for="pin">Code shown on the projector</label>
+          <div class="field-row"><input id="pin" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" placeholder="000000" required><button id="pair" type="submit">Pair</button></div>
+        </form>
+        <p id="connection-status" class="status" role="status" aria-live="polite">Not connected yet.</p>
+      </section>
+      <section class="card sharing" aria-labelledby="share-heading">
+        <div class="section-heading"><span class="step" aria-hidden="true">02</span><h2 id="share-heading">Choose what to share</h2></div>
+        <div class="screen-illustration" aria-hidden="true"><div class="screen-window"><span class="screen-glow"></span><span class="screen-label">LUMA</span></div><div class="screen-foot"></div></div>
+        <p id="share-status" class="share-status" role="status" aria-live="polite">Pair your projector to get started.</p>
+        <p id="audio-status" class="audio-status" hidden></p>
+        <div class="actions"><button id="share" class="primary" type="button" disabled>Share a tab or screen <span aria-hidden="true">↗</span></button><button id="stop" class="secondary" type="button" hidden>Stop sharing</button></div>
+        <p class="hint">Chrome will let you choose exactly what is shared. You can stop here or from Chrome at any time.</p>
+      </section>
+    </div>
+    <aside id="notice" class="notice" role="alert" hidden></aside>
+    <footer><span class="privacy-dot" aria-hidden="true"></span><p>Directly between your devices. No account, analytics, microphone, or camera access. Close this tab to end sharing.</p></footer>
+    <noscript><p class="notice">Turn on JavaScript to connect and share your screen.</p></noscript>
+  </main>
+</body>
+</html>
