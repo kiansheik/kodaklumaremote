@@ -212,8 +212,12 @@ export class ShareController {
       const evidence = receiverEvidence(status);
       if (evidence.frames > 0) this.$('share-status').textContent = 'Your picture is arriving on LUMA.';
       else this.$('share-status').textContent = this.peer.connectionState === 'connected' ? 'Connected. Waiting for the first picture…' : 'Connecting your share to LUMA…';
-      if (this.stream.getAudioTracks().some(track => track.readyState !== 'ended') && evidence.audio)
-        this.$('audio-status').textContent = 'Audio track received by LUMA.';
+      if (status.audioOutputError) {
+        this.$('audio-status').hidden = false; this.$('audio-status').classList.add('warning');
+        this.$('audio-status').textContent = 'LUMA could not start audio output. Stop sharing and retry; if it continues, restart LUMA Receiver.';
+      } else if (this.stream.getAudioTracks().some(track => track.readyState !== 'ended') && evidence.audio) {
+        this.$('audio-status').classList.remove('warning'); this.$('audio-status').textContent = 'Audio track received by LUMA.';
+      }
       if (!evidence.frames && Date.now() - this.startedAt > 30000)
         this.notice('No picture has arrived yet. Check that both devices use the same Wi-Fi, then stop and retry.');
     } catch (error) {
